@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>ResMed AirSense 10 Theme Designer</title>
+  <style>
+    :root{
+      --ui-bg:#0a0a0a;
+      --panel:#111;
+      --border:#2a2a2a;
+      --text:#e9e9e9;
+      
+      --c-white:#ffffff;
+      --c-selected:#0099cc;
+      --c-bright:#969696;
+      --c-mid:#646464;
+      --c-low:#404040;
+      --c-black:#000000;
+      
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    }
+    
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      background: radial-gradient(1200px 700px at 30% 10%, #151515 0%, #0b0b0b 45%, #070707 100%);
+      color:var(--text);
+      font-family:var(--sans);
+    }
+    .wrap{max-width:1200px;margin:0 auto;padding:18px}
+    h1{font-size:16px;margin:0 0 12px 0;font-weight:700;letter-spacing:.2px}
+    .layout{
+      display:grid;
+      grid-template-columns: 420px 1fr;
+      gap:14px;
+      align-items:start;
+    }
+    .card{
+      background: rgba(18,18,18,.92);
+      border:1px solid rgba(60,60,60,.65);
+      border-radius:14px;
+      padding:14px;
+      box-shadow: 0 18px 60px rgba(0,0,0,.4);
+    }
+    label{font-size:12px;color:#bdbdbd}
+    input[type="text"]{
+      width:220px;
+      background:#0d0d0d;
+      border:1px solid rgba(80,80,80,.6);
+      color:#f2f2f2;
+      border-radius:10px;
+      padding:10px 10px;
+      font-family:var(--mono);
+      font-size:12px;
+    }
+    input[type="color"]{
+      width:46px;height:38px;
+      border-radius:10px;
+      border:1px solid rgba(80,80,80,.6);
+      background:#0d0d0d;
+      padding:2px;
+    }
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .rowBlock{display:flex;flex-direction:column;gap:6px;min-width:260px}
+    .btn{
+      background:#101010;
+      border:1px solid rgba(90,90,90,.6);
+      color:#f0f0f0;
+      border-radius:12px;
+      padding:10px 12px;
+      cursor:pointer;
+      font-weight:650;
+    }
+    .btn:hover{border-color:rgba(150,150,150,.7)}
+    .btn.primary{
+      background: linear-gradient(180deg,#1a1a1a 0%, #0f0f0f 100%);
+      border-color: rgba(170,170,170,.6);
+    }
+    .sep{height:1px;background:rgba(90,90,90,.45);margin:12px 0}
+    textarea{
+      width:100%;
+      min-height:260px;
+      resize:vertical;
+      background:#0b0b0b;
+      border:1px solid rgba(80,80,80,.6);
+      color:#eaeaea;
+      border-radius:14px;
+      padding:12px;
+      font-family:var(--mono);
+      font-size:12px;
+      line-height:1.35;
+    }
+    .small{font-size:12px;color:#bdbdbd;line-height:1.35}
+    .kbd{
+      font-family:var(--mono);
+      font-size:11px;
+      padding:2px 6px;
+      border-radius:8px;
+      border:1px solid rgba(90,90,90,.65);
+      background:#0b0b0b;
+      color:#eaeaea;
+      white-space:nowrap;
+    }
+    
+    .previewArea{
+      display:flex;
+      gap:18px;
+      flex-wrap:wrap;
+      align-items:flex-start;
+      justify-content:flex-start;
+    }
+    .device{
+      width:260px;
+      border-radius:12px;
+      background:#000;
+      padding:10px;
+      border:1px solid rgba(90,90,90,.6);
+    }
+    .screen{
+      width:240px;
+      height:340px;
+      background: var(--c-black);
+      border:1px solid rgba(60,60,60,.8);
+      border-radius:6px;
+      overflow:hidden;
+      position:relative;
+    }
+    
+    .statusbar{
+      height:34px;
+      background: var(--c-black);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:0 10px;
+      color: var(--c-white);
+      font-weight:700;
+      letter-spacing:.2px;
+    }
+    .signal{
+      display:flex; gap:2px; align-items:flex-end;
+    }
+    .bar{width:3px;background: var(--c-selected);opacity:.9}
+    .bar.b1{height:6px;opacity:.5}
+    .bar.b2{height:9px;opacity:.65}
+    .bar.b3{height:12px;opacity:.8}
+    .bar.b4{height:15px}
+    
+    .homeBody{
+      position:absolute; inset:34px 0 0 0;
+      background: var(--c-black);
+      padding:10px 10px 12px 10px;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .tile{
+      flex:1;
+      border-radius:0px;
+      border:1px solid rgba(0,0,0,0);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      position:relative;
+      overflow:hidden;
+    }
+    .tile{
+      height: 148px;
+    }
+    .tile.top{
+      background: var(--c-selected);
+    }
+    .tile.bottom{
+      background: var(--c-mid);
+    }
+    .tileLabel{
+      position:absolute;
+      bottom:12px;
+      left:0;
+      right:0;
+      text-align:center;
+      color: var(--c-white);
+      font-weight:700;
+      font-size:17px;
+      opacity:.95;
+      text-shadow: 0 1px 0 rgba(0,0,0,.25);
+      pointer-events:none;
+    }
+    
+    
+    .tileIcon{
+      position:absolute;
+      top:22px;
+      left:50%;
+      transform:translateX(-50%);
+      opacity:.95;
+    }
+    
+    .tileIcon svg{
+      max-height:64px;
+      width:auto;
+    }
+    
+    .tileChevron{
+      position:absolute;
+      right:18px;
+      top:68px;
+      width:18px;height:18px;
+      opacity:.95;
+    }
+    .tile.bottom .tileIcon{
+      top:30px;
+    }
+    
+    
+    .optionsBody{
+      position:absolute; inset:34px 0 0 0;
+      background: var(--c-black);
+    }
+    .hdr{
+      height:40px;
+      background: var(--c-mid);
+      color: var(--c-white);
+      display:flex; align-items:center;
+      padding:0 10px;
+      font-weight:700;
+      font-size:16px;
+      border-bottom: 1px solid rgba(0,0,0,.25);
+    }
+    .hdr .back{
+      display:flex; align-items:center; gap:6px;
+      font-weight:700;
+    }
+    .hdr svg{opacity:.95}
+    .list{
+      margin-top:0;
+      padding:0;
+    }
+    .rowItem{
+      height:44px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:0 12px;
+      background: var(--c-mid);
+      color: var(--c-white);
+      font-weight:700;
+      font-size:16px;
+      border-top: 1px solid rgba(0,0,0,.2);
+      border-bottom: 1px solid rgba(0,0,0,.2);
+    }
+    .rowItem.dim{
+      background: var(--c-low);
+      opacity:.75;
+    }
+    .rowItem.selected{
+      background: var(--c-selected);
+    }
+    .rowItem .value{
+      font-weight:800;
+      opacity:.95;
+    }
+    .rowItem .arrow{
+      margin-left:10px;
+      width:16px;height:16px;
+      opacity:.95;
+      flex:0 0 auto;
+    }
+    .valueWrap{
+      display:flex; align-items:center; gap:8px;
+    }
+    
+    dialog{
+      border:none;
+      border-radius:14px;
+      padding:0;
+      max-width:560px;
+      width:calc(100% - 24px);
+      background:#0f0f0f;
+      color:#f1f1f1;
+      border:1px solid rgba(100,100,100,.55);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>AirSense 10 Theme Designer</h1>
+    
+    <div class="layout">
+      <div class="card">
+        <div class="row" style="justify-content:space-between;">
+          <div class="rowBlock">
+            <label>Theme name</label>
+            <input id="themeName" type="text" value="my_theme"/>
+          </div>
+          <div style="display:flex;gap:8px;align-items:flex-end;">
+            <button class="btn" id="btnLoadPreset">Load preset…</button>
+          </div>
+        </div>
+        
+        <div class="sep"></div>
+        
+        <div class="row">
+          <div class="rowBlock">
+            <label>Selected item (blue highlight)</label>
+            <input id="hexSelected" type="text" value="0099cc00"/>
+          </div>
+          <input id="colorSelected" type="color"/>
+        </div>
+        
+        <div class="row" style="margin-top:10px">
+          <div class="rowBlock">
+            <label>Whites (text/icons)</label>
+            <input id="hexWhites" type="text" value="ffffff00"/>
+          </div>
+          <input id="colorWhites" type="color"/>
+        </div>
+        
+        <div class="row" style="margin-top:10px">
+          <div class="rowBlock">
+            <label>Bright grays (highlights/edges)</label>
+            <input id="hexBright" type="text" value="96969600"/>
+          </div>
+          <input id="colorBright" type="color"/>
+        </div>
+        
+        <div class="row" style="margin-top:10px">
+          <div class="rowBlock">
+            <label>Mid grays (buttons/rows)</label>
+            <input id="hexMid" type="text" value="64646400"/>
+          </div>
+          <input id="colorMid" type="color"/>
+        </div>
+        
+        <div class="row" style="margin-top:10px">
+          <div class="rowBlock">
+            <label>Low grays (disabled/backgrounds)</label>
+            <input id="hexLow" type="text" value="40404000"/>
+          </div>
+          <input id="colorLow" type="color"/>
+        </div>
+        
+        <div class="row" style="margin-top:10px">
+          <div class="rowBlock">
+            <label>Blacks</label>
+            <input id="hexBlack" type="text" value="00000000"/>
+          </div>
+          <input id="colorBlack" type="color"/>
+        </div>
+        
+        <div class="sep"></div>
+        
+        <div class="row">
+          <button class="btn primary" id="btnGenerate">Generate TCL snippet</button>
+          <button class="btn" id="btnCopy">Copy</button>
+        </div>
+      </div>
+      
+      <div class="card">
+        <div class="previewArea">
+          <div class="device">
+            <div class="screen" id="screenHome">
+              <div class="statusbar">
+                <div>Home</div>
+                <div class="signal" aria-hidden="true">
+                  <div class="bar b1"></div><div class="bar b2"></div><div class="bar b3"></div><div class="bar b4"></div>
+                </div>
+              </div>
+              <div class="homeBody">
+                <div class="tile top">
+                  <div class="tileIcon" aria-hidden="true">
+                    
+                    <svg width="110" height="92" viewBox="0 0 110 92" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <rect x="10" y="36" width="26" height="26" stroke="var(--c-white)" stroke-width="4"/>
+                      <rect x="38" y="52" width="26" height="26" stroke="var(--c-white)" stroke-width="4"/>
+                      <rect x="54" y="14" width="40" height="40" stroke="var(--c-white)" stroke-width="4"/>
+                      <path d="M64 34 L73 43 L88 24" stroke="var(--c-white)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <div class="tileChevron" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="18" height="18">
+                      <path d="M9 6 L15 12 L9 18" fill="none" stroke="var(--c-white)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <div class="tileLabel">My Options</div>
+                </div>
+                
+                <div class="tile bottom">
+                  <div class="tileIcon" aria-hidden="true" style="top:44px">
+                    
+                    <svg width="120" height="90" viewBox="0 0 120 90" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M75 18c-10 3-16 13-13 24 3 12 16 18 27 13-9 9-23 11-34 4-12-8-15-25-7-38 7-11 20-16 33-13z"
+                      fill="var(--c-white)"/>
+                      <path d="M30 62c2-10 11-18 22-18 9 0 17 5 20 13 1-1 3-2 6-2 7 0 12 5 12 12H26c-6 0-10-4-10-9 0-5 6-9 14-8z"
+                      fill="var(--c-white)"/>
+                      <circle cx="22" cy="28" r="2" fill="var(--c-white)"/>
+                      <circle cx="34" cy="20" r="2" fill="var(--c-white)"/>
+                      <circle cx="44" cy="30" r="2" fill="var(--c-white)"/>
+                    </svg>
+                  </div>
+                  <div class="tileLabel">Sleep Report</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          
+          <div class="device">
+            <div class="screen" id="screenOptions">
+              <div class="statusbar">
+                <div>My Options</div>
+                <div class="signal" aria-hidden="true">
+                  <div class="bar b1"></div><div class="bar b2"></div><div class="bar b3"></div><div class="bar b4"></div>
+                </div>
+              </div>
+              
+              <div class="optionsBody">
+                <div class="hdr">
+                  <div class="back">
+                    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 6 L8 12 L14 18" fill="none" stroke="var(--c-white)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span>Home</span>
+                  </div>
+                </div>
+                
+                <div class="list">
+                  <div class="rowItem selected">
+                    <div>Ramp Time</div>
+                    <div class="valueWrap">
+                      <div class="value">20min.</div>
+                    </div>
+                  </div>
+                  
+                  <div class="rowItem">
+                    <div>Mask</div>
+                    <div class="valueWrap">
+                      <div class="value">Nasal</div>
+                    </div>
+                  </div>
+                  
+                  <div class="rowItem">
+                    <div>Run Mask Fit</div>
+                    <div class="valueWrap">
+                      <svg class="arrow" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M9 6 L15 12 L9 18" fill="none" stroke="var(--c-white)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </div>
+                  </div>
+                  
+                  <div class="rowItem">
+                    <div>Airplane Mode</div>
+                    <div class="valueWrap">
+                      <div class="value">Off</div>
+                    </div>
+                  </div>
+                  
+                  <div class="rowItem dim">
+                    <div>Disabled</div>
+                    <div class="valueWrap">
+                      <div class="value">—</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          
+          <div style="flex:1;min-width:320px">
+            <label>Generated TCL dict entry (paste into <span class="kbd">variable themes { ... }</span>)</label>
+            <textarea id="out" spellcheck="false"></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <dialog id="presetDialog">
+    <div style="padding:14px 14px 10px 14px;border-bottom:1px solid rgba(100,100,100,.45);display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-weight:800">Load preset</div>
+      <button class="btn" id="btnClosePreset">Close</button>
+    </div>
+    <div style="padding:14px">
+      <div class="row" id="presetButtons" style="gap:8px;flex-wrap:wrap"></div>
+    </div>
+  </dialog>
+  
+  <script>
+    const ADDR = {
+      selected: 0x0f271c,
+      whites: [
+      0x0f26f8, 0x0f2714, 0x0f2720, 0x0f2738, 0x0f273c, 0x0f2740,
+      0x0f274c, 0x0f2768, 0x0f2774, 0x0f278c, 0x0f2790, 0x0f2794
+      ],
+      bright: [0x0f26fc, 0x0f2704, 0x0f2750, 0x0f2758, 0x0f276c],
+      mid:    [0x0f2700, 0x0f2754],
+      low:    [0x0f2708, 0x0f270c, 0x0f2728, 0x0f2744, 0x0f275c, 0x0f2760, 0x0f277c, 0x0f2798],
+      black:  [0x0f2710, 0x0f272c, 0x0f2748, 0x0f2764, 0x0f2780, 0x0f279c]
+    };
+    
+    const PRESETS = {
+      default: {
+        selected: "0099cc00",
+        whites:   "ffffff00",
+        bright:   "96969600",
+        mid:      "64646400",
+        low:      "40404000",
+        black:    "00000000"
+      },
+      
+      asmageddon: {
+        selected: "cc330000",
+        whites:   "ffbb4400",
+        bright:   "96484800",
+        mid:      "64323200",
+        low:      "40202000",
+        black:    "08000800"
+      },
+      
+      asmageddon_dark: {
+        selected: "70180c00",
+        whites:   "f3885100",
+        bright:   "50282800",
+        mid:      "2c161600",
+        low:      "11080800",
+        black:    "08000800"
+      },
+      
+      night_vision: {
+        selected: "66000000",
+        whites:   "e6c0c000",
+        bright:   "4a2a2a00",
+        mid:      "32181800",
+        low:      "160a0a00",
+        black:    "00000000"
+      },
+      
+      night_toned: {
+        selected: "00668800",
+        whites:   "d8d8d800",
+        bright:   "80808000",
+        mid:      "58585800",
+        low:      "30303000",
+        black:    "00000000"
+      },
+      
+      night_dark: {
+        selected: "00557700",
+        whites:   "c8c8c800",
+        bright:   "78787800",
+        mid:      "50505000",
+        low:      "28282800",
+        black:    "00000000"
+      },
+      
+      deep_blue: {
+        selected: "004c6600",
+        whites:   "c4ccd200",
+        bright:   "6e747800",
+        mid:      "4a4f5400",
+        low:      "2a2f3400",
+        black:    "08000800"
+      },
+      
+      night_amber: {
+        selected: "80550000",
+        whites:   "e6d3a300",
+        bright:   "7a6a4a00",
+        mid:      "564a3600",
+        low:      "2e261a00",
+        black:    "08000800"
+      },
+      
+      graphite: {
+        selected: "4a6a7a00",
+        whites:   "d0d4d800",
+        bright:   "7a7f8400",
+        mid:      "565a5e00",
+        low:      "2c2f3300",
+        black:    "08000800"
+      },
+      
+      night_red: {
+        selected: "7a2a2a00",
+        whites:   "e0c8c800",
+        bright:   "7a5a5a00",
+        mid:      "543a3a00",
+        low:      "2a1c1c00",
+        black:    "08000800"
+      }
+    };
+    
+    function populatePresetButtons() {
+      const wrap = document.getElementById("presetButtons");
+      wrap.innerHTML = "";
+      
+      Object.keys(PRESETS).forEach((name, idx) => {
+        const btn = document.createElement("button");
+        btn.className = "btn" + (name === "default" ? " primary" : "");
+        btn.textContent = name;
+        btn.dataset.preset = name;
+        
+        btn.addEventListener("click", () => {
+          const p = PRESETS[name];
+          if (!p) return;
+          
+          document.getElementById("themeName").value = name;
+          document.getElementById("hexSelected").value = p.selected;
+          document.getElementById("hexWhites").value   = p.whites;
+          document.getElementById("hexBright").value   = p.bright;
+          document.getElementById("hexMid").value      = p.mid;
+          document.getElementById("hexLow").value      = p.low;
+          document.getElementById("hexBlack").value    = p.black;
+          
+          syncColorPickersFromHex();
+          render();
+          document.getElementById("presetDialog").close();
+        });
+        
+        wrap.appendChild(btn);
+      });
+    }
+    
+    
+    const $ = (id) => document.getElementById(id);
+    
+    function normalizeHex4B(s){
+      s = (s || "").trim().toLowerCase();
+      if (s.startsWith("#")) s = s.slice(1);
+      //if (/^[0-9a-f]{6}$/.test(s)) return s + "00";
+      if (/^[0-9a-f]{8}$/.test(s)) return s;
+      return null;
+    }
+    function hex4B_to_css(hex8){
+      hex8 = normalizeHex4B(hex8);
+      return hex8 ? ("#" + hex8.slice(0,6)) : "#000000";
+    }
+    function css_to_hex4B(css){
+      css = (css || "").trim().toLowerCase();
+      if (css.startsWith("#")) css = css.slice(1);
+      return /^[0-9a-f]{6}$/.test(css) ? (css + "00") : null;
+    }
+    function addrToTclHex(addr){ return "0x" + addr.toString(16); }
+    
+    function setThemeCSSVars(colors){
+      document.documentElement.style.setProperty("--c-selected", hex4B_to_css(colors.selected));
+      document.documentElement.style.setProperty("--c-white",    hex4B_to_css(colors.whites));
+      document.documentElement.style.setProperty("--c-bright",   hex4B_to_css(colors.bright));
+      document.documentElement.style.setProperty("--c-mid",      hex4B_to_css(colors.mid));
+      document.documentElement.style.setProperty("--c-low",      hex4B_to_css(colors.low));
+      document.documentElement.style.setProperty("--c-black",    hex4B_to_css(colors.black));
+    }
+    
+    function buildThemeEntry(name, colors) {
+      const lines = [];
+      lines.push(`${name} {`);
+      
+      lines.push(`    0x${ADDR.selected.toString(16)} ${colors.selected}`);
+      
+      const groups = [
+      [ADDR.whites, colors.whites],
+      [ADDR.bright, colors.bright],
+      [ADDR.mid,    colors.mid],
+      [ADDR.low,    colors.low],
+      [ADDR.black,  colors.black]
+      ];
+      
+      for (const [addrs, value] of groups) {
+        let line = "    ";
+        let count = 0;
+        
+        for (const addr of addrs) {
+          line += `0x${addr.toString(16)} ${value} `;
+          count++;
+          
+          if (count === 3) {
+            lines.push(line.trimEnd());
+            line = "    ";
+            count = 0;
+          }
+        }
+        
+        if (count > 0) {
+          lines.push(line.trimEnd());
+        }
+      }
+      
+      lines.push("}");
+      return lines.join("\n");
+    }
+    
+    
+    
+    function readUI(){
+      const name = ($("themeName").value || "my_theme").trim() || "my_theme";
+      const selected = normalizeHex4B($("hexSelected").value);
+      const whites   = normalizeHex4B($("hexWhites").value);
+      const bright   = normalizeHex4B($("hexBright").value);
+      const mid      = normalizeHex4B($("hexMid").value);
+      const low      = normalizeHex4B($("hexLow").value);
+      const black    = normalizeHex4B($("hexBlack").value);
+      
+      const bad = [];
+      if (!selected) bad.push("Selected");
+      if (!whites) bad.push("Whites");
+      if (!bright) bad.push("Bright grays");
+      if (!mid) bad.push("Mid grays");
+      if (!low) bad.push("Low grays");
+      if (!black) bad.push("Blacks");
+      if (bad.length){
+        //alert("Invalid hex for: " + bad.join(", ") + "\nUse rrggbb00, rrggbb, or #rrggbb.");
+        return null;
+      }
+      return { name, colors:{selected,whites,bright,mid,low,black} };
+    }
+    
+    function syncColorPickersFromHex(){
+      $("colorSelected").value = hex4B_to_css($("hexSelected").value);
+      $("colorWhites").value   = hex4B_to_css($("hexWhites").value);
+      $("colorBright").value   = hex4B_to_css($("hexBright").value);
+      $("colorMid").value      = hex4B_to_css($("hexMid").value);
+      $("colorLow").value      = hex4B_to_css($("hexLow").value);
+      $("colorBlack").value    = hex4B_to_css($("hexBlack").value);
+    }
+    
+    function render(){
+      const st = readUI();
+      if (!st) return;
+      setThemeCSSVars(st.colors);
+      $("out").value = buildThemeEntry(st.name, st.colors);
+    }
+    
+    function bind(hexId, colorId){
+      $(hexId).addEventListener("input", () => {
+        const n = normalizeHex4B($(hexId).value);
+        if (n){
+          $(hexId).value = n;
+          $(colorId).value = hex4B_to_css(n);
+        }
+        render();
+      });
+      $(colorId).addEventListener("input", () => {
+        const v = css_to_hex4B($(colorId).value);
+        if (v) $(hexId).value = v;
+        render();
+      });
+    }
+    
+    bind("hexSelected","colorSelected");
+    bind("hexWhites","colorWhites");
+    bind("hexBright","colorBright");
+    bind("hexMid","colorMid");
+    bind("hexLow","colorLow");
+    bind("hexBlack","colorBlack");
+    
+    $("btnGenerate").addEventListener("click", render);
+    
+    $("btnCopy").addEventListener("click", async () => {
+      if (!$("out").value.trim()) render();
+      try{
+        await navigator.clipboard.writeText($("out").value);
+        alert("Copied.");
+      }catch{
+        $("out").focus(); $("out").select();
+        alert("Clipboard blocked. Output selected—copy manually.");
+      }
+    });
+    
+    const dlg = $("presetDialog");
+    $("btnLoadPreset").addEventListener("click", () => dlg.showModal());
+    $("btnClosePreset").addEventListener("click", () => dlg.close());
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
+    dlg.querySelectorAll("button[data-preset]").forEach(btn=>{
+      btn.addEventListener("click", ()=>{
+        const k = btn.getAttribute("data-preset");
+        const p = PRESETS[k];
+        if (!p) return;
+        $("themeName").value = k;
+        $("hexSelected").value = p.selected;
+        $("hexWhites").value   = p.whites;
+        $("hexBright").value   = p.bright;
+        $("hexMid").value      = p.mid;
+        $("hexLow").value      = p.low;
+        $("hexBlack").value    = p.black;
+        syncColorPickersFromHex();
+        render();
+        dlg.close();
+      });
+    });
+    
+    
+    syncColorPickersFromHex();
+    populatePresetButtons();
+    render();
+  </script>
+</body>
+</html>
