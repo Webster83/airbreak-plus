@@ -10,18 +10,18 @@
       --panel:#111;
       --border:#2a2a2a;
       --text:#e9e9e9;
-      
+
       --c-white:#ffffff;
       --c-selected:#0099cc;
       --c-bright:#969696;
       --c-mid:#646464;
       --c-low:#404040;
       --c-black:#000000;
-      
+
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
       --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
     }
-    
+
     *{box-sizing:border-box}
     body{
       margin:0;
@@ -103,7 +103,7 @@
       color:#eaeaea;
       white-space:nowrap;
     }
-    
+
     .previewArea{
       display:flex;
       gap:18px;
@@ -127,7 +127,7 @@
       overflow:hidden;
       position:relative;
     }
-    
+
     .statusbar{
       height:34px;
       background: var(--c-black);
@@ -147,7 +147,7 @@
     .bar.b2{height:9px;opacity:.65}
     .bar.b3{height:12px;opacity:.8}
     .bar.b4{height:15px}
-    
+
     .homeBody{
       position:absolute; inset:34px 0 0 0;
       background: var(--c-black);
@@ -188,8 +188,8 @@
       text-shadow: 0 1px 0 rgba(0,0,0,.25);
       pointer-events:none;
     }
-    
-    
+
+
     .tileIcon{
       position:absolute;
       top:22px;
@@ -197,12 +197,12 @@
       transform:translateX(-50%);
       opacity:.95;
     }
-    
+
     .tileIcon svg{
       max-height:64px;
       width:auto;
     }
-    
+
     .tileChevron{
       position:absolute;
       right:18px;
@@ -213,8 +213,8 @@
     .tile.bottom .tileIcon{
       top:30px;
     }
-    
-    
+
+
     .optionsBody{
       position:absolute; inset:34px 0 0 0;
       background: var(--c-black);
@@ -271,7 +271,7 @@
     .valueWrap{
       display:flex; align-items:center; gap:8px;
     }
-    
+
     dialog{
       border:none;
       border-radius:14px;
@@ -287,7 +287,7 @@
 <body>
   <div class="wrap">
     <h1>AirSense 10 Theme Designer</h1>
-    
+
     <div class="layout">
       <div class="card">
         <div class="row" style="justify-content:space-between;">
@@ -299,9 +299,23 @@
             <button class="btn" id="btnLoadPreset">Load preset…</button>
           </div>
         </div>
-        
+
         <div class="sep"></div>
-        
+
+        <div class="row" style="align-items:center; gap:12px;">
+          <label for="gamma">Preview gamma</label>
+          <input id="gamma" type="range"
+          min="0.4" max="2.2" step="0.05" value="1.0">
+          <span id="gamma-val">1.00</span>
+        </div>
+
+        <div class="row">
+          <input id="panelBias" type="checkbox" checked="on">
+          <label for="panelBias">Simulate Tianma panel bias</label>
+        </div>
+
+        <div class="sep"></div>
+
         <div class="row">
           <div class="rowBlock">
             <label>Selected item (blue highlight)</label>
@@ -309,7 +323,7 @@
           </div>
           <input id="colorSelected" type="color"/>
         </div>
-        
+
         <div class="row" style="margin-top:10px">
           <div class="rowBlock">
             <label>Whites (text/icons)</label>
@@ -317,7 +331,7 @@
           </div>
           <input id="colorWhites" type="color"/>
         </div>
-        
+
         <div class="row" style="margin-top:10px">
           <div class="rowBlock">
             <label>Bright grays (highlights/edges)</label>
@@ -325,7 +339,7 @@
           </div>
           <input id="colorBright" type="color"/>
         </div>
-        
+
         <div class="row" style="margin-top:10px">
           <div class="rowBlock">
             <label>Mid grays (buttons/rows)</label>
@@ -333,7 +347,7 @@
           </div>
           <input id="colorMid" type="color"/>
         </div>
-        
+
         <div class="row" style="margin-top:10px">
           <div class="rowBlock">
             <label>Low grays (disabled/backgrounds)</label>
@@ -341,7 +355,7 @@
           </div>
           <input id="colorLow" type="color"/>
         </div>
-        
+
         <div class="row" style="margin-top:10px">
           <div class="rowBlock">
             <label>Blacks</label>
@@ -349,15 +363,15 @@
           </div>
           <input id="colorBlack" type="color"/>
         </div>
-        
+
         <div class="sep"></div>
-        
+
         <div class="row">
           <button class="btn primary" id="btnGenerate">Generate TCL snippet</button>
           <button class="btn" id="btnCopy">Copy</button>
         </div>
       </div>
-      
+
       <div class="card">
         <div class="previewArea">
           <div class="device">
@@ -371,7 +385,7 @@
               <div class="homeBody">
                 <div class="tile top">
                   <div class="tileIcon" aria-hidden="true">
-                    
+
                     <svg width="110" height="92" viewBox="0 0 110 92" fill="none" xmlns="http://www.w3.org/2000/svg">
                       <rect x="10" y="36" width="26" height="26" stroke="var(--c-white)" stroke-width="4"/>
                       <rect x="38" y="52" width="26" height="26" stroke="var(--c-white)" stroke-width="4"/>
@@ -386,10 +400,10 @@
                   </div>
                   <div class="tileLabel">My Options</div>
                 </div>
-                
+
                 <div class="tile bottom">
                   <div class="tileIcon" aria-hidden="true" style="top:44px">
-                    
+
                     <svg width="120" height="90" viewBox="0 0 120 90" fill="none" xmlns="http://www.w3.org/2000/svg">
                       <path d="M75 18c-10 3-16 13-13 24 3 12 16 18 27 13-9 9-23 11-34 4-12-8-15-25-7-38 7-11 20-16 33-13z"
                       fill="var(--c-white)"/>
@@ -405,8 +419,8 @@
               </div>
             </div>
           </div>
-          
-          
+
+
           <div class="device">
             <div class="screen" id="screenOptions">
               <div class="statusbar">
@@ -415,7 +429,7 @@
                   <div class="bar b1"></div><div class="bar b2"></div><div class="bar b3"></div><div class="bar b4"></div>
                 </div>
               </div>
-              
+
               <div class="optionsBody">
                 <div class="hdr">
                   <div class="back">
@@ -425,7 +439,7 @@
                     <span>Home</span>
                   </div>
                 </div>
-                
+
                 <div class="list">
                   <div class="rowItem selected">
                     <div>Ramp Time</div>
@@ -433,14 +447,14 @@
                       <div class="value">20min.</div>
                     </div>
                   </div>
-                  
+
                   <div class="rowItem">
                     <div>Mask</div>
                     <div class="valueWrap">
                       <div class="value">Nasal</div>
                     </div>
                   </div>
-                  
+
                   <div class="rowItem">
                     <div>Run Mask Fit</div>
                     <div class="valueWrap">
@@ -449,14 +463,14 @@
                       </svg>
                     </div>
                   </div>
-                  
+
                   <div class="rowItem">
                     <div>Airplane Mode</div>
                     <div class="valueWrap">
                       <div class="value">Off</div>
                     </div>
                   </div>
-                  
+
                   <div class="rowItem dim">
                     <div>Disabled</div>
                     <div class="valueWrap">
@@ -467,8 +481,8 @@
               </div>
             </div>
           </div>
-          
-          
+
+
           <div style="flex:1;min-width:320px">
             <label>Generated TCL dict entry (paste into <span class="kbd">variable themes { ... }</span>)</label>
             <textarea id="out" spellcheck="false"></textarea>
@@ -477,7 +491,7 @@
       </div>
     </div>
   </div>
-  
+
   <dialog id="presetDialog">
     <div style="padding:14px 14px 10px 14px;border-bottom:1px solid rgba(100,100,100,.45);display:flex;justify-content:space-between;align-items:center;">
       <div style="font-weight:800">Load preset</div>
@@ -487,7 +501,7 @@
       <div class="row" id="presetButtons" style="gap:8px;flex-wrap:wrap"></div>
     </div>
   </dialog>
-  
+
   <script>
     const ADDR = {
       selected: 0x0f271c,
@@ -500,7 +514,190 @@
       low:    [0x0f2708, 0x0f270c, 0x0f2728, 0x0f2744, 0x0f275c, 0x0f2760, 0x0f277c, 0x0f2798],
       black:  [0x0f2710, 0x0f272c, 0x0f2748, 0x0f2764, 0x0f2780, 0x0f279c]
     };
-    
+
+    const PRESETS_UNCOMPENSATED = {
+      default: {
+        selected: "0099cc00",
+        whites: "ffffff00",
+        bright: "96969600",
+        mid: "64646400",
+        low: "40404000",
+        black: "00000000",
+      },
+
+      default_low_gamma: {
+        selected: "00828c00",
+        whites: "e4e0d600",
+        bright: "90867100",
+        mid: "685e4b00",
+        low: "48403100",
+        black: "00000000",
+      },
+
+      default_very_low_gamma: {
+        selected: "00737a00",
+        whites: "d2ccbe00",
+        bright: "82786300",
+        mid: "5d544200",
+        low: "423a2d00",
+        black: "00000000",
+      },
+
+      default_ultra_low_gamma: {
+        selected: "00606400",
+        whites: "beb6a300",
+        bright: "6e645000",
+        mid: "4c443500",
+        low: "342e2300",
+        black: "00000000",
+      },
+
+      default_dim: {
+        selected: "00504f00",
+        whites: "d2ccbe00",
+        bright: "746a5600",
+        mid: "534a3a00",
+        low: "29241800",
+        black: "00000000",
+      },
+
+      default_blackout: {
+        selected: "00404200",
+        whites: "dbd6ca00",
+        bright: "655c4a00",
+        mid: "413a2d00",
+        low: "1f1c1500",
+        black: "00000000",
+      },
+
+      ember_night: {
+        selected: "75160000",
+        whites: "e2c6a000",
+        bright: "65402a00",
+        mid: "482a1a00",
+        low: "24140b00",
+        black: "00000000",
+      },
+
+      asmageddon: {
+        selected: "cc330000",
+        whites: "ffbb4400",
+        bright: "96484800",
+        mid: "64323200",
+        low: "40202000",
+        black: "08000800",
+      },
+
+      asmageddon_dark: {
+        selected: "7d180a00",
+        whites: "ff886300",
+        bright: "58281900",
+        mid: "30160f00",
+        low: "12080700",
+        black: "08000800",
+      },
+
+      night_vision: {
+        selected: "76000000",
+        whites: "f0c09c00",
+        bright: "542a1f00",
+        mid: "3a180f00",
+        low: "1a0a0700",
+        black: "00000000",
+      },
+
+      night_toned: {
+        selected: "00666700",
+        whites: "ddd8ce00",
+        bright: "8a806c00",
+        mid: "5f584800",
+        low: "342e2400",
+        black: "00000000",
+      },
+
+      night_dark: {
+        selected: "00555600",
+        whites: "cec8ba00",
+        bright: "82786300",
+        mid: "564f4000",
+        low: "2c281f00",
+        black: "00000000",
+      },
+
+      deep_blue: {
+        selected: "004c3600",
+        whites: "cdccb700",
+        bright: "78745e00",
+        mid: "534f3f00",
+        low: "302f2500",
+        black: "08000800",
+      },
+
+      night_amber: {
+        selected: "8c550000",
+        whites: "f0d39000",
+        bright: "896a3a00",
+        mid: "604c2700",
+        low: "34261400",
+        black: "08000800",
+      },
+
+      graphite: {
+        selected: "506a5d00",
+        whites: "dad4c400",
+        bright: "897f6800",
+        mid: "5f5a4900",
+        low: "312f2500",
+        black: "08000800",
+      },
+
+      night_red: {
+        selected: "862a2200",
+        whites: "e6c8aa00",
+        bright: "896a4c00",
+        mid: "5e4f3b00",
+        low: "2e1c1600",
+        black: "08000800",
+      },
+
+      graphite_dark: {
+        selected: "3b515400",
+        whites: "bfb6a800",
+        bright: "6c675300",
+        mid: "4c483a00",
+        low: "27271f00",
+        black: "08000800",
+      },
+
+      charcoal_light: {
+        selected: "333a3300",
+        whites: "c0b8a000",
+        bright: "534a3a00",
+        mid: "362f2300",
+        low: "1c181200",
+        black: "00000000",
+      },
+
+      charcoal: {
+        selected: "22261f00",
+        whites: "988e7900",
+        bright: "322c2100",
+        mid: "1e1a1300",
+        low: "0e0c0900",
+        black: "00000000",
+      },
+
+      charcoal_warm: {
+        selected: "422a1b00",
+        whites: "c2a88d00",
+        bright: "533e2b00",
+        mid: "37261900",
+        low: "1c120b00",
+        black: "00000000",
+      }
+    }
+    ;
+
     const PRESETS = {
       default: {
         selected: "0099cc00",
@@ -508,105 +705,196 @@
         bright:   "96969600",
         mid:      "64646400",
         low:      "40404000",
-        black:    "00000000"
+        black:    "00000000",
       },
-      
+
+      default_low_gamma: {
+        selected: "0092c200",
+        whites:   "ededed00",
+        bright:   "948f8b00",
+        mid:      "67625e00",
+        low:      "45403c00",
+        black:    "00000000",
+      },
+
+      default_very_low_gamma: {
+        selected: "0083ad00",
+        whites:   "d9d9d900",
+        bright:   "85807c00",
+        mid:      "5e595500",
+        low:      "403b3700",
+        black:    "00000000",
+      },
+
+      default_ultra_low_gamma: {
+        selected: "006f9600",
+        whites:   "c4c4c400",
+        bright:   "726d6900",
+        mid:      "514c4800",
+        low:      "35302c00",
+        black:    "00000000",
+      },
+
+      default_dim: {
+        selected: "005d7a00",
+        whites:   "d9d9d900",
+        bright:   "7c777300",
+        mid:      "58534f00",
+        low:      "2b262200",
+        black:    "00000000",
+      },
+
+      default_blackout: {
+        selected: "004e6600",
+        whites:   "e0e0e000",
+        bright:   "6a656100",
+        mid:      "46413d00",
+        low:      "211c1800",
+        black:    "00000000",
+      },
+
       asmageddon: {
         selected: "cc330000",
         whites:   "ffbb4400",
         bright:   "96484800",
         mid:      "64323200",
         low:      "40202000",
-        black:    "08000800"
+        black:    "08000800",
       },
-      
+
       asmageddon_dark: {
         selected: "70180c00",
         whites:   "f3885100",
         bright:   "50282800",
         mid:      "2c161600",
         low:      "11080800",
-        black:    "08000800"
+        black:    "08000800",
       },
-      
+
       night_vision: {
-        selected: "66000000",
-        whites:   "e6c0c000",
-        bright:   "4a2a2a00",
-        mid:      "32181800",
-        low:      "160a0a00",
-        black:    "00000000"
+        selected: "76000000",
+        whites:   "eec0b100",
+        bright:   "542a2000",
+        mid:      "3a181200",
+        low:      "1a0a0700",
+        black:    "00000000",
       },
-      
+
       night_toned: {
-        selected: "00668800",
-        whites:   "d8d8d800",
-        bright:   "80808000",
-        mid:      "58585800",
-        low:      "30303000",
-        black:    "00000000"
+        selected: "007aa300",
+        whites:   "e2e2e200",
+        bright:   "8c848000",
+        mid:      "625c5800",
+        low:      "3a343000",
+        black:    "00000000",
       },
-      
+
       night_dark: {
-        selected: "00557700",
-        whites:   "c8c8c800",
-        bright:   "78787800",
-        mid:      "50505000",
-        low:      "28282800",
-        black:    "00000000"
+        selected: "006a8a00",
+        whites:   "d4d4d400",
+        bright:   "827b7600",
+        mid:      "5c565200",
+        low:      "302b2700",
+        black:    "00000000",
       },
-      
-      deep_blue: {
-        selected: "004c6600",
-        whites:   "c4ccd200",
-        bright:   "6e747800",
-        mid:      "4a4f5400",
-        low:      "2a2f3400",
-        black:    "08000800"
-      },
-      
+
       night_amber: {
-        selected: "80550000",
-        whites:   "e6d3a300",
-        bright:   "7a6a4a00",
-        mid:      "564a3600",
-        low:      "2e261a00",
-        black:    "08000800"
+        selected: "8a5c0000",
+        whites:   "ead9a800",
+        bright:   "8a6f4e00",
+        mid:      "5e4c3600",
+        low:      "34281800",
+        black:    "08000800",
       },
-      
-      graphite: {
-        selected: "4a6a7a00",
-        whites:   "d0d4d800",
-        bright:   "7a7f8400",
-        mid:      "565a5e00",
-        low:      "2c2f3300",
-        black:    "08000800"
-      },
-      
+
       night_red: {
-        selected: "7a2a2a00",
-        whites:   "e0c8c800",
-        bright:   "7a5a5a00",
-        mid:      "543a3a00",
-        low:      "2a1c1c00",
-        black:    "08000800"
+        selected: "8a2f2f00",
+        whites:   "e6cccc00",
+        bright:   "8a636300",
+        mid:      "5e404000",
+        low:      "32202000",
+        black:    "08000800",
+      },
+
+      night_ember: {
+        selected: "75160000",
+        whites:   "dfc6b100",
+        bright:   "65402b00",
+        mid:      "472a1b00",
+        low:      "24140b00",
+        black:    "00000000",
+      },
+
+      deep_blue: {
+        selected: "004c4e00",
+        whites:   "caccc200",
+        bright:   "78746200",
+        mid:      "534f4200",
+        low:      "302f2700",
+        black:    "08000800",
+      },
+
+      graphite: {
+        selected: "4e6f8000",
+        whites:   "d6dadf00",
+        bright:   "827b7800",
+        mid:      "5e5a5600",
+        low:      "3a343000",
+        black:    "08000800",
+      },
+
+      graphite_dark: {
+        selected: "3f5f6e00",
+        whites:   "bcc2c800",
+        bright:   "6e676200",
+        mid:      "4e494500",
+        low:      "2e292600",
+        black:    "08000800",
+      },
+
+      charcoal_light: {
+        selected: "35424a00",
+        whites:   "c2bbb500",
+        bright:   "5a524c00",
+        mid:      "3a343000",
+        low:      "201b1800",
+        black:    "00000000",
+      },
+
+      charcoal: {
+        selected: "242e3400",
+        whites:   "9a928c00",
+        bright:   "3a332e00",
+        mid:      "241f1c00",
+        low:      "120f0c00",
+        black:    "00000000",
+      },
+
+      charcoal_warm: {
+        selected: "3f2e2700",
+        whites:   "c6b2a600",
+        bright:   "5a473d00",
+        mid:      "3a2c2600",
+        low:      "1e151000",
+        black:    "00000000",
       }
     };
-    
+
+
     function populatePresetButtons() {
       const wrap = document.getElementById("presetButtons");
       wrap.innerHTML = "";
-      
+
       Object.keys(PRESETS).forEach((name, idx) => {
         const btn = document.createElement("button");
         btn.className = "btn" + (name === "default" ? " primary" : "");
         btn.textContent = name;
         btn.dataset.preset = name;
-        
+
         btn.addEventListener("click", () => {
           const p = PRESETS[name];
           if (!p) return;
-          
+
           document.getElementById("themeName").value = name;
           document.getElementById("hexSelected").value = p.selected;
           document.getElementById("hexWhites").value   = p.whites;
@@ -614,19 +902,19 @@
           document.getElementById("hexMid").value      = p.mid;
           document.getElementById("hexLow").value      = p.low;
           document.getElementById("hexBlack").value    = p.black;
-          
+
           syncColorPickersFromHex();
           render();
           document.getElementById("presetDialog").close();
         });
-        
+
         wrap.appendChild(btn);
       });
     }
-    
-    
+
+
     const $ = (id) => document.getElementById(id);
-    
+
     function normalizeHex4B(s){
       s = (s || "").trim().toLowerCase();
       if (s.startsWith("#")) s = s.slice(1);
@@ -644,56 +932,44 @@
       return /^[0-9a-f]{6}$/.test(css) ? (css + "00") : null;
     }
     function addrToTclHex(addr){ return "0x" + addr.toString(16); }
-    
+
     function setThemeCSSVars(colors){
-      document.documentElement.style.setProperty("--c-selected", hex4B_to_css(colors.selected));
-      document.documentElement.style.setProperty("--c-white",    hex4B_to_css(colors.whites));
-      document.documentElement.style.setProperty("--c-bright",   hex4B_to_css(colors.bright));
-      document.documentElement.style.setProperty("--c-mid",      hex4B_to_css(colors.mid));
-      document.documentElement.style.setProperty("--c-low",      hex4B_to_css(colors.low));
-      document.documentElement.style.setProperty("--c-black",    hex4B_to_css(colors.black));
+      const g = currentGamma;
+
+      document.documentElement.style.setProperty(
+      "--c-selected", applyGamma(colors.selected, g)
+      );
+      document.documentElement.style.setProperty(
+      "--c-white", applyGamma(colors.whites, g)
+      );
+      document.documentElement.style.setProperty(
+      "--c-bright", applyGamma(colors.bright, g)
+      );
+      document.documentElement.style.setProperty(
+      "--c-mid", applyGamma(colors.mid, g)
+      );
+      document.documentElement.style.setProperty(
+      "--c-low", applyGamma(colors.low, g)
+      );
+      document.documentElement.style.setProperty(
+      "--c-black", applyGamma(colors.black, g)
+      );
     }
-    
+
+
     function buildThemeEntry(name, colors) {
       const lines = [];
       lines.push(`${name} {`);
-      
-      lines.push(`    0x${ADDR.selected.toString(16)} ${colors.selected}`);
-      
-      const groups = [
-      [ADDR.whites, colors.whites],
-      [ADDR.bright, colors.bright],
-      [ADDR.mid,    colors.mid],
-      [ADDR.low,    colors.low],
-      [ADDR.black,  colors.black]
-      ];
-      
-      for (const [addrs, value] of groups) {
-        let line = "    ";
-        let count = 0;
-        
-        for (const addr of addrs) {
-          line += `0x${addr.toString(16)} ${value} `;
-          count++;
-          
-          if (count === 3) {
-            lines.push(line.trimEnd());
-            line = "    ";
-            count = 0;
-          }
-        }
-        
-        if (count > 0) {
-          lines.push(line.trimEnd());
-        }
-      }
-      
+      lines.push(`    selected ${colors.selected}`);
+      lines.push(`    whites   ${colors.whites}`);
+      lines.push(`    bright   ${colors.bright}`);
+      lines.push(`    mid      ${colors.mid}`);
+      lines.push(`    low      ${colors.low}`);
+      lines.push(`    black    ${colors.black}`);
       lines.push("}");
       return lines.join("\n");
     }
-    
-    
-    
+
     function readUI(){
       const name = ($("themeName").value || "my_theme").trim() || "my_theme";
       const selected = normalizeHex4B($("hexSelected").value);
@@ -702,7 +978,7 @@
       const mid      = normalizeHex4B($("hexMid").value);
       const low      = normalizeHex4B($("hexLow").value);
       const black    = normalizeHex4B($("hexBlack").value);
-      
+
       const bad = [];
       if (!selected) bad.push("Selected");
       if (!whites) bad.push("Whites");
@@ -716,7 +992,7 @@
       }
       return { name, colors:{selected,whites,bright,mid,low,black} };
     }
-    
+
     function syncColorPickersFromHex(){
       $("colorSelected").value = hex4B_to_css($("hexSelected").value);
       $("colorWhites").value   = hex4B_to_css($("hexWhites").value);
@@ -725,14 +1001,51 @@
       $("colorLow").value      = hex4B_to_css($("hexLow").value);
       $("colorBlack").value    = hex4B_to_css($("hexBlack").value);
     }
-    
+
+    function applyGamma(hex, gamma) {
+      hex = normalizeHex4B(hex);
+      if (!hex) return "#000";
+
+      let r = parseInt(hex.slice(0,2),16) / 255;
+      let g = parseInt(hex.slice(2,4),16) / 255;
+      let b = parseInt(hex.slice(4,6),16) / 255;
+
+      const ig = 1 / gamma;
+
+      r = Math.pow(r, ig) * 255;
+      g = Math.pow(g, ig) * 255;
+      b = Math.pow(b, ig) * 255;
+
+      if (simulatePanelBias) {
+        ({ r, g, b } = simulatePanelBiasRGB(r, g, b));
+      }
+
+      return `rgb(${r|0}, ${g|0}, ${b|0})`;
+    }
+
+    function simulatePanelBiasRGB(r, g, b) {
+      // perceptual luma
+      const y = 0.2126*r + 0.7152*g + 0.0722*b; // 0..255
+      const dark = 1 - (y / 255);               // 0..1
+
+      // blue dominates near black, red decays
+      const blueBoost = 1 + 0.40 * dark;        
+      const redDrop   = 1 - 0.15 * dark;          
+
+      return {
+        r: Math.max(0, Math.min(255, r * redDrop)),
+        g: g,
+        b: Math.max(0, Math.min(255, b * blueBoost)),
+      };
+    }
+
     function render(){
       const st = readUI();
       if (!st) return;
       setThemeCSSVars(st.colors);
       $("out").value = buildThemeEntry(st.name, st.colors);
     }
-    
+
     function bind(hexId, colorId){
       $(hexId).addEventListener("input", () => {
         const n = normalizeHex4B($(hexId).value);
@@ -748,16 +1061,18 @@
         render();
       });
     }
-    
+
     bind("hexSelected","colorSelected");
     bind("hexWhites","colorWhites");
     bind("hexBright","colorBright");
     bind("hexMid","colorMid");
     bind("hexLow","colorLow");
     bind("hexBlack","colorBlack");
-    
+
+
+
     $("btnGenerate").addEventListener("click", render);
-    
+
     $("btnCopy").addEventListener("click", async () => {
       if (!$("out").value.trim()) render();
       try{
@@ -768,7 +1083,7 @@
         alert("Clipboard blocked. Output selected—copy manually.");
       }
     });
-    
+
     const dlg = $("presetDialog");
     $("btnLoadPreset").addEventListener("click", () => dlg.showModal());
     $("btnClosePreset").addEventListener("click", () => dlg.close());
@@ -790,8 +1105,27 @@
         dlg.close();
       });
     });
-    
-    
+
+    let currentGamma = 1.0;
+    let simulatePanelBias = true;
+
+    const gammaSlider = document.getElementById("gamma");
+    const gammaVal = document.getElementById("gamma-val");
+
+    gammaSlider.addEventListener("input", () => {
+      currentGamma = parseFloat(gammaSlider.value);
+      gammaVal.textContent = currentGamma.toFixed(2);
+      render();
+    });
+
+    const panelBiasChk = document.getElementById("panelBias");
+
+    panelBiasChk.addEventListener("change", () => {
+      simulatePanelBias = panelBiasChk.checked;
+      render();
+    });
+
+
     syncColorPickersFromHex();
     populatePresetButtons();
     render();
