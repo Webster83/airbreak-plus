@@ -24,15 +24,40 @@ patch() {
 	dd bs=1 seek=$offset conv=notrunc of="$OUT" status=none
 }
 
+check_patch ()
+{
+    offset=$(printf "%d" "$1");
+    tmp=$(mktemp) || return 2;
+    cat > "$tmp";
+    size=$(stat -c %s "$tmp");
+    if dd if="$OUT" bs=1 skip="$offset" count="$size" status=none | cmp -s - "$tmp"; then
+        rm -f "$tmp";
+        return 0;
+    else
+        rm -f "$tmp";
+        return 1;
+    fi
+}
+
+
 check_hash() {
-	HASH=$(sha256sum $IN | awk '{print $1}')
-	if [[ $HASH == "6790b548e0b37c57bc118772d4a04a599c0b74b16cd92e821071b9c7ba5ab711" ]] ; then
-		echo "$IN: VAuto 37051-SX567-0401 binary identified"
-	elif [[ $HASH == "533b91127aa22e05b933db203ad56c449dc12a8c3fd62f57bd88c472a8061775" ]] ; then
-		echo "$IN: AutoSet 37028-SX567-0401 binary identified"
-	else 
-	    die "$IN: Unidentified binary. Confirm its version is 0401 and that its binary has the same section layout"
-	fi
+    HASH=$(sha256sum $IN | awk '{print $1}')
+    if [[ $HASH == "6790b548e0b37c57bc118772d4a04a599c0b74b16cd92e821071b9c7ba5ab711" ]] ; then
+        echo "$IN: AirCurve 10 VAuto 37051-SX567-0401 binary identified"
+    elif [[ $HASH == "533b91127aa22e05b933db203ad56c449dc12a8c3fd62f57bd88c472a8061775" ]] ; then
+        echo "$IN: AirSense 10 AutoSet 37028-SX567-0401 binary identified"
+    elif [[ $HASH == "aa79d2e4f9114f8f9162b52a321eb4cf4d123db9ad55d4c2e08b5716fcaea25f" ]] ; then
+        echo "$IN: AirSense 10 AutoSet 37090-SX567-0401 binary identified"
+    elif [[ $HASH == "9e312f87d1a169195bb5ff6cf026e820837c39e578ca13340e1d29bf7d63dbd0" ]] ; then
+        echo "$IN: AirSense 10 AutoSet 37101-SX567-0401 binary identified"
+    elif [[ $HASH == "7ad0812dbe3a4cc79dc85df9781e64fdb9b2da75be957c1515188abac65d30ad" ]] ; then
+        echo "$IN: AirSense 10 Elite 37117-SX567-0401 binary identified"
+    elif [[ $HASH == "5bd9b8b44b094c150c7ef996236fa4fe38421a08ce6b09811bb6ecb8955fc85a" ]] ; then
+        echo "$IN: AirSense 10 AutoSet For Her 37105-SX567-0401 binary identified"
+    else
+        die "$IN: Unidentified binary. Confirm its version is 0401 and that its binary has the same section layout"
+    fi
+
 }
 
 find_bytes() {
@@ -168,9 +193,19 @@ unlock_ui_limits() {
 	# patch UI limits to range between 1 and 30
 	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x4fa8 || die failed
 	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x4fc4 || die failed
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x52d4 || die failed # unidentified. was 4..25
 	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7eb0 || die failed
 	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7ee8 || die failed
 	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7ecc || die failed
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f04 || die failed # unidentified. was 4..25
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f20 || die failed # vauto
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f58 || die failed # unidentified. was 4..25
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f74 || die failed # s/t/st epap
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x8038 || die failed # asv
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x808c || die failed # unid. was 4..15
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x80a8 || die failed # asvauto max epap
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x80c4 || die failed # asvauto min epap
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x8118 || die failed # unid. was 4..15
 }
 
 asv_unlock_ps_range () {
@@ -333,6 +368,19 @@ asv_disable_backup_rate () {
     printf '\x01\xf0\x0f\x08' | patch 0xf44e0
 }
 
+motor_nagscreen () {
+    # TODO we're out of bits in BUILD_FLAGS. maybe extend it to two bytes (and find better flash location)
+
+    local patch_addr=0x0f23e0
+    if ! printf '\x05\xdb' | check_patch $patch_addr ; then
+        echo "${FUNCNAME[0]}: unexpected bytes at patch location!"
+        return 1
+    fi
+
+    echo "Patching \"Motor life exceeded\" nag screen"
+    printf '\x05\xe0' | patch $patch_addr
+}
+
 check_hash
 
 patch_tamper
@@ -351,6 +399,7 @@ extra_menu # 16
 # all_menu # 32
 gui_config # 64
 gui_submenus
+motor_nagscreen
 
 asv_unlock_ps_range
 
