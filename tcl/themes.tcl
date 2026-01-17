@@ -684,6 +684,10 @@ namespace eval theme {
 
 }
 
-# Uncomment if you want automatic help on load
-# theme::usage
+if {[info level] == 0} {
+    theme::usage
+} else {
+    echo "[info script] loaded."
+    echo {    theme::usage for instructions}
+}
 
