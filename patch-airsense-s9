@@ -1,0 +1,175 @@
+#!/bin/bash
+
+die() { echo >&2 "$*" ; exit 1 ; }
+
+IN=$1
+OUT=$2
+
+DEBUG_PATCH=""
+
+if [ -z "$IN" -o -z "$OUT" ]; then
+	die "Usage: $0: stm32.bin stm32-unlocked.bin"
+fi
+
+
+if [ ! -r "$IN" ]; then
+	die "$IN: can not open input file"
+fi
+
+patch() {
+	offset=`printf "%d" $1`
+	if [ $DEBUG_PATCH ] ; then
+		printf "patching %08x\n" $1
+	fi
+	dd bs=1 seek=$offset conv=notrunc of="$OUT" status=none
+}
+
+check_patch ()
+{
+    offset=$(printf "%d" "$1");
+    tmp=$(mktemp) || return 2;
+    cat > "$tmp";
+    size=$(stat -c %s "$tmp");
+    if dd if="$OUT" bs=1 skip="$offset" count="$size" status=none | cmp -s - "$tmp"; then
+        rm -f "$tmp";
+        return 0;
+    else
+        rm -f "$tmp";
+        return 1;
+    fi
+}
+
+
+find_bytes() {
+    # return values:
+    # 0: single address found (print on stdout)
+    # 1: not found
+    # 2: >1 ocurrences found
+    local hex="$1"
+    perl -0777 -e '
+        my ($file, $hex) = @ARGV;
+
+        open my $fh, "<:raw", $file or exit 1;
+        local $/;
+        my $data = <$fh>;
+
+        my $pattern = pack("H*", $hex);
+
+        my @pos;
+        my $i = 0;
+        while (($i = index($data, $pattern, $i)) != -1) {
+            push @pos, $i;
+            $i++;
+            last if @pos > 1;
+        }
+
+        if (@pos == 1) {
+            print "$pos[0]\n";
+            exit 0;
+        } elsif (@pos > 1) {
+            exit 2;
+        } else {
+            exit 1;
+        }
+    ' "$OUT" "$hex"
+}
+
+
+cp "$IN" "$OUT" || die "$OUT: copy failed"
+
+patch_tamper() {
+    # firmware is split into 3 blocks
+    # 0x08000000 length 0x3000
+    # 0x08003000 length 0x1d800
+    # 0x08020800 length 0xdf800
+    # integrity of each block is verified with crc16-ccit-false
+    # checksum is stored in last 2 bytes of a block
+    #
+    # CRC( payload + payload_crc ) = 0, so let's replace 
+    # bl crc16_ccit_memory_block with movs r0, #0
+
+    # offsets verified on SX474-1201, SX474-0905, SX474-0907
+
+    local patch_bytes='\x00\x20\x00\x20'
+
+    local patch_data=(
+        "0x049a|\x00\xF0\x7D\xFE"
+        "0x04aa|\x00\xF0\x75\xFE"
+        "0x1030|\x00\xF0\xB2\xF8"
+    )
+
+    local offset expected_bytes
+
+    # verify first before attempting any changes
+    for pair in "${patch_data[@]}"; do
+        IFS='|' read -r offset expected_bytes <<< "$pair"
+
+        if ! printf '%b' "${patches[$offset]}" | check_patch "$offset"; then
+            echo "${FUNCNAME[0]}: unexpected bytes at patch location ($offset)"
+            return 1
+        fi
+    done
+
+    # apply patch
+    echo "Patching flash integrity protection"
+    for pair in "${patch_data[@]}"; do
+        IFS='|' read -r offset expected_bytes <<< "$pair"
+        printf '%b' "$patch_bytes" | patch "$offset"
+    done
+}
+
+
+
+patch_direct() {
+	BIN_FILE=$1
+	ADDR=$2
+	if [ -r $BIN_FILE ] ; then
+		printf "Including $BIN_FILE..."
+		cat $BIN_FILE | patch $ADDR || die " patching failed"
+		echo " success!"
+	else
+		die " file not found, did you run make?"
+	fi
+}
+
+# BIN_FILE - file
+# ADDR - address in the patched binary to point to
+# PTR_ADDR - address of the +1 pointer in the binary
+# PTR_TARGET is +1 relative to ADDR, and byte order is reversed(little-endian)
+patch_pointer() {
+	BIN_FILE=$1
+	ADDR=$2
+	PTR_ADDR=$3
+	PTR_TARGET=$4
+	if [ -r $BIN_FILE ]; then
+		printf "Including $BIN_FILE..."
+		cat $BIN_FILE | patch $ADDR || die " patching failed"
+		printf "$PTR_TARGET" | patch $PTR_ADDR || die " pointer fixup failed"
+		echo " success!"
+	fi
+}
+
+
+
+motor_nagscreen () {
+    # we could change the function logic,
+    # but bumping the threshold to int32_max
+    # is simple, portable, and good enough (~68 years)
+
+    local offset
+
+    if offset=$(find_bytes C000B304) ; then
+        echo "Patching \"Motor life exceeded\" nag screen"
+        printf '\x7F\xFF\xFF\xFF' | patch $offset
+    else
+        echo "${FUNCNAME[0]}: runtime threshold not found!"
+    fi
+}
+
+
+patch_tamper
+
+motor_nagscreen
+
+
+sha256sum $OUT
