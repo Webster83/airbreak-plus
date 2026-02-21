@@ -63,8 +63,9 @@ check_hash() {
     else
         die "$IN: Unidentified binary. Confirm its version is 0401 and that its binary has the same section layout"
     fi
-
 }
+
+
 
 find_bytes() {
     # return values:
