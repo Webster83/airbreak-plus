@@ -219,8 +219,8 @@ def resolve_groups(group_names):
         elif upper in VAR_TO_GROUP:
             var_names.append(upper)
         else:
-            print(f"[!] Unknown group or variable: {name}")
-            return None
+            # Treat as raw variable name -- let the device decide
+            var_names.append(upper)
     return var_names
 
 def exclude_vars(var_names, exclude_groups=None, exclude_vars_list=None):
@@ -254,7 +254,7 @@ def cmd_get(ser, targets):
         return 1
     for name in var_names:
         val = get_var(ser, name)
-        grp = VAR_TO_GROUP.get(name, '???')
+        grp = VAR_TO_GROUP.get(name, '-')
         if val is not None:
             print(f"  [{grp}] {name:4s} = {val}")
         else:
@@ -264,10 +264,7 @@ def cmd_get(ser, targets):
 def cmd_set(ser, var_name, value):
     """Set a single variable."""
     name = var_name.upper()
-    if name not in VAR_TO_GROUP:
-        print(f"[!] Unknown variable: {name}")
-        return 1
-    grp = VAR_TO_GROUP[name]
+    grp = VAR_TO_GROUP.get(name, '-')
     old_val = get_var(ser, name)
     print(f"  [{grp}] {name} = {old_val} -> {value}")
     if set_var(ser, name, value):
