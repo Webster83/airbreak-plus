@@ -254,22 +254,44 @@ patch_code() {
 
 unlock_ui_limits() {
 	BUILD_FLAGS=$(( BUILD_FLAGS | (1 << 1) ))
-	# patch UI limits to range between 1 and 30
+	# patch UI pressure limits to range between 1 and 30
+
+    # var=0x0024 default=8.0 [4.0..20.0 step=0.2] [cmH2O] "Set Pressure"
 	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x4fa8 || die failed
+    # var=0x0025 default=20.0 [4.0..20.0 step=0.2] [cmH2O] "Max Pressure"
 	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x4fc4 || die failed
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x52d4 || die failed # unidentified. was 4..25
+    # var=0x0026 default=10.0 [4.0..30.0 step=0.2] [cmH2O] "IPAP"
+    printf '\xdc\x05\x00\x00\x32\x00' | patch 0x4fe0 || die failed
+    # var=0x01D2 default=4.0 [4.0..20.0 step=0.2] [cmH2O] "Start Pressure"
 	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7eb0 || die failed
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7ee8 || die failed
+    # var=0x01D3 default=4.0 [4.0..20.0 step=0.2] [cmH2O] "Min Pressure"
 	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7ecc || die failed
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f04 || die failed # unidentified. was 4..25
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f20 || die failed # vauto
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f58 || die failed # unidentified. was 4..25
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f74 || die failed # s/t/st epap
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x8038 || die failed # asv
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x808c || die failed # unid. was 4..15
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x80a8 || die failed # asvauto max epap
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x80c4 || die failed # asvauto min epap
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x8118 || die failed # unid. was 4..15
+    # var=0x01D4 default=4.0 [4.0..20.0 step=0.2] [cmH2O] "Start Pressure"
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7ee8 || die failed
+    # var=0x01D5 default=4.0 [4.0..25.0 step=0.2] [cmH2O] "Min EPAP"
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f04 || die failed
+    # var=0x01D6 default=25.0 [4.0..25.0 step=0.2] [cmH2O] "Max IPAP"
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f20 || die failed
+    # var=0x01D8 default=4.0 [4.0..25.0 step=0.2] [cmH2O] "Start EPAP"
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f58 || die failed
+    # var=0x01D9 default=4.0 [2.0..25.0 step=0.2] [cmH2O] "EPAP"
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f74 || die failed
+    # var=0x01DA default=4.0 [2.0..25.0 step 0.2] [cmH2O] "Start EPAP"
+    printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7F90 || die failed
+    # var=0x01E0 default=5.0 [4.0..15.0 step=0.2] [cmH2O] "EPAP"
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x8038 || die failed
+    # var=0x01E3 default=4.0 [4.0..15.0 step=0.2] [cmH2O] "Start EPAP"
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x808c || die failed
+    # var=0x01E4 default=15.0 [4.0..15.0 step=0.2] [cmH2O] "Max EPAP"
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x80a8 || die failed
+    # var=0x01E5 default=4.0 [4.0..15.0 step=0.2] [cmH2O] "Min EPAP"
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x80c4 || die failed
+    # var=0x01E8 default=4.0 [4.0..15.0 step=0.2] [cmH2O] "Start EPAP"
+	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x8118 || die failed
+    # var=0x01E9 default=4.0 [2.0..25.0 step 0.2] [cmH2O] "EPAP"
+    printf '\xdc\x05\x00\x00\x32\x00' | patch 0x8134 || die failed
+    # var=0x01EE default=4.0 [2.0..25.0 step 0.2] [cmH2O] "Start EPAP"
+    printf '\xdc\x05\x00\x00\x32\x00' | patch 0x81c0 || die failed
 }
 
 asv_unlock_ps_range () {

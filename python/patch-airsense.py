@@ -286,21 +286,42 @@ class ASFirmwarePatches(object):
     def unlock_ui_limits(self):
         
         if self.asf.hash == self.known_units[0].hash:
+            # var=0x0024 default=8.0 [4.0..20.0 step=0.2] [cmH2O] "Set Pressure"
             self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x4fa8, clobber=True)
+            # var=0x0025 default=20.0 [4.0..20.0 step=0.2] [cmH2O] "Max Pressure"
             self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x4fc4, clobber=True)
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x52d4, clobber=True)  # unidentified. was 4..25
+            # var=0x0026 default=10.0 [4.0..30.0 step=0.2] [cmH2O] "IPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x4fe0, clobber=True)
+            # var=0x01D2 default=4.0 [4.0..20.0 step=0.2] [cmH2O] "Start Pressure"
             self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7eb0, clobber=True)
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7ee8, clobber=True)
+            # var=0x01D3 default=4.0 [4.0..20.0 step=0.2] [cmH2O] "Min Pressure"
             self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7ecc, clobber=True)
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7f04, clobber=True)  # unidentified. was 4..25
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7f20, clobber=True)  # vauto
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7f58, clobber=True)  # unidentified. was 4..25
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7f74, clobber=True)  # s/t/st epap
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x8038, clobber=True)  # asv
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x808c, clobber=True)  # unid. was 4..15
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x80a8, clobber=True)  # asvauto max epap
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x80c4, clobber=True)  # asvauto min epap
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x8118, clobber=True)  # unid. was 4..15
+            # var=0x01D4 default=4.0 [4.0..20.0 step=0.2] [cmH2O] "Start Pressure"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7ee8, clobber=True)
+            # var=0x01D5 default=4.0 [4.0..25.0 step=0.2] [cmH2O] "Min EPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7f04, clobber=True)
+            # var=0x01D6 default=25.0 [4.0..25.0 step=0.2] [cmH2O] "Max IPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7f20, clobber=True)
+            # var=0x01D8 default=4.0 [4.0..25.0 step=0.2] [cmH2O] "Start EPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7f58, clobber=True)
+            # var=0x01D9 default=4.0 [2.0..25.0 step=0.2] [cmH2O] "EPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7f74, clobber=True)
+            # var=0x01DA default=4.0 [2.0..25.0 step 0.2] [cmH2O] "Start EPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7F90, clobber=True)
+            # var=0x01E0 default=5.0 [4.0..15.0 step=0.2] [cmH2O] "EPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x8038, clobber=True)
+            # var=0x01E3 default=4.0 [4.0..15.0 step=0.2] [cmH2O] "Start EPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x808c, clobber=True)
+            # var=0x01E4 default=15.0 [4.0..15.0 step=0.2] [cmH2O] "Max EPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x80a8, clobber=True)
+            # var=0x01E5 default=4.0 [4.0..15.0 step=0.2] [cmH2O] "Min EPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x80c4, clobber=True)
+            # var=0x01E8 default=4.0 [4.0..15.0 step=0.2] [cmH2O] "Start EPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x8118, clobber=True)
+            # var=0x01E9 default=4.0 [2.0..25.0 step 0.2] [cmH2O] "EPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x8134, clobber=True)
+            # var=0x01EE default=4.0 [2.0..25.0 step 0.2] [cmH2O] "Start EPAP"
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x81c0, clobber=True)
         else:
             raise IOError("Unknown hash: %s"%self.asf.hash)
 
