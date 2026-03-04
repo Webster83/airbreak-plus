@@ -5,23 +5,26 @@ die() { echo >&2 "$*" ; exit 1 ; }
 IN=$1
 OUT=$2
 
+GLOBALS_ADDR=0x4108
+FLASH_BASE=0x08000000
+
 DEBUG_PATCH=""
 
 if [ -z "$IN" -o -z "$OUT" ]; then
-	die "Usage: $0: stm32.bin stm32-unlocked.bin"
+    die "Usage: $0: stm32.bin stm32-unlocked.bin"
 fi
 
 
 if [ ! -r "$IN" ]; then
-	die "$IN: can not open input file"
+    die "$IN: can not open input file"
 fi
 
 patch() {
-	offset=`printf "%d" $1`
-	if [ $DEBUG_PATCH ] ; then
-		printf "patching %08x\n" $1
-	fi
-	dd bs=1 seek=$offset conv=notrunc of="$OUT" status=none
+    offset=`printf "%d" $1`
+    if [ $DEBUG_PATCH ] ; then
+        printf "patching %08x\n" $1
+    fi
+    dd bs=1 seek=$offset conv=notrunc of="$OUT" status=none
 }
 
 check_patch ()
@@ -39,31 +42,6 @@ check_patch ()
     fi
 }
 
-
-check_hash() {
-    HASH=$(sha256sum $IN | awk '{print $1}')
-    if [[ $HASH == "6790b548e0b37c57bc118772d4a04a599c0b74b16cd92e821071b9c7ba5ab711" ]] ; then
-        echo "$IN: AirCurve 10 VAuto 37051-SX567-0401 binary identified"
-    elif [[ $HASH == "9953f60b8bd8482614b946b5850976759ef834262315f9d40cc063ce8ef10070" ]] ; then
-        echo "$IN: AirCurve 10 CS PaceWave 37113-SX567-0401 binary identified"
-    elif [[ $HASH == "7071d0ea64ef4b51466abfeb075015f4606e803140a08423e0134a5db372db36" ]] ; then
-        echo "$IN: AirCurve 10 VAuto 37164-SX567-0401 binary identified"
-    elif [[ $HASH == "533b91127aa22e05b933db203ad56c449dc12a8c3fd62f57bd88c472a8061775" ]] ; then
-        echo "$IN: AirSense 10 AutoSet 37028-SX567-0401 binary identified"
-    elif [[ $HASH == "aa79d2e4f9114f8f9162b52a321eb4cf4d123db9ad55d4c2e08b5716fcaea25f" ]] ; then
-        echo "$IN: AirSense 10 AutoSet 37090-SX567-0401 binary identified"
-    elif [[ $HASH == "9e312f87d1a169195bb5ff6cf026e820837c39e578ca13340e1d29bf7d63dbd0" ]] ; then
-        echo "$IN: AirSense 10 AutoSet 37101-SX567-0401 binary identified"
-    elif [[ $HASH == "7ad0812dbe3a4cc79dc85df9781e64fdb9b2da75be957c1515188abac65d30ad" ]] ; then
-        echo "$IN: AirSense 10 Elite 37117-SX567-0401 binary identified"
-    elif [[ $HASH == "860563488a1475b6aa4829ff4a370225bb8c56d89c913a2413d61fecb637ab12" ]] ; then
-        echo "$IN: AirSense 10 Elite 37123-SX567-0401 binary identified"
-    elif [[ $HASH == "5bd9b8b44b094c150c7ef996236fa4fe38421a08ce6b09811bb6ecb8955fc85a" ]] ; then
-        echo "$IN: AirSense 10 AutoSet For Her 37105-SX567-0401 binary identified"
-    else
-        die "$IN: Unidentified binary. Confirm its version is 0401 and that its binary has the same section layout"
-    fi
-}
 
 crc16_region() {
     # args: offset length
@@ -130,6 +108,57 @@ find_bytes() {
     ' "$OUT" "$hex"
 }
 
+# read a little-endian u32 from file offset in $OUT
+read_u32() {
+    local offset=$(printf "%d" "$1")
+    dd if="$OUT" iflag=skip_bytes,count_bytes bs=4096 skip="$offset" count=4 status=none | \
+        perl -e 'read(STDIN, my $b, 4) == 4 or exit 1;
+            printf "%d\n", unpack("V", $b)'
+}
+
+declare -A _globals_cache
+
+# return the absolute pointer stored in globals[$1]
+globals_ptr() {
+    local idx=$1
+    local off=$(( GLOBALS_ADDR + idx * 4 ))
+    read_u32 $off
+}
+
+# return the file offset for the data that pointer points to
+globals_offset() {
+    if [[ -z "${_globals_cache[$1]+x}" ]]; then
+        local ptr
+        ptr=$(globals_ptr "$1") || return 1
+        _globals_cache[$1]=$(( ptr - FLASH_BASE ))
+    fi
+    echo "${_globals_cache[$1]}"
+}
+
+# return file offset of descriptor record for var_id
+# args: globals_idx stride id_base var_id
+find_var_record() {
+    local base_off
+    base_off=$(globals_offset "$1") || return 1
+    echo $(( base_off + ($(printf "%d" "$4") - $3) * $2 ))
+}
+
+find_g3_var() { find_var_record 3  10   0x00  "$1"; }
+find_g4_var() { find_var_record 4  0x1C 0x1E  "$1"; }
+find_g6_var() { find_var_record 6  0x18 0x1FD "$1"; }
+find_g8_var() { find_var_record 8  0x14 0x20D "$1"; }
+
+# dispatch var_id to correct table lookup
+find_var() {
+    local vid=$(printf "%d" "$1")
+    if   (( vid < 0x1E  ));                        then find_g3_var "$1"
+    elif (( vid >= 0x1E  && vid < 0x1E + 0x1DF )); then find_g4_var "$1"
+    elif (( vid >= 0x1FD && vid < 0x1FD + 0x10 )); then find_g6_var "$1"
+    elif (( vid >= 0x20D && vid < 0x20D + 0xA5 )); then find_g8_var "$1"
+    else die "find_var: var_id $1 not in g3/g4/g6/g8"
+    fi
+}
+
 
 cp "$IN" "$OUT" || die "$OUT: copy failed"
 
@@ -167,24 +196,17 @@ patch_tamper() {
     esac
 }
 
-patch_strings() {
-	# and add a message so that we know this is a modified firmware
-	printf 'HACKED!' | patch 0x17500 || die failed
-	printf 'My Options OwO\x00' | patch 0x17588 # Overwrites the French string, which will be broken. No biggie :P
-}
-
-BUILD_FLAGS=0
 
 patch_direct() {
-	BIN_FILE=$1
-	ADDR=$2
-	if [ -r $BIN_FILE ] ; then
-		printf "Including $BIN_FILE..."
-		cat $BIN_FILE | patch $ADDR || die " patching failed"
-		echo " success!"
-	else
-		die " file not found, did you run make?"
-	fi
+    BIN_FILE=$1
+    ADDR=$2
+    if [ -r $BIN_FILE ] ; then
+        printf "Including $BIN_FILE..."
+        cat $BIN_FILE | patch $ADDR || die " patching failed"
+        echo " success!"
+    else
+        die " file not found, did you run make?"
+    fi
 }
 
 # BIN_FILE - file
@@ -192,111 +214,100 @@ patch_direct() {
 # PTR_ADDR - address of the +1 pointer in the binary
 # PTR_TARGET is +1 relative to ADDR, and byte order is reversed(little-endian)
 patch_pointer() {
-	BIN_FILE=$1
-	ADDR=$2
-	PTR_ADDR=$3
-	PTR_TARGET=$4
-	if [ -r $BIN_FILE ]; then
-		printf "Including $BIN_FILE..."
-		cat $BIN_FILE | patch $ADDR || die " patching failed"
-		printf "$PTR_TARGET" | patch $PTR_ADDR || die " pointer fixup failed"
-		echo " success!"
-	fi
+    BIN_FILE=$1
+    ADDR=$2
+    PTR_ADDR=$3
+    PTR_TARGET=$4
+    if [ -r $BIN_FILE ]; then
+        printf "Including $BIN_FILE..."
+        cat $BIN_FILE | patch $ADDR || die " patching failed"
+        printf "$PTR_TARGET" | patch $PTR_ADDR || die " pointer fixup failed"
+        echo " success!"
+    fi
 }
 
 patch_code_common() {
-	echo "Patching common_code.c"
-	patch_direct build/common_code.bin 0xfe000
+    echo "Patching common_code.c"
+    patch_direct build/common_code.bin 0xfe000
 }
 
 patch_code_graph() {
-	echo "Patching graphing code"
-	patch_pointer build/graph.bin 0xfcd40 0xf9c88 '\x41\xcd\x0f\x08'
+    echo "Patching graphing code"
+    patch_pointer build/graph.bin 0xfcd40 0xf9c88 '\x41\xcd\x0f\x08'
 }
 
 # Replaces not_called_during_loop
 patch_code_squarewave() {
-	echo "Patching Squarewave"
-	patch_pointer build/squarewave.bin 0xfd200 0xf9778 '\x01\xd2\x0f\x08'
+    echo "Patching Squarewave"
+    patch_pointer build/squarewave.bin 0xfd200 0xf9778 '\x01\xd2\x0f\x08'
 }
 
 # patch_code_squarewave_pav() {
-# 	patch_pointer build/squarewave_pav.bin 0xfd000 0xf9778 '\x01\xd0\x0f\x08'
+#     patch_pointer build/squarewave_pav.bin 0xfd000 0xf9778 '\x01\xd0\x0f\x08'
 # }
 
 patch_code_asv_task_wraper() {
-	echo "Patching ASV task wrapper"
-	patch_pointer build/asv_task_wrapper.bin 0xfdf00 0xf44e0 '\x01\xdf\x0f\x08'
+    echo "Patching ASV task wrapper"
+    patch_pointer build/asv_task_wrapper.bin 0xfdf00 0xf44e0 '\x01\xdf\x0f\x08'
 }
 
 patch_wrapper_limit_max_pdiff() {
-	echo "Patching wrapper for pressure_limit_max_diff"
-	patch_pointer build/wrapper_limit_max_pdiff.bin 0xff000 0xf93d0 '\x01\xf0\x0f\x08'
+    echo "Patching wrapper for pressure_limit_max_diff"
+    patch_pointer build/wrapper_limit_max_pdiff.bin 0xff000 0xf93d0 '\x01\xf0\x0f\x08'
 }
 
 patch_code() {
-	if [[ $PATCH_CODE == 1 ]] ; then
-		BUILD_FLAGS=$(( BUILD_FLAGS | (1 << 0) ))
-		echo "Patching code"
-		patch_code_common
-		patch_code_graph
-		if [[ $PATCH_S == 1 ]] ; then
-			patch_code_squarewave
-		fi
-		if [[ $PATCH_ASV_TASK_WRAPPER == 1 ]] ; then
-			patch_code_asv_task_wraper
-		fi
-		if [[ $PATCH_VAUTO_WRAPPER == 1 ]] ; then
-			patch_wrapper_limit_max_pdiff
-		fi
-	fi
+    if [[ $PATCH_CODE == 1 ]] ; then
+        echo "Patching code"
+        patch_code_common
+        patch_code_graph
+        if [[ $PATCH_S == 1 ]] ; then
+            patch_code_squarewave
+        fi
+        if [[ $PATCH_ASV_TASK_WRAPPER == 1 ]] ; then
+            patch_code_asv_task_wraper
+        fi
+        if [[ $PATCH_VAUTO_WRAPPER == 1 ]] ; then
+            patch_wrapper_limit_max_pdiff
+        fi
+    fi
 }
 
 unlock_ui_limits() {
-	BUILD_FLAGS=$(( BUILD_FLAGS | (1 << 1) ))
-	# patch UI pressure limits to range between 1 and 30
+    # patch UI pressure limits to range between 1 and 30
+    # Entry4 record layout: +0x0C = max (u32), +0x10 = min (u32)
 
-    # var=0x0024 default=8.0 [4.0..20.0 step=0.2] [cmH2O] "Set Pressure"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x4fa8 || die failed
-    # var=0x0025 default=20.0 [4.0..20.0 step=0.2] [cmH2O] "Max Pressure"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x4fc4 || die failed
-    # var=0x0026 default=10.0 [4.0..30.0 step=0.2] [cmH2O] "IPAP"
-    printf '\xdc\x05\x00\x00\x32\x00' | patch 0x4fe0 || die failed
-    # var=0x01D2 default=4.0 [4.0..20.0 step=0.2] [cmH2O] "Start Pressure"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7eb0 || die failed
-    # var=0x01D3 default=4.0 [4.0..20.0 step=0.2] [cmH2O] "Min Pressure"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7ecc || die failed
-    # var=0x01D4 default=4.0 [4.0..20.0 step=0.2] [cmH2O] "Start Pressure"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7ee8 || die failed
-    # var=0x01D5 default=4.0 [4.0..25.0 step=0.2] [cmH2O] "Min EPAP"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f04 || die failed
-    # var=0x01D6 default=25.0 [4.0..25.0 step=0.2] [cmH2O] "Max IPAP"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f20 || die failed
-    # var=0x01D8 default=4.0 [4.0..25.0 step=0.2] [cmH2O] "Start EPAP"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f58 || die failed
-    # var=0x01D9 default=4.0 [2.0..25.0 step=0.2] [cmH2O] "EPAP"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7f74 || die failed
-    # var=0x01DA default=4.0 [2.0..25.0 step 0.2] [cmH2O] "Start EPAP"
-    printf '\xdc\x05\x00\x00\x32\x00' | patch 0x7F90 || die failed
-    # var=0x01E0 default=5.0 [4.0..15.0 step=0.2] [cmH2O] "EPAP"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x8038 || die failed
-    # var=0x01E3 default=4.0 [4.0..15.0 step=0.2] [cmH2O] "Start EPAP"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x808c || die failed
-    # var=0x01E4 default=15.0 [4.0..15.0 step=0.2] [cmH2O] "Max EPAP"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x80a8 || die failed
-    # var=0x01E5 default=4.0 [4.0..15.0 step=0.2] [cmH2O] "Min EPAP"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x80c4 || die failed
-    # var=0x01E8 default=4.0 [4.0..15.0 step=0.2] [cmH2O] "Start EPAP"
-	printf '\xdc\x05\x00\x00\x32\x00' | patch 0x8118 || die failed
-    # var=0x01E9 default=4.0 [2.0..25.0 step 0.2] [cmH2O] "EPAP"
-    printf '\xdc\x05\x00\x00\x32\x00' | patch 0x8134 || die failed
-    # var=0x01EE default=4.0 [2.0..25.0 step 0.2] [cmH2O] "Start EPAP"
-    printf '\xdc\x05\x00\x00\x32\x00' | patch 0x81c0 || die failed
+    echo "Patching UI limits"
+
+    local G4_MAX=0x0C
+    local vars=(
+        0x0024 # Set Pressure (CPAP)
+        0x0025 # Max Pressure (AutoSet, APAP, AfH)
+        0x0026 # IPAP (S, ST, T, PAC)
+        0x01D2 # Start Pressure (CPAP)
+        0x01D3 # Min Pressure (AutoSet, APAP, AfH)
+        0x01D4 # Start Pressure (AutoSet, APAP, AfH)
+        0x01D5 # Min EPAP (VAuto)
+        0x01D6 # Max IPAP (VAuto)
+        0x01D8 # Start EPAP (VAuto)
+        0x01D9 # EPAP (S, ST)
+        0x01DA # Start EPAP (S, ST, PAC)
+        0x01E0 # EPAP (ASV)
+        0x01E3 # Start EPAP (ASV)
+        0x01E4 # Max EPAP (ASVAuto)
+        0x01E5 # Min EPAP (ASVAuto)
+        0x01E8 # Start EPAP (ASVAuto)
+        0x01E9 # EPAP (iVAPS)
+        0x01EE # Start EPAP (iVAPS)
+    )
+
+    for var in "${vars[@]}"; do
+        # max=0x000005DC (1500) min=0x00000032 (50) scale=1/50
+        printf '\xdc\x05\x00\x00\x32\x00\x00\x00' | patch $(( $(find_g4_var $var) + G4_MAX )) || die failed
+    done
 }
 
 asv_unlock_ps_range () {
-    BUILD_FLAGS=$(( BUILD_FLAGS | (1 << 7) ))
-
     # Disable the ASV and ASVAuto PS range check to allow Max PS < (Min PS + 5)
     #
     # Update PS validation logic without disabling other checks.
@@ -305,166 +316,139 @@ asv_unlock_ps_range () {
     printf '\x00' | patch 0x76cca
 
     # Update variable config to allow Max PS to be set below 5
-    printf '\x00' | patch 0x8074
-    printf '\x00' | patch 0x8100
+    local G4_MIN=0x10
+    printf '\x00' | patch $(( $(find_g4_var 0x01E2) + G4_MIN )) # Max PS (ASV)
+    printf '\x00' | patch $(( $(find_g4_var 0x01E7) + G4_MIN )) # Max PS (ASVAuto)
 }
 
 extra_debug() {
-	BUILD_FLAGS=$(( BUILD_FLAGS | (1 << 2) ))
-	# set config variable 0xc value to 4 == enable more debugging data on display
-	# Default in VAuto is \x0e, all enabled is \x0f
-	# 1000 - ti min, ti max, ti, I:E, spont cyc (doesn't fit graph)
-	# 0100 - leak MV, RR, tv (default in this script)
-	# 0010 - bar thingy
-	# 0001 - fancy but useless round display
-	printf '\x04' | patch 0x84a8 || die failed
+    # set config variable 0xc value to 4 == enable more debugging data on display
+    # Default in VAuto is \x0e, all enabled is \x0f
+    # 1000 - ti min, ti max, ti, I:E, spont cyc (doesn't fit graph)
+    # 0100 - leak MV, RR, tv (default in this script)
+    # 0010 - bar thingy
+    # 0001 - fancy but useless round display
+
+    local G6_DEFAULT=0x08
+    printf '\x0e' | patch $(( $(find_g6_var 0x0209) + G6_DEFAULT )) || die failed
 }
 
 extra_modes() {
-	BUILD_FLAGS=$(( BUILD_FLAGS | (1 << 3) ))
-	# ---> This is the real magic <---
-	# add more mode entries, set config 0x0 mask to all bits high
-	# AutoSet default is 0x3, which only enables mode 1 (CPAP) and 2 (AutoSet)
-	# Autoset = 03 00, For Her = 03 08
-	# 1. 1 = CPAP
-	# 2. 2 = AutoSet
-	# 3. 4 = ???
-	# 4. 8 = S
-	# 5. 16 = ???
-	# 6. 32 = ???
-	# 7, 64 = VAuto
-	# 8, 128 = ASV
-	# 9, 256 = ASVAuto
-	# 49 00 = 0x01001001 = CPAP, VAuto, S
-	# 81 01 = 0x10000001 = CPAP, ASV, ASVAuto
-	# 2048 = AutoSet for her?
-	printf '\xff\xff' | patch 0x8590 || die failed
+    # ---> This is the real magic <---
+    # add more mode entries, set config 0x0 mask to all bits high
+    # AutoSet default is 0x3, which only enables mode 1 (CPAP) and 2 (AutoSet)
+    # Autoset = 03 00, For Her = 03 08
+    # 1. 1 = CPAP
+    # 2. 2 = AutoSet
+    # 3. 4 = ???
+    # 4. 8 = S
+    # 5. 16 = ???
+    # 6. 32 = ???
+    # 7, 64 = VAuto
+    # 8, 128 = ASV
+    # 9, 256 = ASVAuto
+    # 49 00 = 0x01001001 = CPAP, VAuto, S
+    # 81 01 = 0x10000001 = CPAP, ASV, ASVAuto
+    # 2048 = AutoSet for her?
+
+    local G8_BITMASK=0x0C
+    printf '\xff\xff' | patch $(( $(find_g8_var 0x020D) + G8_BITMASK )) || die failed
 }
 
 # Try enabling extra menu items
 extra_menu() {
-	BUILD_FLAGS=$(( BUILD_FLAGS | (1 << 4) ))
-	printf '\x01\x20' | patch 0x66470
+    printf '\x01\x20' | patch 0x66470
 }
 
 # If you want all menu items to always be visible, let this section run
 all_menu() {
-	BUILD_FLAGS=$(( BUILD_FLAGS | (1 << 5) ))
-	# force status bit 5 always on -- always editable
-	printf '\x01\x20' | patch 0x6e502
-	# force status bit 4 always on -- this makes all the inputs show up, regardless of mode
-	printf '\x01\x20' | patch 0x6e4c4
+    # force status bit 5 always on -- always editable
+    printf '\x01\x20' | patch 0x6e502
+    # force status bit 4 always on -- this makes all the inputs show up, regardless of mode
+    printf '\x01\x20' | patch 0x6e4c4
 }
 
 gui_config () {
-	BUILD_FLAGS=$(( BUILD_FLAGS | (1 << 6) ))
-	# enable all of the editable options in the settings menu
-	# by turning on bit 1 of the config entries.  All of these variables
-	# are listed in the gui_create_menus function
-	GUI_CONFIG=0x4ef4
-	GUI_CONFIG_SIZE=0x1c
-	GUI_CONFIG_OFFSET=30
+    # enable all of the editable options in the settings menu
+    # by turning on bit 1 of the config entries.  All of these variables
+    # are listed in the gui_create_menus function
 
-	# vars taken from gui_create_menus->menu_floatvar_create
-	vars=(
-		0x2f 0x1ec 0x1ed 0x24 0x25 0x1d3 0x1d6 0x1d5 0x1d7 0x26
-		0x1d9 0x1e0 0x1e1 0x1e2 0x1e5 0x1e4 0x1e6 0x1e7 0x1e9 0x1ea 0x1eb
-		0x24 0x25 0x26 0x2f 0x70 0x1d2 0x1d4 0x1d8 0x1da 0x1dc 0x1dd 0x1de 0x1df 0x1e3 0x1e8 0x1ee
-	)
-	# alternatively those are all variables differing by visibility among firmware variants
-	#vars=(
-	#	0x25 0x26 0x29 0x2a 0x2b 0x2c 0x2d 0x41 0x56 0x57 0x58 0x70 0x7f
-	#	0x80 0x81 0x82 0x83 0x84 0x85 0x86 0x87 0x88 0x89 0x8a 0x8b 0xa8 0xaa 0xab 0xac
-	#	0xeb 0xec 0xee 0xef 0xf1 0xf2 0xf3 0xf5 0xfa
-	#	0x102 0x103 0x104 0x105 0x112 0x11c 0x121 0x122 0x12b 0x130 0x131 0x132 0x133 0x13c 0x13d 0x13e 0x13f
-	#	0x145 0x152 0x153 0x154 0x156 0x1d3 0x1d4 0x1d5 0x1d6 0x1d7 0x1d8 0x1d9 0x1da 0x1db 0x1dc 0x1dd
-	#	0x1e0 0x1e1 0x1e2 0x1e3 0x1e4 0x1e5 0x1e6 0x1e7 0x1e8
-	#)
+    local vars=(
+        # gui_create_menus->menu_floatvar_create
+        0x0024 0x0025 0x0026 0x002F
+        0x0070 0x01D2 0x01D3 0x01D4 0x01D5 0x01D6 0x01D7 0x01D8 0x01D9 0x01DA 0x01DC 0x01DD 0x01DE 0x01DF
+        0x01E0 0x01E1 0x01E2 0x01E3 0x01E4 0x01E5 0x01E6 0x01E7 0x01E8 0x01E9 0x01EA 0x01EB 0x01EC 0x01ED 0x01EE
+        
+        # gui_create_menus->menu_create_text_or_float
+        0x0217 0x021B 0x0221 0x0222 0x022B 0x0232 0x0233 0x0234 0x0245 0x0246
+        0x0218 0x0247 0x0270 0x0271
 
-	for var in "${vars[@]}"; do
-		# set config byte 0 bit 0, 1 and 2, which makes it active
-		ADDR=`perl -e "printf '%d', $GUI_CONFIG + ($var - $GUI_CONFIG_OFFSET) * $GUI_CONFIG_SIZE"`
-		printf '\x07\x00' | patch $ADDR
-	done
-}
+        # gui_create_menus->menu_create_item_type_0x29_maybe
+        0x0029 0x00EC 0x00F0 0x00F1 0x00F2 0x00F3 0x00F4 0x00F5 0x00F6 0x00FA 0x0156
 
-gui_submenus () {
-    STRUCT_SIZE=0x14
+        # gui_create_menus->gui_infobox_create
+        0x002A 0x0055 0x0082 0x0084 0x014B 0x01DC 0x01DD
+     )
 
-    # 0[67] 00 0B 00 73 01 0C  is first variable in all tested firmwares.
-    if offset=$(find_bytes 0B0073010C) ; then
-        let offset=$offset-2
-
-        # variable list built by comparing bit2 of byte0 of variable_types_table of all available 0401 firmwares
-        for var in 0x0A 0x0B 0x14 0x15 0x1E 0x25 0x26 0x27 0x37 0x38 0x39 0x3A 0x63 0x64 ; do
-            ADDR=$(( offset + var * 0x14 ))
-            printf '\x07\x00' | patch $ADDR
-        done
-    else
-        echo "${FUNCNAME[0]}: variable_types_table not found!"
-    fi
-}
-
-gui_config_all () {
-    BUILD_FLAGS=$(( BUILD_FLAGS | (1 << 7) ))
-    # Enable more settings and reported values by enabling bit 1 for all config variables
-    printf "patching 00004ef4 -> 0000833c (bit 0 for all 479 config variables)..."
-    for var in {0..478}
-    do
-        perl -p -0777 -i -e "substr(\$_, 0x4ef4 + ($var * 0x1c), 1) |= chr(1)" "$OUT"
+    local offsets=()
+    for var in "${vars[@]}"; do
+        offsets+=( $(find_var $var) )
     done
-    printf " done.\n"
+    local offset_str=$(IFS=,; echo "${offsets[*]}")
+    perl -0777 -pi -e '
+        for my $off (split /,/, "'"$offset_str"'") {
+            substr($_, $off, 1) |= chr(1);
+        }
+    ' "$OUT"
 }
 
-unlock_languages () {
-   # offsets valid for all versions >= 0305
-   printf "Unlocking all languages..."
-   # make variable read only to prevent overwriting with eeprom data
-   printf '\x06' | patch 0x8428
-   # set bits for languages 1-19 except reserved (5,7) and
-   # jp (13,19), cn (16,17) (enabling them breaks system font)
-   printf '\x5f\xdf\x04\x00' | patch 0x8430
+
+unlock_languages() {
+    printf "Unlocking all languages..."
+    local addr=$(find_g6_var 0x0204)
+    # make variable read only to prevent overwriting with eeprom data
+    printf '\x06' | patch $addr
+    # set bits for languages 1-19 except reserved (5,7) and
+    # jp (13,19), cn (16,17) (enabling them breaks system font)
+    printf '\x5f\xdf\x04\x00' | patch $(( addr + 0x08 ))
 }
 
 
 
 custom_palette() {
-	BUILD_FLAGS=$(( BUILD_FLAGS | (1 << 7) ))
+    # Selected item color
+    printf '\xCC\x33\x00\x00' | patch 0xf271c
 
-	# Selected item color
-	printf '\xCC\x33\x00\x00' | patch 0xf271c
+    # Whites
+    for addr in \
+        0xf26f8 0xf2714 0xf2720 0xf2738 0xf273c 0xf2740 0xf274c 0xf2768 0xf2774 0xf278c 0xf2790 0xf2794 \
+    ; do
+        printf '\xFF\xBB\x44\x00' | patch $addr 
+    done 
 
-	# Whites
-	for addr in \
-		0xf26f8 0xf2714 0xf2720 0xf2738 0xf273c 0xf2740 0xf274c 0xf2768 0xf2774 0xf278c 0xf2790 0xf2794 \
-	; do
-		printf '\xFF\xBB\x44\x00' | patch $addr 
-	done 
+    # Bright grays (highlights mostly)
+    for addr in    0xf26fc 0xf2704 0xf2750 0xf2758 0xf276c ; do
+        printf '\x96\x48\x48\x00' | patch $addr 
+    done
 
-	# Bright grays (highlights mostly)
-	for addr in	0xf26fc 0xf2704 0xf2750 0xf2758 0xf276c ; do
-		printf '\x96\x48\x48\x00' | patch $addr 
-	done
+    # Mid grays (buttons)
+    for addr in 0xf2700 0xf2754 ; do
+        printf '\x64\x32\x32\x00' | patch $addr 
+    done
 
-	# Mid grays (buttons)
-	for addr in 0xf2700 0xf2754 ; do
-		printf '\x64\x32\x32\x00' | patch $addr 
-	done
+    # Low grays (disabled, backgrounds)
+    for addr in 0xf2708 0xf270c 0xf2728 0xf2744 0xf275c 0xf2760 0xf277c 0xf2798 ; do
+        printf '\x40\x20\x20\x00' | patch $addr 
+    done
 
-	# Low grays (disabled, backgrounds)
-	for addr in 0xf2708 0xf270c 0xf2728 0xf2744 0xf275c 0xf2760 0xf277c 0xf2798 ; do
-		printf '\x40\x20\x20\x00' | patch $addr 
-	done
-
-	# Blacks
-	for addr in 0xf2710 0xf272c 0xf2748 0xf2764 0xf2780 0xf279c ; do
-		printf '\x08\x00\x08\x00' | patch $addr 
-	done
+    # Blacks
+    for addr in 0xf2710 0xf272c 0xf2748 0xf2764 0xf2780 0xf279c ; do
+        printf '\x08\x00\x08\x00' | patch $addr 
+    done
 }
 
 asv_disable_backup_rate () {
-		echo "Patching ASV backup rate"
-    BUILD_FLAGS=$(( BUILD_FLAGS | (1 << 7) ))
+    echo "Patching ASV backup rate"
 
     # Add ASV task wrapper function to empty high flash space.
     # This function suppresses the backup rate by overriding the breath percentage as needed, and then calls the normal ASV task.
@@ -478,16 +462,21 @@ asv_disable_backup_rate () {
 }
 
 motor_nagscreen () {
-    # TODO we're out of bits in BUILD_FLAGS. maybe extend it to two bytes (and find better flash location)
 
-    local patch_addr=0x0f23e0
-    if ! printf '\x05\xdb' | check_patch $patch_addr ; then
-        echo "${FUNCNAME[0]}: unexpected bytes at patch location!"
-        return 1
+    local offset=0x0f23e0
+    if ! printf '\x05\xdb' | check_patch $offset ; then
+        echo "${FUNCNAME[0]}: unexpected bytes at patch location! Trying treshold patch..."
+        if offset=$(find_bytes C000B304) ; then
+            echo "Patching \"Motor life exceeded\" threshold"
+            printf '\xFF\xFF\xFF\x7F' | patch $offset
+        else
+            echo "${FUNCNAME[0]}: runtime threshold not found!"
+            return 1
+        fi
     fi
 
     echo "Patching \"Motor life exceeded\" nag screen"
-    printf '\x05\xe0' | patch $patch_addr
+    printf '\x05\xe0' | patch $offset
 }
 
 patch_crc() {
@@ -520,37 +509,28 @@ patch_crc() {
     done
 }
 
-check_hash
 
 patch_tamper
-patch_strings
 
 if [[ $PATCH_BACKUP_RATE == 1 ]] ; then
-	asv_disable_backup_rate
+    asv_disable_backup_rate
 fi
 patch_code # Handled based on environmental variables, no need to comment out
 
-# gui_config_all
-unlock_ui_limits # 2
-extra_debug # 4
-extra_modes # 8
-extra_menu # 16
-# all_menu # 32
-gui_config # 64
-gui_submenus
+unlock_ui_limits
+extra_debug
+extra_modes
+extra_menu
+# all_menu
+gui_config
 motor_nagscreen
 unlock_languages
 
 asv_unlock_ps_range
 
-custom_palette #128
+custom_palette
 
-# echo "Built with FLAGS=$BUILD_FLAGS"
-#FLAGSTR=$(printf 'FLAGS=0x%02x' $BUILD_FLAGS)
-#printf $FLAGSTR | patch 0x17588
 
-#COMMIT_HASH=$(git log -n1 --format=format:"%H" | head -c 7)
-#printf 'GIT=%s\x00' $COMMIT_HASH | patch 0x17764
 
 patch_crc # ALWAYS keep it as last patch applied
 

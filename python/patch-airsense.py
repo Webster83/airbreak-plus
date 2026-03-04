@@ -24,12 +24,38 @@ class ASFirmware(object):
 
     reserve_marker = 0xBA
 
+    GLOBALS_ADDR = 0x4108
+    FLASH_BASE = 0x08000000
+
+    TABLES = {
+        3:  dict(stride=10,   id_base=0x00),
+        4:  dict(stride=0x1C, id_base=0x1E),
+        6:  dict(stride=0x18, id_base=0x1FD),
+        8:  dict(stride=0x14, id_base=0x20D),
+    }
+
     def __init__(self, file):
         self.fw = file.read()
         self.fw = list(self.fw)
         self.crcfunc = crc_func = crcmod.predefined.mkCrcFun('crc-ccitt-false')
         
         self.validate()
+
+    def globals_offset(self, idx):
+        """Return file offset for data that globals[idx] points to"""
+        off = self.GLOBALS_ADDR + idx * 4
+        ptr = struct.unpack_from('<I', bytes(self.fw[off:off+4]))[0]
+        return ptr - self.FLASH_BASE
+
+    def find_var(self, var_id):
+        """Return file offset of descriptor record for var_id"""
+        if   var_id < 0x1E:                          gidx = 3
+        elif var_id >= 0x1E  and var_id < 0x1E + 0x1DF: gidx = 4
+        elif var_id >= 0x1FD and var_id < 0x1FD + 0x10:  gidx = 6
+        elif var_id >= 0x20D and var_id < 0x20D + 0xA5:  gidx = 8
+        else: raise ValueError("find_var: var_id 0x%04X not in known tables" % var_id)
+        tbl = self.TABLES[gidx]
+        return self.globals_offset(gidx) + (var_id - tbl['id_base']) * tbl['stride']
         
     def validate(self):
         """Validate the input file looks OK and populate information"""
@@ -225,7 +251,7 @@ class ASFirmware(object):
         f.close()
         
         #Find 'start' symbol we assume each file uses
-        addr_offset = re.search(b'\.text:[0-F]{8} start', lst, re.IGNORECASE).group(0)
+        addr_offset = re.search(rb'\.text:[0-F]{8} start', lst, re.IGNORECASE).group(0)
         
         #addr should look like this now - .text:00000000 start        
         addr_offset = addr_offset.split(b':')[1].split(b' ')[0]
@@ -233,27 +259,8 @@ class ASFirmware(object):
         
         return addr_offset, bin
 
-class ASUnits(object):
-    def __init__(self, name, catalog_no, sw_ver, hash):
-        self.name = name
-        self.catalog_no = catalog_no
-        self.sw_ver = sw_ver
-        self.hash = hash
-
 class ASFirmwarePatches(object):
     """This class contains the actual patching scripts for specific items"""
-
-    known_units = [
-        ASUnits("AirCurve 10 VAuto", "37051", "SX567-0401", "6790b548e0b37c57bc118772d4a04a599c0b74b16cd92e821071b9c7ba5ab711"),
-        ASUnits("AirCurve 10 CS PaceWave", "37113", "SX567-0401", "9953f60b8bd8482614b946b5850976759ef834262315f9d40cc063ce8ef10070"),
-        ASUnits("AirCurve 10 VAuto", "37164", "SX567-0401", "7071d0ea64ef4b51466abfeb075015f4606e803140a08423e0134a5db372db36"),
-        ASUnits("AirSense 10 AutoSet", "37028", "SX567-0401", "533b91127aa22e05b933db203ad56c449dc12a8c3fd62f57bd88c472a8061775"),
-        ASUnits("AirSense 10 AutoSet", "37090", "SX567-0401", "aa79d2e4f9114f8f9162b52a321eb4cf4d123db9ad55d4c2e08b5716fcaea25f"),
-        ASUnits("AirSense 10 AutoSet", "37101", "SX567-0401", "9e312f87d1a169195bb5ff6cf026e820837c39e578ca13340e1d29bf7d63dbd0"),
-        ASUnits("AirSense 10 Elite", "37117", "SX567-0401", "7ad0812dbe3a4cc79dc85df9781e64fdb9b2da75be957c1515188abac65d30ad"),
-        ASUnits("AirSense 10 Elite", "37123", "SX567-0401", "860563488a1475b6aa4829ff4a370225bb8c56d89c913a2413d61fecb637ab12"),
-        ASUnits("AirSense 10 AutoSet For Her", "37105", "SX567-0401", "5bd9b8b44b094c150c7ef996236fa4fe38421a08ce6b09811bb6ecb8955fc85a"),
-    ]
         
     def __init__(self, asf):
         self.asf = asf
@@ -275,55 +282,36 @@ class ASFirmwarePatches(object):
         else:
             raise IOError("Unknown bootloader version: '%s' (hash: %s)" % (loader, self.asf.hash))
             
-    def change_text(self):
-        if self.asf.hash == self.known_units[0].hash:
-            asf.patch(b'HACKED!', 0x17500, clobber=True)
-            asf.patch(b'NOT FOR USE\x00', 0x1A540, clobber=True)
-            asf.patch(b'WARNING! WARNING! Ventilator test firmware: Not for humans!\x00', 0x1B860, clobber=True)
-        else:
-            raise IOError("Unknown hash: %s"%self.asf.hash)
-
     def unlock_ui_limits(self):
-        
-        if self.asf.hash == self.known_units[0].hash:
-            # var=0x0024 default=8.0 [4.0..20.0 step=0.2] [cmH2O] "Set Pressure"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x4fa8, clobber=True)
-            # var=0x0025 default=20.0 [4.0..20.0 step=0.2] [cmH2O] "Max Pressure"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x4fc4, clobber=True)
-            # var=0x0026 default=10.0 [4.0..30.0 step=0.2] [cmH2O] "IPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x4fe0, clobber=True)
-            # var=0x01D2 default=4.0 [4.0..20.0 step=0.2] [cmH2O] "Start Pressure"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7eb0, clobber=True)
-            # var=0x01D3 default=4.0 [4.0..20.0 step=0.2] [cmH2O] "Min Pressure"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7ecc, clobber=True)
-            # var=0x01D4 default=4.0 [4.0..20.0 step=0.2] [cmH2O] "Start Pressure"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7ee8, clobber=True)
-            # var=0x01D5 default=4.0 [4.0..25.0 step=0.2] [cmH2O] "Min EPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7f04, clobber=True)
-            # var=0x01D6 default=25.0 [4.0..25.0 step=0.2] [cmH2O] "Max IPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7f20, clobber=True)
-            # var=0x01D8 default=4.0 [4.0..25.0 step=0.2] [cmH2O] "Start EPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7f58, clobber=True)
-            # var=0x01D9 default=4.0 [2.0..25.0 step=0.2] [cmH2O] "EPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7f74, clobber=True)
-            # var=0x01DA default=4.0 [2.0..25.0 step 0.2] [cmH2O] "Start EPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x7F90, clobber=True)
-            # var=0x01E0 default=5.0 [4.0..15.0 step=0.2] [cmH2O] "EPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x8038, clobber=True)
-            # var=0x01E3 default=4.0 [4.0..15.0 step=0.2] [cmH2O] "Start EPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x808c, clobber=True)
-            # var=0x01E4 default=15.0 [4.0..15.0 step=0.2] [cmH2O] "Max EPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x80a8, clobber=True)
-            # var=0x01E5 default=4.0 [4.0..15.0 step=0.2] [cmH2O] "Min EPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x80c4, clobber=True)
-            # var=0x01E8 default=4.0 [4.0..15.0 step=0.2] [cmH2O] "Start EPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x8118, clobber=True)
-            # var=0x01E9 default=4.0 [2.0..25.0 step 0.2] [cmH2O] "EPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x8134, clobber=True)
-            # var=0x01EE default=4.0 [2.0..25.0 step 0.2] [cmH2O] "Start EPAP"
-            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00', 0x81c0, clobber=True)
-        else:
-            raise IOError("Unknown hash: %s"%self.asf.hash)
+        # patch min/max pressure limits to allow full range
+        # Entry4 record layout: +0x0C = max (u32), +0x10 = min (u32)
+        G4_MAX = 0x0C
+
+        vars = [
+            0x0024, # Set Pressure (CPAP)
+            0x0025, # Max Pressure (AutoSet, APAP, AfH)
+            0x0026, # IPAP (S, ST, T, PAC)
+            0x01D2, # Start Pressure (CPAP)
+            0x01D3, # Min Pressure (AutoSet, APAP, AfH)
+            0x01D4, # Start Pressure (AutoSet, APAP, AfH)
+            0x01D5, # Min EPAP (VAuto)
+            0x01D6, # Max IPAP (VAuto)
+            0x01D8, # Start EPAP (VAuto)
+            0x01D9, # EPAP (S, ST)
+            0x01DA, # Start EPAP (S, ST, PAC)
+            0x01E0, # EPAP (ASV)
+            0x01E3, # Start EPAP (ASV)
+            0x01E4, # Max EPAP (ASVAuto)
+            0x01E5, # Min EPAP (ASVAuto)
+            0x01E8, # Start EPAP (ASVAuto)
+            0x01E9, # EPAP (iVAPS)
+            0x01EE, # Start EPAP (iVAPS)
+        ]
+
+        for var in vars:
+            addr = self.asf.find_var(var) + G4_MAX
+            # max=0x000005DC (1500) min=0x00000032 (50) scale=1/50
+            self.asf.patch(b'\xdc\x05\x00\x00\x32\x00\x00\x00', addr, clobber=True)
 
     def unlock_languages(self):
         """
@@ -332,80 +320,74 @@ class ASFirmwarePatches(object):
             var_value_addr = $var_bitmask_addr + 8
             but hardcoded offset works for almost all firmwares...
         """
-        if self.asf.hash == self.known_units[0].hash:
-            # make variable read olny
-            self.asf.patch(b'\x06', 0x8428, clobber=True)
-            # set bits for all languages except asian (breaks font) and reserved (5,7)
-            self.asf.patch(b'\x5f\xdf\x04\x00', 0x8430, clobber=True)
-        else:
-            raise IOError("Unknown hash: %s"%self.asf.hash)
+        addr = self.asf.find_var(0x0204)
+        # make variable read only to prevent overwriting with eeprom data
+        self.asf.patch(b'\x06', addr, clobber=True)
+        # set bits for all languages except asian (breaks font) and reserved (5,7)
+        self.asf.patch(b'\x5f\xdf\x04\x00', addr + 0x08, clobber=True)
 
     def extra_debug(self):
         # set config variable 0xc value to 4 == enable more debugging data on display
         # if you set it to \x0f it will enable four separate display pages of info in sleep report mode
-        if self.asf.hash == self.known_units[0].hash:
-            self.asf.patch(b'\x04', 0x84a8, clobber=True)
-        else:
-            raise IOError("Unknown hash: %s"%self.asf.hash)
+        G6_DEFAULT = 0x08
+        self.asf.patch(b'\x04', self.asf.find_var(0x0209) + G6_DEFAULT, clobber=True)
 
     def extra_modes(self):
         # add more mode entries, set config 0x0 mask to all bits high
         # default is 0x3, which only enables mode 1 (CPAP) and 2 (AutoSet)
         # ---> This is the real magic <---
-        if self.asf.hash == self.known_units[0].hash:
-            self.asf.patch(b'\xff\xff', 0x8590, clobber=True)
-        else:
-            raise IOError("Unknown hash: %s"%self.asf.hash)
+        G8_BITMASK = 0x0C
+        self.asf.patch(b'\xff\xff', self.asf.find_var(0x020D) + G8_BITMASK, clobber=True)
 
     def extra_menu(self):
         #try enabling extra menu items
-        if self.asf.hash == self.known_units[0].hash:
-            self.asf.patch(b'\x01\x20', 0x66470, clobber=True)
-        else:
-           raise IOError("Unknown hash: %s"%self.asf.hash)
+        self.asf.patch(b'\x01\x20', 0x66470, clobber=True)
 
     
     def all_menu(self):
-        if self.asf.hash == self.known_units[0].hash:
-            # If you want all menu items to always be visible, let this section run
-            # force status bit 5 always on -- always editable
-            self.asf.patch(b'\x01\x20', 0x6e502, clobber=True)
-            # force status bit 4 always on -- this makes all the inputs show up, regardless of mode
-            self.asf.patch(b'\x01\x20', 0x6e4c4, clobber=True)
-        else:
-           raise IOError("Unknown hash: %s"%self.asf.hash)
+        # If you want all menu items to always be visible, let this section run
+        # force status bit 5 always on -- always editable
+        self.asf.patch(b'\x01\x20', 0x6e502, clobber=True)
+        # force status bit 4 always on -- this makes all the inputs show up, regardless of mode
+        self.asf.patch(b'\x01\x20', 0x6e4c4, clobber=True)
+
+    def asv_unlock_ps_range(self):
+        # Disable the ASV and ASVAuto PS range check to allow Max PS < (Min PS + 5)
+        #
+        # Update PS validation logic without disabling other checks.
+        self.asf.patch(b'\x00', 0x76c08, clobber=True)
+        self.asf.patch(b'\x00', 0x76c34, clobber=True)
+        self.asf.patch(b'\x00', 0x76cca, clobber=True)
+
+        # Update variable config to allow Max PS to be set below 5
+        G4_MIN = 0x10
+        self.asf.patch(b'\x00', self.asf.find_var(0x01E2) + G4_MIN, clobber=True) # Max PS (ASV)
+        self.asf.patch(b'\x00', self.asf.find_var(0x01E7) + G4_MIN, clobber=True) # Max PS (ASVAuto)
 
     def gui_config (self):
-        # enable all of the editable options in the settings menu
-        # by turning on bit 1 of the config entries.  All of these variables
-        # are listed in the gui_create_menus function
-        
-        if self.asf.hash == self.known_units[0].hash:
-            GUI_CONFIG=0x4ef4
-            GUI_CONFIG_SIZE=0x1c
-            GUI_CONFIG_OFFSET=30
-            
-            for var in [0x2f, 0x1ec, 0x1ed, 0x24, 0x25, 0x1d3,
-                        0x1d6, 0x1d5, 0x1d7, 0x26, 0x1d9, 0x1e0,
-                        0x1e1, 0x1e2, 0x1e5, 0x1e4, 0x1e6, 0x1e7,
-                        0x1e9, 0x1ea, 0x1eb,
-                        0x24,  0x25,  0x26,  0x2f,  0x70,  0x1d2, 0x1d4, 0x1d8,
-                        0x1da, 0x1dc, 0x1dd, 0x1de, 0x1df, 0x1e3, 0x1e8, 0x1ee]:
-                addr = GUI_CONFIG + (var - GUI_CONFIG_OFFSET) * GUI_CONFIG_SIZE
-                self.asf.patch(b'\x07\x00', addr, clobber=True)
-        else:
-           raise IOError("Unknown hash: %s"%self.asf.hash)
+        # enable editable options in clinical settings menu
+        # by setting bit 0 (ACT) of the flags field at record +0x00
 
-    def gui_submenus (self):
-        # enable options hidden between different firmware variants
-        # not included in gui_config (gui_limits). Trigger, Cycle etc...
-        OFFSET = self.asf.find_bytes([0x0B, 0x00, 0x73, 0x01, 0x0C])
-        OFFSET = offset - 2
-        STRUCT_SIZE=0x14
+        vars = [
+            # gui_create_menus->menu_floatvar_create
+            0x0024, 0x0025, 0x0026, 0x002F,
+            0x0070, 0x01D2, 0x01D3, 0x01D4, 0x01D5, 0x01D6, 0x01D7, 0x01D8, 0x01D9, 0x01DA, 0x01DC, 0x01DD, 0x01DE, 0x01DF,
+            0x01E0, 0x01E1, 0x01E2, 0x01E3, 0x01E4, 0x01E5, 0x01E6, 0x01E7, 0x01E8, 0x01E9, 0x01EA, 0x01EB, 0x01EC, 0x01ED, 0x01EE,
 
-        for var in [0x0A, 0x0B, 0x14, 0x15, 0x1E, 0x25, 0x26, 0x27, 0x37, 0x38, 0x39, 0x3A, 0x63, 0x64]:
-            addr = OFFSET + var * STRUCT_SIZE
-            self.asf.patch(b'\x07\x00', addr, clobber=True)
+            # gui_create_menus->menu_create_text_or_float
+            0x0217, 0x021B, 0x0221, 0x0222, 0x022B, 0x0232, 0x0233, 0x0234, 0x0245, 0x0246,
+            0x0218, 0x0247, 0x0270, 0x0271,
+
+            # gui_create_menus->menu_create_item_type_0x29_maybe
+            0x0029, 0x00EC, 0x00F0, 0x00F1, 0x00F2, 0x00F3, 0x00F4, 0x00F5, 0x00F6, 0x00FA, 0x0156,
+
+            # gui_create_menus->gui_infobox_create
+            0x002A, 0x0055, 0x0082, 0x0084, 0x014B, 0x01DC, 0x01DD,
+        ]
+
+        for var in vars:
+            addr = self.asf.find_var(var)
+            self.asf.fw[addr] |= 1
 
     def patch_logos(self):
 
@@ -474,14 +456,11 @@ class ASFirmwarePatches(object):
         fw = f.read()
         f.close()
         
-        if self.asf.hash == self.known_units[0].hash:
-            #Place into empty space
-            self.asf.patch(fw, 0xfd000, checkempty=True)
-            
-            #Overwrite calling address
-            self.asf.patch(b'\x01\xd0\x0f\x08', 0xf9c88, clobber=True)
-        else:
-            raise IOError("Unknown hash: %s"%self.asf.hash)
+        #Place into empty space
+        self.asf.patch(fw, 0xfd000, checkempty=True)
+        
+        #Overwrite calling address
+        self.asf.patch(b'\x01\xd0\x0f\x08', 0xf9c88, clobber=True)
 
     def patch_breath(self):
         """Add breath routine to allow full control"""
@@ -489,14 +468,21 @@ class ASFirmwarePatches(object):
         fw = f.read()
         f.close()
         
-        if self.asf.hash == self.known_units[0].hash:
-            self.asf.patch(fw, 0xBB734, clobber=True)
-        else:
-            raise IOError("Unknown hash: %s"%self.asf.hash)
+        self.asf.patch(fw, 0xBB734, clobber=True)
 
     def motor_nagscreen(self):
         """ Remove "Motor life exceeded" nag screen """
-        asf.patch([0x0e, 0x49, 0x88, 0x42, 0x05, 0xe0, 0x03, 0x21, 0x0f, 0x20], dataseq=[0x0e, 0x49, 0x88, 0x42, 0x05, 0xdb, 0x03, 0x21, 0x0f, 0x20], clobber=True)
+        try:
+            self.asf.patch([0x0e, 0x49, 0x88, 0x42, 0x05, 0xe0, 0x03, 0x21, 0x0f, 0x20], dataseq=[0x0e, 0x49, 0x88, 0x42, 0x05, 0xdb, 0x03, 0x21, 0x0f, 0x20], clobber=True)
+            print("Patching \"Motor life exceeded\" nag screen")
+        except ValueError:
+            # fallback: find and patch runtime threshold
+            print("motor_nagscreen: BLT patch failed. Trying threshold patch...")
+            try:
+                self.asf.patch(b'\xFF\xFF\xFF\x7F', dataseq=[0xC0, 0x00, 0xB3, 0x04], clobber=True)
+                print("Patching \"Motor life exceeded\" threshold")
+            except ValueError:
+                print("motor_nagscreen: runtime threshold not found!")
 
             
 def str2bool(v):
@@ -517,22 +503,21 @@ if __name__ == "__main__":
     parser.add_argument('OPERATION', help="Operation to perform", choices=['INFO', 'PATCH'])
     
     patch_list_yn = [
-        {'arg':"patch-bypass-start",    'desc':"Bypass checks that block start-up.",                    'default':True,  'function':'bypass_startcheck', 'flags':0},
-        {'arg':"patch-unlock-uilimits", 'desc':"Unlock higher UI limits.",                              'default':True,  'function':'unlock_ui_limits',  'flags':(1<<1)},
-        {'arg':"patch-unlock-languages",'desc':"Unlock all built-in languages",                         'default':True,  'function':'unlock_languages',  'flags':(1<<0)},
-        {'arg':"patch-extra-debug",     'desc':"Add extra debug to display.",                           'default':True, 'function':'extra_debug',       'flags':(1<<2)},
-        {'arg':"patch-extra-modes",     'desc':"Add all modes.",                                        'default':True,  'function':'extra_modes',       'flags':(1<<3)},
-        {'arg':"patch-extra-menu",      'desc':"Try enabling extra menu items.",                        'default':True,  'function':'extra_menu',        'flags':(1<<4)},
-        {'arg':"patch-all-menu",        'desc':"All menu items will always be visible.",                'default':False, 'function':'all_menu',          'flags':(1<<5)},
+        {'arg':"patch-bypass-start",    'desc':"Bypass checks that block start-up.",                    'default':True,  'function':'bypass_startcheck'},
+        {'arg':"patch-unlock-uilimits", 'desc':"Unlock higher UI limits.",                              'default':True,  'function':'unlock_ui_limits'},
+        {'arg':"patch-unlock-languages",'desc':"Unlock all built-in languages",                         'default':True,  'function':'unlock_languages'},
+        {'arg':"patch-extra-debug",     'desc':"Add extra debug to display.",                           'default':True,  'function':'extra_debug'},
+        {'arg':"patch-extra-modes",     'desc':"Add all modes.",                                        'default':True,  'function':'extra_modes'},
+        {'arg':"patch-extra-menu",      'desc':"Try enabling extra menu items.",                        'default':True,  'function':'extra_menu'},
+        {'arg':"patch-all-menu",        'desc':"All menu items will always be visible.",                'default':False, 'function':'all_menu'},
         {'arg':"patch-gui-config",      'desc':"Enable all of the editable options in the settings menu.",
-                                                                                                        'default':True,'  function':'gui_config',        'flags':(1<<6)},
-        {'arg':"patch-gui-submenus",    'desc':"Enable editable options in the settings menu not covered by patch-gui-config",
-                                                                                                        'default':True,  'function':'gui_submenus',      'flags':(1<<6)},
-        {'arg':"patch-logos",           'desc':"Change start-up logos.",                                'default':False, 'function':'patch_logos',       'flags':(1<<0)},
-        {'arg':"patch-fw-serialmonitor",'desc':"Add monitor binary running on USART3 accessory port.",  'default':False, 'function':'patch_uart3_monitor','flags':(1<<0)},
-        {'arg':"patch-fw-breath",       'desc':"Add breath binary to allow direct pressure control.",   'default':False, 'function':'patch_breath',      'flags':(1<<0)},
-        {'arg':"patch-fw-graph",        'desc':"Add graph binary to allow graphing of pressures.",      'default':False, 'function':'patch_graph',       'flags':(1<<0)},
-        {'arg':"patch-motor-nagscreen", 'desc':"Remove \"Motor life exceeded\" nag screen",             'default':False, 'function':'motor_nagscreen',   'flags':(1<<0)},
+                                                                                                        'default':True,  'function':'gui_config'},
+        {'arg':"patch-asv-ps-range",   'desc':"Unlock ASV/ASVAuto pressure support range.",             'default':True,  'function':'asv_unlock_ps_range'},
+        {'arg':"patch-logos",           'desc':"Change start-up logos.",                                'default':False, 'function':'patch_logos'},
+        {'arg':"patch-fw-serialmonitor",'desc':"Add monitor binary running on USART3 accessory port.",  'default':False, 'function':'patch_uart3_monitor'},
+        {'arg':"patch-fw-breath",       'desc':"Add breath binary to allow direct pressure control.",   'default':False, 'function':'patch_breath'},
+        {'arg':"patch-fw-graph",        'desc':"Add graph binary to allow graphing of pressures.",      'default':False, 'function':'patch_graph'},
+        {'arg':"patch-motor-nagscreen", 'desc':"Remove \"Motor life exceeded\" nag screen",             'default':False, 'function':'motor_nagscreen'},
     ]
     
     for arg in patch_list_yn:
@@ -555,25 +540,10 @@ if __name__ == "__main__":
 
         patches = ASFirmwarePatches(asf)
         
-        print("PATCH: Change text on main menu and airplane mode")
-        patches.change_text()
-        
-        flags = 0
-        
         for patch in patch_list_yn:
             if str2bool(getattr(args, patch['arg'].replace("-","_"))):
                 print("PATCH: " + patch['desc'])
                 getattr(patches, patch['function'])()
-                flags |= patch['flags']
-
-        #Put build flags in (as in original script), visible on main menu
-        if asf.hash == patches.known_units[0].hash:
-            print("PATCH: Adding str of FLAGS=0x%02x"%flags)
-            asf.patch(b'FLAGS=0x%02x'%flags, 0x17588, clobber=True)
-            
-            #Also add git commit hash (skipped for now)
-            #COMMIT_HASH=$(git log -n1 --format=format:"%H" | head -c 7)
-            #asf.patch(b'GIT=%s\x00'%COMMIT_HASH, 0x17764)
 
         asf.fix_crcs()
         asf.write_output(args.OUTFILE, args.overwrite)
