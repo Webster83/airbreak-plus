@@ -23,9 +23,22 @@ class ASFirmware(object):
     """Patch firmware from device with various changes"""
 
     reserve_marker = 0xBA
-
-    GLOBALS_ADDR = 0x4108
     FLASH_BASE = 0x08000000
+    BID_OFFSET = 0x3F80
+    GLOBALS_REL = 0x108  # relative to CCX start
+
+    PLATFORMS = {
+        'SX577-0200': {
+            'blx_off': 0x00000, 'blx_size': 0x04000,
+            'ccx_off': 0x04000, 'ccx_size': 0x3C000,
+            'cdx_off': 0x40000, 'cdx_size': 0xC0000,
+        },
+        'SX585-0200': {
+            'blx_off': 0x00000, 'blx_size': 0x04000,
+            'ccx_off': 0x04000, 'ccx_size': 0x1C000,
+            'cdx_off': 0x20000, 'cdx_size': 0xE0000,
+        },
+    }
 
     TABLES = {
         3:  dict(stride=10,   id_base=0x00),
@@ -43,7 +56,7 @@ class ASFirmware(object):
 
     def globals_offset(self, idx):
         """Return file offset for data that globals[idx] points to"""
-        off = self.GLOBALS_ADDR + idx * 4
+        off = self.globals_addr + idx * 4
         ptr = struct.unpack_from('<I', bytes(self.fw[off:off+4]))[0]
         return ptr - self.FLASH_BASE
 
@@ -61,43 +74,61 @@ class ASFirmware(object):
         """Validate the input file looks OK and populate information"""
         
         self.hash = hashlib.sha256(bytes(self.fw)).hexdigest()
-        
-        #Step 1: Check CRCs seem OK
-        crc1 = self.crcfunc(bytes(self.fw[0x0:0x4000]))
-        crc2 = self.crcfunc(bytes(self.fw[0x4000:0x40000]))
-        crc3 = self.crcfunc(bytes(self.fw[0x40000:0xFFFFFF]))
-        
-        if crc1 != 0 or crc2 != 0 or crc3 != 0:
-            print("CRC 0-4000: %x"%(crc1))
-            print("CRC 4000-40000: %x"%(crc2))
-            print("CRC 40000-FFFFFF: %x"%(crc3))
-            raise IOError("CRC in firmware not as expected")
-            
-        #Step 2: Find version numbers
-        self.str_loader_ver = bytes(self.fw[0x3F80:0x3F90]).decode()
-        self.str_model_number = bytes(self.fw[0x4020:0x4027]).decode()
-        self.str_model_name = bytes(self.fw[0x4030:0x404F]).decode()
-        self.str_fw_ver = bytes(self.fw[0x40000:0x4000B]).decode()
+
+        # Detect platform from bootloader ID string
+        self.bid = bytes(self.fw[self.BID_OFFSET:self.BID_OFFSET + 16]).split(b'\x00')[0].decode()
+        platform_key = None
+        for key in self.PLATFORMS:
+            if self.bid.startswith(key):
+                platform_key = key
+                break
+        if not platform_key:
+            raise IOError("Unknown bootloader ID: '%s'" % self.bid)
+        self.platform = self.PLATFORMS[platform_key]
+
+        self.blx_off  = self.platform['blx_off']
+        self.blx_size = self.platform['blx_size']
+        self.ccx_off  = self.platform['ccx_off']
+        self.ccx_size = self.platform['ccx_size']
+        self.cdx_off  = self.platform['cdx_off']
+        self.cdx_size = self.platform['cdx_size']
+        self.globals_addr = self.ccx_off + self.GLOBALS_REL
+
+        # Check CRCs
+        blocks = [
+            ('BLX', self.blx_off, self.blx_size),
+            ('CCX', self.ccx_off, self.ccx_size),
+            ('CDX', self.cdx_off, self.cdx_size),
+        ]
+        for name, off, size in blocks:
+            crc = self.crcfunc(bytes(self.fw[off:off + size]))
+            if crc != 0:
+                print("%s CRC: 0x%04x (expected 0)" % (name, crc))
+                raise IOError("CRC mismatch in %s block" % name)
+
+        # Read version strings
+        self.str_model_number = bytes(self.fw[self.ccx_off + 0x20:self.ccx_off + 0x27]).decode()
+        self.str_model_name = bytes(self.fw[self.ccx_off + 0x30:self.ccx_off + 0x4F]).decode()
+        self.cdx_ver = bytes(self.fw[self.cdx_off:self.cdx_off + 0x0B]).split(b'\x00')[0].decode()
         
         print("Firmware Info: ")
-        print("  Loader Version   " + self.str_loader_ver)
+        print("  Loader Version   " + self.bid)
         print("  Catalog No.      " + self.str_model_number)
         print("  Model Name       " + self.str_model_name)
-        print("  Main SW Version  " + self.str_fw_ver)
+        print("  Main SW Version  " + self.cdx_ver)
         
     def fix_crcs(self):
         """Update CRCs in the file"""
-        new_crc = self.crcfunc(bytes(self.fw[0x0:0x3FFE]))
-        self.fw[0x3FFE] = new_crc >> 8
-        self.fw[0x3FFF] = new_crc & 0xff
-        
-        new_crc = self.crcfunc(bytes(self.fw[0x4000:0x3FFFE]))
-        self.fw[0x3FFFE] = new_crc >> 8
-        self.fw[0x3FFFF] = new_crc & 0xff
-        
-        new_crc = self.crcfunc(bytes(self.fw[0x40000:0xFFFFE]))
-        self.fw[0xFFFFE] = new_crc >> 8
-        self.fw[0xFFFFF] = new_crc & 0xff
+        blocks = [
+            (self.blx_off, self.blx_size),
+            (self.ccx_off, self.ccx_size),
+            (self.cdx_off, self.cdx_size),
+        ]
+        for off, size in blocks:
+            crc_off = off + size - 2
+            new_crc = self.crcfunc(bytes(self.fw[off:crc_off]))
+            self.fw[crc_off]     = new_crc >> 8
+            self.fw[crc_off + 1] = new_crc & 0xff
         
     def find_bytes(self, dataseq):
         """Find location of byte sequence in FW"""
@@ -267,20 +298,20 @@ class ASFirmwarePatches(object):
 
     def bypass_startcheck(self):
         #Start-up check for CRC etc, bypass it to avoid (might not be needed)
-        loader = self.asf.str_loader_ver.strip('\x00')
+        bid = self.asf.bid
 
-        if loader.startswith('SX577-0200'):
+        if bid.startswith('SX577-0200'):
             # AirSense / AirCurve variant
-            asf.patch(b'\x01\x20\xc0\x46', 0x310e, clobber=True) # BLX
-            asf.patch(b'\x00\x20\xc0\x46', 0x313e, clobber=True) # CCX
-            asf.patch(b'\x00\x20\xc0\x46', 0x3130, clobber=True) # CDX
-        elif loader.startswith('SX585-0200'):
+            self.asf.patch(b'\x01\x20\xc0\x46', 0x310e, clobber=True) # BLX
+            self.asf.patch(b'\x00\x20\xc0\x46', 0x313e, clobber=True) # CCX
+            self.asf.patch(b'\x00\x20\xc0\x46', 0x3130, clobber=True) # CDX
+        elif bid.startswith('SX585-0200'):
             # Lumis
             self.asf.patch(b'\x01\x20\xc0\x46', 0x316e, clobber=True) # BLX
             self.asf.patch(b'\x00\x20\xc0\x46', 0x319e, clobber=True) # CCX
             self.asf.patch(b'\x00\x20\xc0\x46', 0x3190, clobber=True) # CDX
         else:
-            raise IOError("Unknown bootloader version: '%s' (hash: %s)" % (loader, self.asf.hash))
+            raise IOError("Unknown bootloader version: '%s'" % bid)
             
     def unlock_ui_limits(self):
         # patch min/max pressure limits to allow full range
@@ -341,23 +372,58 @@ class ASFirmwarePatches(object):
 
     def extra_menu(self):
         #try enabling extra menu items
-        self.asf.patch(b'\x01\x20', 0x66470, clobber=True)
+        cdx_patches = {
+            'SX567-0401': [(0x66470, b'\x01\x20')],
+            'SX567-0306': [(0x66470, b'\x01\x20')],
+            'SX567-0305': [(0x66470, b'\x01\x20')],
+        }
+        patches = cdx_patches.get(self.asf.cdx_ver)
+        if patches:
+            for addr, data in patches:
+                self.asf.patch(data, addr, clobber=True)
+        else:
+            print("  extra_menu: skipped (unknown CDX version %s)" % self.asf.cdx_ver)
 
     
     def all_menu(self):
         # If you want all menu items to always be visible, let this section run
-        # force status bit 5 always on -- always editable
-        self.asf.patch(b'\x01\x20', 0x6e502, clobber=True)
-        # force status bit 4 always on -- this makes all the inputs show up, regardless of mode
-        self.asf.patch(b'\x01\x20', 0x6e4c4, clobber=True)
+        cdx_patches = {
+            'SX567-0401': [
+                (0x6e502, b'\x01\x20'),  # force status bit 5 always on - always editable
+                (0x6e4c4, b'\x01\x20'),  # force status bit 4 always on - visible regardless of mode
+            ],
+            'SX567-0306': [
+                (0x6e502, b'\x01\x20'),
+                (0x6e4c4, b'\x01\x20'),
+            ],
+            'SX567-0305': [
+                (0x6e502, b'\x01\x20'),
+                (0x6e4c4, b'\x01\x20'),
+            ],
+        }
+        patches = cdx_patches.get(self.asf.cdx_ver)
+        if patches:
+            for addr, data in patches:
+                self.asf.patch(data, addr, clobber=True)
+        else:
+            print("  all_menu: skipped (unknown CDX version %s)" % self.asf.cdx_ver)
 
     def asv_unlock_ps_range(self):
         # Disable the ASV and ASVAuto PS range check to allow Max PS < (Min PS + 5)
         #
-        # Update PS validation logic without disabling other checks.
-        self.asf.patch(b'\x00', 0x76c08, clobber=True)
-        self.asf.patch(b'\x00', 0x76c34, clobber=True)
-        self.asf.patch(b'\x00', 0x76cca, clobber=True)
+        # CDX code patches: zero the 0xfa (5.0 cmH2O) immediate in add.w/sub.w
+        cdx_patches = {
+            'SX567-0401': [(0x76c08, b'\x00'), (0x76c34, b'\x00'), (0x76cca, b'\x00')],
+            'SX567-0306': [(0x76c08, b'\x00'), (0x76c34, b'\x00'), (0x76cca, b'\x00')],
+            'SX567-0305': [(0x76c0c, b'\x00'), (0x76c38, b'\x00'), (0x76cce, b'\x00')],
+            'SX567-0302': [(0x76494, b'\x00'), (0x764c0, b'\x00'), (0x76556, b'\x00')],
+        }
+        patches = cdx_patches.get(self.asf.cdx_ver)
+        if patches:
+            for addr, data in patches:
+                self.asf.patch(data, addr, clobber=True)
+        else:
+            print("  asv_unlock_ps_range: CDX code patches skipped (unknown CDX version %s)" % self.asf.cdx_ver)
 
         # Update variable config to allow Max PS to be set below 5
         G4_MIN = 0x10
