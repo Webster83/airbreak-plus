@@ -5,10 +5,37 @@ die() { echo >&2 "$*" ; exit 1 ; }
 IN=$1
 OUT=$2
 
-GLOBALS_ADDR=0x4108
 FLASH_BASE=0x08000000
+BID_OFFSET=0x3F80
+GLOBALS_REL=0x108
 
 DEBUG_PATCH=""
+
+detect_platform() {
+    BID=$(dd if="$OUT" iflag=skip_bytes,count_bytes bs=4096 skip=$(($BID_OFFSET)) count=16 status=none | tr -d '\0')
+
+    case "$BID" in
+        SX577-0200*)
+            BLX_OFF=0x00000; BLX_SIZE=0x04000
+            CCX_OFF=0x04000; CCX_SIZE=0x3C000
+            CDX_OFF=0x40000; CDX_SIZE=0xC0000
+            ;;
+        SX585-0200*)
+            BLX_OFF=0x00000; BLX_SIZE=0x04000
+            CCX_OFF=0x04000; CCX_SIZE=0x1C000
+            CDX_OFF=0x20000; CDX_SIZE=0xE0000
+            ;;
+        *)
+            die "Unknown bootloader ID: '$BID'"
+            ;;
+    esac
+
+    GLOBALS_ADDR=$(( CCX_OFF + GLOBALS_REL ))
+    CDX_VER=$(dd if="$OUT" iflag=skip_bytes,count_bytes bs=4096 skip=$(($CDX_OFF)) count=16 status=none | tr -d '\0')
+
+    echo "Bootloader ID:  $BID"
+    echo "CDX Version:    $CDX_VER"
+}
 
 if [ -z "$IN" -o -z "$OUT" ]; then
     die "Usage: $0: stm32.bin stm32-unlocked.bin"
@@ -161,6 +188,7 @@ find_var() {
 
 
 cp "$IN" "$OUT" || die "$OUT: copy failed"
+detect_platform
 
 deprecated() {
     if [[ $FORCE_DEPRECATED != 1 ]]; then
@@ -173,37 +201,25 @@ deprecated() {
 }
 
 patch_tamper() {
-    # All firmware versions across airsense and aircurve devices have BID=SX577-0200
-    # But Lumis running on SX585-0200 is unique
-
-    local version=$(dd if="$OUT" bs=1 skip=$((0x3f80)) count=10 2>/dev/null)
-
-    case "$version" in
-        "SX577-0200")
-            echo -n "Patching firmware integrity checks... "
-            # Skip BLX check
+    echo -n "Patching firmware integrity checks... "
+    case "$BID" in
+        SX577-0200*)
             printf '\x01\x20\xc0\x46' | patch 0x310e && echo -n "BLX ok " || die "patch failed (BLX)"
-            # Skip CCX check
             printf '\x00\x20\xc0\x46' | patch 0x313e && echo -n "CCX ok " || die "patch failed (CCX)"
-            # Skip CDX check
             printf '\x00\x20\xc0\x46' | patch 0x3130 && echo -n "CDX ok " || die "patch failed (CDX)"
-            echo
             ;;
-        "SX585-0200")
-            # Skip BLX check
+        SX585-0200*)
             printf '\x01\x20\xc0\x46' | patch 0x316e && echo -n "BLX ok " || die "patch failed (BLX)"
-            # Skip CCX check
             printf '\x00\x20\xc0\x46' | patch 0x319e && echo -n "CCX ok " || die "patch failed (CCX)"
-            # Skip CDX check
             printf '\x00\x20\xc0\x46' | patch 0x3190 && echo -n "CDX ok " || die "patch failed (CDX)"
-            echo
             ;;
         *)
-            die "Unknown bootloader version: '$version'"
+            die "Unknown bootloader ID: '$BID'"
             # or try previous method if you know what you're doing
             # printf '\xc0\x46' | patch 0xf0 || die "startup patch failed"
             ;;
     esac
+    echo
 }
 
 
@@ -268,6 +284,10 @@ patch_wrapper_limit_max_pdiff() {
 
 patch_code() {
     if [[ $PATCH_CODE == 1 ]] ; then
+        case "$CDX_VER" in
+            SX567-0401*) ;;
+            *) echo "  patch_code: skipped (unsupported CDX version $CDX_VER)"; return ;;
+        esac
         echo "Patching code"
         patch_code_common
         patch_code_graph
@@ -319,13 +339,29 @@ unlock_ui_limits() {
 
 asv_unlock_ps_range () {
     # Disable the ASV and ASVAuto PS range check to allow Max PS < (Min PS + 5)
-    #
-    # Update PS validation logic without disabling other checks.
-    printf '\x00' | patch 0x76c08
-    printf '\x00' | patch 0x76c34
-    printf '\x00' | patch 0x76cca
 
-    # Update variable config to allow Max PS to be set below 5
+    # CDX code patches: zero the 0xfa (5.0 cmH2O) immediate in add.w/sub.w
+    case "$CDX_VER" in
+        SX567-0401|SX567-0306)
+            printf '\x00' | patch 0x76c08  # add.w r1, r0, #0xfa -> #0x00
+            printf '\x00' | patch 0x76c34  # sub.w r1, r0, #0xfa -> #0x00
+            printf '\x00' | patch 0x76cca  # add.w r1, r0, #0xfa -> #0x00
+            ;;
+        SX567-0305)
+            printf '\x00' | patch 0x76c0c
+            printf '\x00' | patch 0x76c38
+            printf '\x00' | patch 0x76cce
+            ;;
+        SX567-0302)
+            printf '\x00' | patch 0x76494
+            printf '\x00' | patch 0x764c0
+            printf '\x00' | patch 0x76556
+            ;;
+        *)
+            echo "  asv_unlock_ps_range: CDX code patches skipped (unsupported CDX version $CDX_VER)"
+            ;;
+    esac
+
     local G4_MIN=0x10
     printf '\x00' | patch $(( $(find_g4_var 0x01E2) + G4_MIN )) # Max PS (ASV)
     printf '\x00' | patch $(( $(find_g4_var 0x01E7) + G4_MIN )) # Max PS (ASVAuto)
@@ -370,7 +406,12 @@ extra_menu() {
     deprecated "gui_config now sets ACT flags on all menu variables." \
                "If you believe some items are still missing, please file a bug report." \
                "Export FORCE_DEPRECATED=1 to apply anyway." && return
-    printf '\x01\x20' | patch 0x66470
+    case "$CDX_VER" in
+        SX567-0401|SX567-0306|SX567-0305)
+            printf '\x01\x20' | patch 0x66470
+            ;;
+        *) echo "  extra_menu: skipped (unsupported CDX version $CDX_VER)" ;;
+    esac
 }
 
 # If you want all menu items to always be visible, let this section run
@@ -378,10 +419,15 @@ all_menu() {
     deprecated "gui_config now sets ACT flags on all menu variables." \
                "If you believe some items are still missing, please file a bug report." \
                "Export FORCE_DEPRECATED=1 to apply anyway." && return
-    # force status bit 5 always on -- always editable
-    printf '\x01\x20' | patch 0x6e502
-    # force status bit 4 always on -- this makes all the inputs show up, regardless of mode
-    printf '\x01\x20' | patch 0x6e4c4
+    case "$CDX_VER" in
+        SX567-0401|SX567-0306|SX567-0305)
+            # force status bit 5 always on -- always editable
+            printf '\x01\x20' | patch 0x6e502
+            # force status bit 4 always on -- this makes all the inputs show up, regardless of mode
+            printf '\x01\x20' | patch 0x6e4c4
+            ;;
+        *) echo "  all_menu: skipped (unsupported CDX version $CDX_VER)" ;;
+    esac
 }
 
 gui_config () {
@@ -432,6 +478,11 @@ unlock_languages() {
 
 
 custom_palette() {
+    case "$CDX_VER" in
+        SX567-0401*) ;;
+        *) echo "  custom_palette: skipped (unsupported CDX version $CDX_VER)"; return ;;
+    esac
+
     # Selected item color
     printf '\xCC\x33\x00\x00' | patch 0xf271c
 
@@ -464,6 +515,11 @@ custom_palette() {
 }
 
 asv_disable_backup_rate () {
+    case "$CDX_VER" in
+        SX567-0401*) ;;
+        *) echo "  asv_disable_backup_rate: skipped (unsupported CDX version $CDX_VER)"; return ;;
+    esac
+
     echo "Patching ASV backup rate"
 
     # Add ASV task wrapper function to empty high flash space.
@@ -496,32 +552,30 @@ motor_nagscreen () {
 }
 
 patch_crc() {
-    local base=0x08000000
-
     local regions=(
-        "0x08000000 0x4000"
-        "0x08004000 0x3c000"
-        "0x08040000 0xc0000"
+        "$BLX_OFF $BLX_SIZE"
+        "$CCX_OFF $CCX_SIZE"
+        "$CDX_OFF $CDX_SIZE"
     )
 
-    local addr len offset payload_len crc hi lo
+    local off size payload_len crc
 
     echo "Updating checksums"
 
     for r in "${regions[@]}"; do
-        read -r addr len <<< "$r"
+        read -r off size <<< "$r"
+        off=$(printf "%d" "$off")
+        size=$(printf "%d" "$size")
+        payload_len=$(( size - 2 ))
 
-        offset=$(( addr - base ))
-        payload_len=$(( len - 2 ))
-
-        crc=$(crc16_region "$offset" "$payload_len") || {
+        crc=$(crc16_region "$off" "$payload_len") || {
             echo "${FUNCNAME[0]}: CRC calculation failed"
             return 1
         }
 
-        printf "  block @0x%08X -> CRC %s\n" "$addr" "$crc"
+        printf "  block @0x%05X (%d bytes) -> CRC %s\n" "$off" "$size" "$crc"
 
-        printf '%b' "\x${crc:0:2}" "\x${crc:2:2}" | patch $(( offset + payload_len ))
+        printf '%b' "\x${crc:0:2}" "\x${crc:2:2}" | patch $(( off + payload_len ))
     done
 }
 
