@@ -508,11 +508,17 @@ if __name__ == "__main__":
         {'arg':"patch-unlock-languages",'desc':"Unlock all built-in languages",                         'default':True,  'function':'unlock_languages'},
         {'arg':"patch-extra-debug",     'desc':"Add extra debug to display.",                           'default':True,  'function':'extra_debug'},
         {'arg':"patch-extra-modes",     'desc':"Add all modes.",                                        'default':True,  'function':'extra_modes'},
-        {'arg':"patch-extra-menu",      'desc':"Try enabling extra menu items.",                        'default':True,  'function':'extra_menu'},
-        {'arg':"patch-all-menu",        'desc':"All menu items will always be visible.",                'default':False, 'function':'all_menu'},
+        {'arg':"patch-extra-menu",      'desc':"Try enabling extra menu items.",                        'default':False,  'function':'extra_menu',
+                                        'deprecated': "gui_config now sets ACT flags on all menu variables. "
+                                                      "If you believe some items are still missing, please file a bug report. "
+                                                      "Use --force-deprecated to apply anyway."},
+        {'arg':"patch-all-menu",        'desc':"All menu items will always be visible.",                'default':False, 'function':'all_menu',
+                                        'deprecated': "gui_config now sets ACT flags on all menu variables. "
+                                                      "If you believe some items are still missing, please file a bug report. "
+                                                      "Use --force-deprecated to apply anyway."},
         {'arg':"patch-gui-config",      'desc':"Enable all of the editable options in the settings menu.",
                                                                                                         'default':True,  'function':'gui_config'},
-        {'arg':"patch-asv-ps-range",   'desc':"Unlock ASV/ASVAuto pressure support range.",             'default':True,  'function':'asv_unlock_ps_range'},
+        {'arg':"patch-asv-ps-range",    'desc':"Unlock ASV/ASVAuto pressure support range.",            'default':True,  'function':'asv_unlock_ps_range'},
         {'arg':"patch-logos",           'desc':"Change start-up logos.",                                'default':False, 'function':'patch_logos'},
         {'arg':"patch-fw-serialmonitor",'desc':"Add monitor binary running on USART3 accessory port.",  'default':False, 'function':'patch_uart3_monitor'},
         {'arg':"patch-fw-breath",       'desc':"Add breath binary to allow direct pressure control.",   'default':False, 'function':'patch_breath'},
@@ -528,6 +534,7 @@ if __name__ == "__main__":
         parser.add_argument("--"+arg['arg'], help=arg['desc'], default=arg['default'], choices=choices)
     
     parser.add_argument("--overwrite", action="store_true", help="Overwrite output file if it exists already.")
+    parser.add_argument("--force-deprecated", action="store_true", help="Apply deprecated patches (you know what you're doing).")
     
     args = parser.parse_args()
 
@@ -542,6 +549,11 @@ if __name__ == "__main__":
         
         for patch in patch_list_yn:
             if str2bool(getattr(args, patch['arg'].replace("-","_"))):
+                if patch.get('deprecated'):
+                    if not args.force_deprecated:
+                        print("SKIP: %s -- %s" % (patch['desc'], patch['deprecated']))
+                        continue
+                    print("WARN: applying deprecated patch: " + patch['desc'])
                 print("PATCH: " + patch['desc'])
                 getattr(patches, patch['function'])()
 

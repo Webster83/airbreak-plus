@@ -162,6 +162,16 @@ find_var() {
 
 cp "$IN" "$OUT" || die "$OUT: copy failed"
 
+deprecated() {
+    if [[ $FORCE_DEPRECATED != 1 ]]; then
+        echo "SKIP: ${FUNCNAME[1]}:"
+        for line in "$@"; do echo "  $line"; done
+        return 0
+    fi
+    echo "WARN: ${FUNCNAME[1]}: applying deprecated patch"
+    return 1
+}
+
 patch_tamper() {
     # All firmware versions across airsense and aircurve devices have BID=SX577-0200
     # But Lumis running on SX585-0200 is unique
@@ -357,11 +367,17 @@ extra_modes() {
 
 # Try enabling extra menu items
 extra_menu() {
+    deprecated "gui_config now sets ACT flags on all menu variables." \
+               "If you believe some items are still missing, please file a bug report." \
+               "Export FORCE_DEPRECATED=1 to apply anyway." && return
     printf '\x01\x20' | patch 0x66470
 }
 
 # If you want all menu items to always be visible, let this section run
 all_menu() {
+    deprecated "gui_config now sets ACT flags on all menu variables." \
+               "If you believe some items are still missing, please file a bug report." \
+               "Export FORCE_DEPRECATED=1 to apply anyway." && return
     # force status bit 5 always on -- always editable
     printf '\x01\x20' | patch 0x6e502
     # force status bit 4 always on -- this makes all the inputs show up, regardless of mode
@@ -520,7 +536,7 @@ patch_code # Handled based on environmental variables, no need to comment out
 unlock_ui_limits
 extra_debug
 extra_modes
-extra_menu
+# extra_menu
 # all_menu
 gui_config
 motor_nagscreen
