@@ -110,33 +110,59 @@ crc16_region() {
 
 cp "$IN" "$OUT" || die "$OUT: copy failed"
 
-detect_s9_version() {
-    CDX_VER=$(dd if="$OUT" iflag=skip_bytes,count_bytes bs=4096 skip=$((0x20800)) count=16 status=none | tr -d '\0')
-    echo "CDX Version: $CDX_VER"
+FLASH_BASE=0x08000000
+BID_OFFSET=0x2B80
+
+detect_platform() {
+    BID=$(dd if="$OUT" iflag=skip_bytes,count_bytes bs=4096 skip=$(($BID_OFFSET)) count=16 status=none | tr -d '\0')
+
+    case "$BID" in
+        SX525-0300|SX525-0400)
+            BLX_OFF=0x00000; BLX_SIZE=0x03000
+            CCX_OFF=0x03000; CCX_SIZE=0x1D800
+            CDX_OFF=0x20800; CDX_SIZE=0xDF800
+            ;;
+        *)
+            die "Unknown bootloader ID: '$BID'"
+            ;;
+    esac
+
+    CDX_VER=$(dd if="$OUT" iflag=skip_bytes,count_bytes bs=4096 skip=$(($CDX_OFF)) count=16 status=none | tr -d '\0')
+
+    echo "Bootloader ID:  $BID"
+    echo "CDX Version:    $CDX_VER"
 }
 
-detect_s9_version
+detect_platform
 
 patch_tamper() {
-    # firmware is split into 3 blocks
-    # 0x08000000 length 0x3000
-    # 0x08003000 length 0x1d800
-    # 0x08020800 length 0xdf800
-    # integrity of each block is verified with crc16-ccit-false
-    # checksum is stored in last 2 bytes of a block
-    #
-    # CRC( payload + payload_crc ) = 0, so let's replace 
-    # bl crc16_ccit_memory_block with movs r0, #0
-
-    # offsets verified on SX474-1201, SX474-0905, SX474-0907
+    # Replace 'bl crc16_ccit_memory_block' with 'movs r0, #0; movs r0, #0'
+    # CRC( payload + payload_crc ) = 0, so after patch the check always passes
 
     local patch_bytes='\x00\x20\x00\x20'
+    local patch_data
 
-    local patch_data=(
-        "0x049a|\x00\xF0\x7D\xFE"
-        "0x04aa|\x00\xF0\x75\xFE"
-        "0x1030|\x00\xF0\xB2\xF8"
-    )
+    case "$BID" in
+        SX525-0300)
+            # verified on SX474-1201, SX474-0905, SX474-0907
+            patch_data=(
+                "0x049a|\x00\xF0\x7D\xFE"
+                "0x04aa|\x00\xF0\x75\xFE"
+                "0x1030|\x00\xF0\xB2\xF8"
+            )
+            ;;
+        SX525-0400)
+            # verified on SX474-1301
+            patch_data=(
+                "0x049e|\x00\xF0\x81\xFE"
+                "0x04ae|\x00\xF0\x79\xFE"
+                "0x103c|\x00\xF0\xB2\xF8"
+            )
+            ;;
+        *)
+            die "Unknown bootloader ID: '$BID'"
+            ;;
+    esac
 
     local offset expected_bytes
 
@@ -144,7 +170,7 @@ patch_tamper() {
     for pair in "${patch_data[@]}"; do
         IFS='|' read -r offset expected_bytes <<< "$pair"
 
-        if ! printf '%b' "${patches[$offset]}" | check_patch "$offset"; then
+        if ! printf '%b' "$expected_bytes" | check_patch "$offset"; then
             echo "${FUNCNAME[0]}: unexpected bytes at patch location ($offset)"
             return 1
         fi
@@ -207,32 +233,30 @@ motor_nagscreen () {
 }
 
 patch_crc() {
-    local base=0x08000000
-
     local regions=(
-        "0x08000000 0x3000"
-        "0x08003000 0x1d800"
-        "0x08020800 0xdf800"
+        "$BLX_OFF $BLX_SIZE"
+        "$CCX_OFF $CCX_SIZE"
+        "$CDX_OFF $CDX_SIZE"
     )
 
-    local addr len offset payload_len crc hi lo
+    local off size payload_len crc
 
     echo "Updating checksums"
 
     for r in "${regions[@]}"; do
-        read -r addr len <<< "$r"
+        read -r off size <<< "$r"
+        off=$(printf "%d" "$off")
+        size=$(printf "%d" "$size")
+        payload_len=$(( size - 2 ))
 
-        offset=$(( addr - base ))
-        payload_len=$(( len - 2 ))
-
-        crc=$(crc16_region "$offset" "$payload_len") || {
+        crc=$(crc16_region "$off" "$payload_len") || {
             echo "${FUNCNAME[0]}: CRC calculation failed"
             return 1
         }
 
-        printf "  block @0x%08X -> CRC %s\n" "$addr" "$crc"
+        printf "  block @0x%05X (%d bytes) -> CRC %s\n" "$off" "$size" "$crc"
 
-        printf '%b' "\x${crc:0:2}" "\x${crc:2:2}" | patch $(( offset + payload_len ))
+        printf '%b' "\x${crc:0:2}" "\x${crc:2:2}" | patch $(( off + payload_len ))
     done
 }
 
