@@ -48,6 +48,111 @@ GROUP_ALIASES = {
     'all': list(GROUPS.keys()),
 }
 
+GROUP_DESC = {
+    'AGL': 'AutoSet params',
+    'BGL': 'Board/identity',
+    'CGL': 'CPAP params',
+    'DGL': 'Bilevel timing',
+    'EGL': 'EPR params',
+    'IGL': 'Bilevel pressure',
+    'MGL': 'Machine settings',
+    'NGL': 'Backlight?',
+    'PGL': 'Peripherals/accessories',
+    'QXH': 'ASVAuto params',
+    'QXJ': 'iVAPS params',
+    'RGL': 'Reminders/replacement',
+    'SGL': 'System settings',
+    'UGL': 'Usage data',
+    'VGL': 'VAuto params',
+    'XGL': 'ASV fixed params',
+}
+
+# Firmware-verified variable descriptions
+# Sources: STR EDF col1 (g[13] PSTR), GUI descriptors (g[4]/g[6]/g[8])
+VAR_DESC = {
+    'ABF': 'AB Filter',
+    'ACC': 'Patient Access',
+    'AFC': 'AutoSet Comfort/Response',
+    'ALR': 'Leak Alert',
+    'ALV': 'Alarm Vol/Test',
+    'ANS': 'ASVAuto Min PS [cmH2O]',
+    'APX': 'Apnea Alarm [s]',
+    'AXS': 'ASVAuto Max PS [cmH2O]',
+    'BRE': 'Backup Rate',
+    'CCO': 'Climate Control',
+    'EAI': 'ASVAuto Min EPAP [cmH2O]',
+    'EAS': 'ASVAuto Start EPAP [cmH2O]',
+    'EAX': 'ASVAuto Max EPAP [cmH2O]',
+    'EBE': 'Easy-Breathe',
+    'EEP': 'ASV EPAP [cmH2O]',
+    'EPA': 'EPR Clinical Enable',
+    'EPI': 'iVAPS EPAP [cmH2O]',
+    'EPP': 'Bilevel EPAP [cmH2O]',
+    'EPR': 'EPR Level',
+    'EPS': 'Bilevel Start EPAP [cmH2O]',
+    'EPT': 'EPR Type',
+    'EPX': 'EPR Patient Enable',
+    'HLE': 'High Leak Alarm',
+    'HME': 'Ext. Humidifier',
+    'HMS': 'Humidity Level',
+    'HMX': 'Humidity Enable',
+    'HTF': 'Tube Temp [°F]',
+    'HTS': 'Tube Temp [°C]',
+    'HTX': 'Tube Temp Enable',
+    'IBR': 'iVAPS Target Rate [bpm]',
+    'IHU': 'Height Units',
+    'IPC': 'CPAP Set Pressure [cmH2O]',
+    'IPP': 'Bilevel IPAP [cmH2O]',
+    'ITN': 'Ti Min [s]',
+    'ITT': 'Ti [s]',
+    'ITX': 'Ti Max [s]',
+    'IVS': 'iVAPS Start EPAP [cmH2O]',
+    'LAN': 'Language',
+    'LMA': 'Low MV Alarm [L/min]',
+    'MNE': 'VAuto Min EPAP [cmH2O]',
+    'MNS': 'ASV Min PS [cmH2O]',
+    'MOP': 'Therapy Mode',
+    'MPA': 'AutoSet Max Pressure [cmH2O]',
+    'MPI': 'AutoSet Min Pressure [cmH2O]',
+    'MSK': 'Mask Type',
+    'MXI': 'VAuto Max IPAP [cmH2O]',
+    'MXS': 'ASV Max PS [cmH2O]',
+    'NMF': 'Non-Vent Mask',
+    'PHI': 'Height [inches]',
+    'PHT': 'Height [cm]',
+    'PRD': 'Pressure Units',
+    'QFC': 'Airplane Mode',
+    'RCF': 'Recurrence Filter [mths]',
+    'RCH': 'Recurrence Heated Tube [mths]',
+    'RCM': 'Recurrence Mask [mths]',
+    'RCW': 'Recurrence Water Tub [mths]',
+    'RDF': 'Reminder Due: Filter',
+    'RDH': 'Reminder Due: Tube',
+    'RDM': 'Reminder Due: Mask',
+    'RDW': 'Reminder Due: Water Tub',
+    'RMA': 'Ramp Enable',
+    'RMT': 'Ramp Time [min]',
+    'RRT': 'Resp. Rate [bpm]',
+    'RSC': 'Rise Time Select',
+    'RST': 'Rise Time [ms]',
+    'SCF': 'Confirm Stop',
+    'SPT': 'VAuto PS [cmH2O]',
+    'SPX': 'Low SpO2 Alarm [%]',
+    'SST': 'SmartStart',
+    'STE': 'ASV Start EPAP [cmH2O]',
+    'STP': 'CPAP Start Pressure [cmH2O]',
+    'STU': 'AutoSet Start Pressure [cmH2O]',
+    'STV': 'VAuto Start EPAP [cmH2O]',
+    'TBT': 'Tube Type',
+    'TLF': 'Therapy LED',
+    'TMU': 'Temp. Units',
+    'VCS': 'Cycle Sensitivity',
+    'VTS': 'Trigger Sensitivity',
+    'WMV': 'iVAPS Target Va [L/min]',
+    'WPA': 'iVAPS Max PS [cmH2O]',
+    'WPM': 'iVAPS Min PS [cmH2O]',
+}
+
 INFO_VARS = ['BID', 'SID', 'CID', 'PCB', 'SRN', 'PCD', 'PNA']
 
 
@@ -219,7 +324,7 @@ def resolve_groups(group_names):
         elif upper in VAR_TO_GROUP:
             var_names.append(upper)
         else:
-            # Treat as raw variable name -- let the device decide
+            # Treat as raw variable name - let the device decide
             var_names.append(upper)
     return var_names
 
@@ -242,10 +347,12 @@ def cmd_info(ser):
     print("[*] Device info:")
     for var in INFO_VARS:
         val = get_var(ser, var)
+        desc = VAR_DESC.get(var, '')
+        desc_str = f"  ({desc})" if desc else ""
         if val is not None:
-            print(f"  {var:4s} = {val}")
+            print(f"  {var:4s} = {val}{desc_str}")
         else:
-            print(f"  {var:4s} = (no response)")
+            print(f"  {var:4s} = (no response){desc_str}")
 
 def cmd_get(ser, targets):
     """Get one or more variables/groups."""
@@ -255,10 +362,12 @@ def cmd_get(ser, targets):
     for name in var_names:
         val = get_var(ser, name)
         grp = VAR_TO_GROUP.get(name, '-')
+        desc = VAR_DESC.get(name, '')
+        desc_str = f"  ({desc})" if desc else ""
         if val is not None:
-            print(f"  [{grp}] {name:4s} = {val}")
+            print(f"  [{grp}] {name:4s} = {val}{desc_str}")
         else:
-            print(f"  [{grp}] {name:4s} = (no response)")
+            print(f"  [{grp}] {name:4s} = (no response){desc_str}")
     return 0
 
 def cmd_set(ser, var_name, value):
@@ -347,8 +456,8 @@ def cmd_restore(ser, data, exclude_groups=None, exclude_vars_list=None, dry_run=
     print(f"\r  Restore complete. {len(changes)} variables, {errors} errors.          ")
     return 0 if errors == 0 else 1
 
-def cmd_list(ser, groups=None):
-    """List known variables with their groups and current caps."""
+def cmd_list(groups=None):
+    """List known variables with their groups and descriptions (offline, no device query)."""
     if groups:
         group_list = []
         for g in groups:
@@ -363,13 +472,63 @@ def cmd_list(ser, groups=None):
 
     for grp in group_list:
         vars_list = GROUPS[grp]
-        print(f"\n  {grp} ({len(vars_list)} vars):")
+        grp_desc = GROUP_DESC.get(grp, '')
+        header = f"  {grp} ({len(vars_list)} vars)"
+        if grp_desc:
+            header += f" — {grp_desc}"
+        print(f"\n{header}:")
         for name in vars_list:
+            desc = VAR_DESC.get(name, '')
+            if desc:
+                print(f"    {name:4s}  {desc}")
+            else:
+                print(f"    {name:4s}")
+    return 0
+
+def cmd_caps(ser, groups=None):
+    """Query variable limits/capabilities from device (G S # + G C #)."""
+    if groups:
+        group_list = []
+        for g in groups:
+            upper = g.upper()
+            if upper in GROUPS:
+                group_list.append(upper)
+            elif upper in VAR_TO_GROUP:
+                # Single var — wrap it
+                group_list.append(('_single', upper))
+            else:
+                print(f"[!] Unknown group or variable: {g}")
+                return 1
+    else:
+        group_list = sorted(GROUPS.keys())
+
+    for item in group_list:
+        if isinstance(item, tuple) and item[0] == '_single':
+            name = item[1]
+            grp = VAR_TO_GROUP.get(name, '-')
+            desc = VAR_DESC.get(name, '')
             val = get_var(ser, name)
             caps = get_var_caps(ser, name)
             val_str = val if val is not None else "(no response)"
             caps_str = f"  caps: {caps}" if caps else ""
-            print(f"    {name:4s} = {val_str}{caps_str}")
+            desc_str = f"  ({desc})" if desc else ""
+            print(f"  [{grp}] {name:4s} = {val_str}{caps_str}{desc_str}")
+        else:
+            grp = item
+            vars_list = GROUPS[grp]
+            grp_desc = GROUP_DESC.get(grp, '')
+            header = f"  {grp} ({len(vars_list)} vars)"
+            if grp_desc:
+                header += f" — {grp_desc}"
+            print(f"\n{header}:")
+            for name in vars_list:
+                desc = VAR_DESC.get(name, '')
+                val = get_var(ser, name)
+                caps = get_var_caps(ser, name)
+                val_str = val if val is not None else "(no response)"
+                caps_str = f"  caps: {caps}" if caps else ""
+                desc_str = f"  ({desc})" if desc else ""
+                print(f"    {name:4s} = {val_str}{caps_str}{desc_str}")
     return 0
 
 
@@ -405,7 +564,8 @@ Commands:
   set <var> <value>             Write a variable
   dump                          Dump all variables to JSON
   restore                       Restore variables from JSON
-  list                          List known variables and limits
+  list                          List known variables and descriptions (offline)
+  caps                          Query variable limits from device
 
 Groups: """ + ', '.join(sorted(GROUPS.keys())) + """
 
@@ -418,10 +578,12 @@ Examples:
   %(prog)s -p /dev/ttyACM0 dump --groups MGL EGL -o therapy.json
   %(prog)s -p /dev/ttyACM0 restore -i config.json
   %(prog)s -p /dev/ttyACM0 restore -i config.json --exclude-groups BGL
-  %(prog)s -p /dev/ttyACM0 list --groups MGL
+  %(prog)s list
+  %(prog)s list --groups MGL DGL
+  %(prog)s -p /dev/ttyACM0 caps --groups MGL
 """)
 
-    parser.add_argument('-p', '--port', required=True, help='Serial port')
+    parser.add_argument('-p', '--port', help='Serial port (required for device commands)')
     parser.add_argument('--baud', default='auto', help='Baud rate: auto, 57600, 115200, 460800')
 
     sub = parser.add_subparsers(dest='command', help='Command')
@@ -450,13 +612,24 @@ Examples:
     p_raw = sub.add_parser('raw', help='Send raw command')
     p_raw.add_argument('cmd', nargs='+', help='Raw command string (e.g. "G S #BID")')
 
-    p_list = sub.add_parser('list', help='List known variables and limits')
+    p_list = sub.add_parser('list', help='List known variables and descriptions (offline)')
     p_list.add_argument('--groups', nargs='+', help='Only list these groups')
+
+    p_caps = sub.add_parser('caps', help='Query variable values and limits from device')
+    p_caps.add_argument('--groups', nargs='+', help='Groups or variable names to query')
 
     args = parser.parse_args()
 
     if not args.command:
         parser.print_help()
+        return 1
+
+    if args.command == 'list':
+        return cmd_list(args.groups)
+
+    # All other commands need a serial port
+    if not args.port:
+        print("[!] --port is required for this command")
         return 1
 
     ser = serial.Serial(args.port, 57600, timeout=1.0)
@@ -493,8 +666,8 @@ Examples:
             send_cmd(ser, cmd_str, timeout=1.0)
             return 0
 
-        elif args.command == 'list':
-            return cmd_list(ser, args.groups)
+        elif args.command == 'caps':
+            return cmd_caps(ser, args.groups)
 
     finally:
         ser.close()
