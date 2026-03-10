@@ -1403,6 +1403,87 @@ def detect_image_type(data):
     )
 
 
+def merge_ccx_image(data, force=False, verbose=True):
+    """Merge universal EDF signals into a firmware image in-place.
+
+    Args:
+        data: bytearray (modified in-place)
+        force: proceed even if variant is unknown
+        verbose: print progress to stdout
+
+    Returns:
+        list of patch description strings
+
+    Raises:
+        CCXMergeError on failure
+    """
+    def log(msg):
+        if verbose:
+            print(msg)
+
+    img_type, ccx_start, ccx_size = detect_image_type(data)
+    ccx = bytearray(data[ccx_start:ccx_start + ccx_size])
+    if len(ccx) != CCX_SIZE:
+        raise CCXMergeError("CCX region is %d bytes, expected %d" % (len(ccx), CCX_SIZE))
+
+    globals_off = find_globals(ccx)
+    g = read_globals(ccx, globals_off)
+
+    variant, sig_count = detect_variant(ccx, g)
+    log("EDF merge: %s (%d STR signals)" % (variant, sig_count))
+
+    if variant.startswith("Unknown") and not force:
+        raise CCXMergeError("Unknown variant '%s'. Use force=True to proceed." % variant)
+
+    g12_headers, old_g12_field_count, old_g12_range = parse_g12_block(ccx, g)
+    g12_block = build_g12_block(g12_headers)
+    log("  g[12]: %d -> %d field records (%dB)" % (old_g12_field_count, SUPERSET_FIELD_COUNT, len(g12_block)))
+
+    free_start = find_free_space(ccx, g)
+    free_end = FREE_SPACE_LIMIT
+
+    relocated_indices = [11, 12, 13, 14] + list(range(15, 25)) + [26, 27, 28]
+    merge_start = min(ccx_off(g[i]) for i in relocated_indices
+                      if g[i] >= CCX_BASE and g[i] < CCX_BASE + CCX_SIZE)
+
+    reclaimed_set = set(relocated_indices)
+    for i in range(29):
+        if i in reclaimed_set:
+            continue
+        gval = g[i]
+        if gval == 0xFFFFFFFF or gval < CCX_BASE:
+            continue
+        goff = ccx_off(gval)
+        if merge_start <= goff < free_start:
+            raise CCXMergeError("Non-relocated g[%d] at CCX+0x%05X conflicts with merge target" % (i, goff))
+
+    avail_size = free_end - merge_start
+    merge_block, layout = build_merge_block(merge_start, g12_block, source_data=ccx, g=g)
+    log("  merge block: %d bytes at CCX+0x%05X (%dB free)" % (layout['total_size'], merge_start, avail_size - layout['total_size']))
+
+    if layout['total_size'] > avail_size:
+        raise CCXMergeError("Merge block (%dB) exceeds available space (%dB)" % (layout['total_size'], avail_size))
+
+    # erase relocated data, write merge block, apply patches
+    for i in range(merge_start, free_start):
+        if ccx[i] != ERASED:
+            ccx[i] = ERASED
+
+    ccx[merge_start:merge_start + len(merge_block)] = merge_block
+    patches = apply_patches(ccx, g, layout)
+
+    errors = validate_result(ccx, g, layout)
+    if errors:
+        raise CCXMergeError("Validation failed:\n  " + "\n  ".join(errors))
+
+    update_ccx_crc(ccx)
+
+    data[ccx_start:ccx_start + ccx_size] = ccx
+
+    log("  STR: %d -> %d, BRP: -> %d, PLD: -> %d" % (sig_count, len(STR_SIGNAL_NAMES), len(BRP_SIGNALS), len(PLD_SIGNALS)))
+    return patches
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(
@@ -1413,137 +1494,26 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without writing")
     parser.add_argument("--force", action="store_true", help="Skip variant detection warnings")
     args = parser.parse_args()
-    
+
     input_path = Path(args.input)
     full_data = bytearray(input_path.read_bytes())
-    
+
     input_hash = hashlib.sha256(full_data).hexdigest()[:16]
-    print(f"Input:  {input_path.name} [{len(full_data)} bytes, sha256:{input_hash}]")
-    
-    img_type, ccx_start, ccx_size = detect_image_type(full_data)
-    
-    type_labels = {
-        'ccx': 'CCX-only',
-        'full': 'Full 1MB flash dump',
-        'cmx': 'CMX (CCX+CDX)',
-        'raw': 'Raw dump (CCX found by scan)',
-    }
-    print(f"Image:  {type_labels.get(img_type, img_type)} - "
-          f"CCX at file offset 0x{ccx_start:X}, {ccx_size} bytes")
-    
-    data = full_data[ccx_start:ccx_start + ccx_size]
-    if len(data) != CCX_SIZE:
-        print(f"ERROR: CCX region is {len(data)} bytes, expected {CCX_SIZE}")
-        sys.exit(1)
-    
-    data = bytearray(data)
-    
-    globals_off = find_globals(data)
-    g = read_globals(data, globals_off)
-    
-    variant, sig_count = detect_variant(data, g)
-    print(f"Variant: {variant} ({sig_count} STR signals)")
-    
-    if variant.startswith("Unknown") and not args.force:
-        print(f"WARNING: Unknown variant. Use --force to proceed anyway.")
-        sys.exit(1)
-    
-    g12_headers, old_g12_field_count, old_g12_range = parse_g12_block(data, g)
-    g12_block = build_g12_block(g12_headers)
-    print(f"g[12] block: {old_g12_field_count} field records -> {SUPERSET_FIELD_COUNT}"
-          f" ({len(g12_block)}B: 72B hdr + {SUPERSET_FIELD_COUNT}x10B recs"
-          f" + {SUPERSET_FIELD_COUNT}x2B col1 + {SUPERSET_FIELD_COUNT}x2B col2)")
-    
-    free_start = find_free_space(data, g)
-    free_end = FREE_SPACE_LIMIT
-    
-    # Find merge target: lowest address of any relocated globals entry.
-    # Everything from here to free_start is data we're relocating - safe to reclaim.
-    relocated_indices = [11, 12, 13, 14] + list(range(15, 25)) + [26, 27, 28]
-    
-    merge_start = min(ccx_off(g[i]) for i in relocated_indices
-                      if g[i] >= CCX_BASE and g[i] < CCX_BASE + CCX_SIZE)
-    
-    # Verify no non-relocated globals point into the reclaimed range
-    reclaimed_set = set(relocated_indices)
-    for i in range(29):
-        if i in reclaimed_set:
-            continue
-        gval = g[i]
-        if gval == 0xFFFFFFFF or gval < CCX_BASE:
-            continue
-        goff = ccx_off(gval)
-        if merge_start <= goff < free_start:
-            print(f"ERROR: Non-relocated g[{i}] at CCX+0x{goff:05X} conflicts with merge target")
-            sys.exit(1)
-    
-    avail_size = free_end - merge_start
-    print(f"Merge target: CCX+0x{merge_start:05X} (reclaiming {free_start - merge_start}B of relocated data)")
-    print(f"Available: CCX+0x{merge_start:05X}..0x{free_end:05X} ({avail_size} bytes)")
-    
-    # Build merge block targeting the reclaimed area
-    merge_block, layout = build_merge_block(merge_start, g12_block, source_data=data, g=g)
-    print(f"Merge block: {layout['total_size']} bytes at CCX+0x{merge_start:05X}")
-    
-    if layout['total_size'] > avail_size:
-        print(f"ERROR: Merge block ({layout['total_size']}B) exceeds available space ({avail_size}B)")
-        sys.exit(1)
-    
+    print("Input:  %s [%d bytes, sha256:%s]" % (input_path.name, len(full_data), input_hash))
+
     if args.dry_run:
-        print(f"\n- DRY RUN - (no output written)")
-    
-    # Erase relocated data region - everything from merge_start..free_start
-    # is data we're relocating into the merge block, safe to reclaim.
-    erased_count = 0
-    for i in range(merge_start, free_start):
-        if data[i] != ERASED:
-            data[i] = ERASED
-            erased_count += 1
-    print(f"Erased {erased_count} bytes (CCX+0x{merge_start:05X}..0x{free_start:05X}) -> 0xFF")
-    
-    data[merge_start:merge_start + len(merge_block)] = merge_block
-    
-    # pointer patches
-    patches = apply_patches(data, g, layout)
-    print(f"\nPatches applied ({len(patches)}):")
+        print("\n- DRY RUN - (no output written)")
+        return
+
+    patches = merge_ccx_image(full_data, force=args.force)
+    print("\nPatches applied (%d):" % len(patches))
     for p in patches:
-        print(f"  {p}")
-    
-    errors = validate_result(data, g, layout)
-    if errors:
-        print(f"\nVALIDATION ERRORS:")
-        for e in errors:
-            print(f"  ! {e}")
-        sys.exit(1)
-    else:
-        print(f"\nValidation: OK")
-    
+        print("  %s" % p)
 
-    old_crc = struct.unpack_from('>H', data, CCX_CRC_OFFSET)[0]
-    new_crc = update_ccx_crc(data)
-    print(f"CCX CRC16: 0x{old_crc:04X} -> 0x{new_crc:04X}")
-    
-
-    if not args.dry_run:
-        full_data[ccx_start:ccx_start + ccx_size] = data
-        
-        out_path = Path(args.output) if args.output else input_path.with_suffix('.merged.bin')
-        out_path.write_bytes(full_data)
-        out_hash = hashlib.sha256(full_data).hexdigest()[:16]
-        print(f"\nOutput: {out_path.name} [{len(full_data)} bytes, sha256:{out_hash}]")
-        print(f"STR signals: {sig_count} -> {len(STR_SIGNAL_NAMES)}")
-        print(f"BRP signals: -> {len(BRP_SIGNALS)}")
-        print(f"PLD signals: -> {len(PLD_SIGNALS)}")
-
-        n_csl = sum(1 for r in SUPERSET_RECORDS if r[1] == 0x00)
-        n_aev = sum(1 for r in SUPERSET_RECORDS if r[1] == 0x01)
-        n_eve = sum(1 for r in SUPERSET_RECORDS if r[1] == 0x02)
-        n_ext = sum(1 for r in SUPERSET_RECORDS if r[1] == 0x03)
-        print(f"g[12] field records: {old_g12_field_count} -> {SUPERSET_FIELD_COUNT} "
-              f"(CSL:{n_csl} AEV:{n_aev} EVE:{n_eve} EXT:{n_ext}) "
-              f"+ {SUPERSET_FIELD_COUNT}x2 col1 + {SUPERSET_FIELD_COUNT}x2 col2")
-        free_remaining = free_end - merge_start - layout['total_size']
-        print(f"Free space: CCX+0x{merge_start + layout['total_size']:05X}..0x{free_end:05X} ({free_remaining}B)")
+    out_path = Path(args.output) if args.output else input_path.with_suffix('.merged.bin')
+    out_path.write_bytes(full_data)
+    out_hash = hashlib.sha256(full_data).hexdigest()[:16]
+    print("\nOutput: %s [%d bytes, sha256:%s]" % (out_path.name, len(full_data), out_hash))
 
 
 if __name__ == '__main__':

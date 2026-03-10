@@ -638,6 +638,12 @@ sys.stdout.buffer.write(struct.pack('<HH', hw1, hw2))
 }
 
 
+patch_edf_merge() {
+    echo "Patching EDF signal superset"
+    python3 ./python/edf_ccx_merge.py "$OUT" -o "$OUT" --force || die "EDF merge failed"
+}
+
+
 motor_nagscreen () {
 
     local offset=0x0f23e0
@@ -705,10 +711,11 @@ asv_unlock_ps_range
 
 custom_palette
 
+patch_edf_merge
+
 if [[ $PATCH_S10_LCD == 1 ]] ; then
     patch_lcd_ili9325
 fi
-
 
 
 patch_crc # ALWAYS keep it as last patch applied

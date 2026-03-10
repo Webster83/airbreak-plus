@@ -18,6 +18,7 @@ import crcmod.predefined
 import os.path
 import struct
 import re
+import sys
 
 class ASFirmware(object):
     """Patch firmware from device with various changes"""
@@ -550,6 +551,20 @@ class ASFirmwarePatches(object):
             except ValueError:
                 print("motor_nagscreen: runtime threshold not found!")
 
+    def patch_edf_merge(self):
+        """Merge universal EDF signal superset into CCX"""
+        try:
+            from edf_ccx_merge import merge_ccx_image
+        except ImportError:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            sys.path.insert(0, script_dir)
+            from edf_ccx_merge import merge_ccx_image
+
+        data = bytearray(self.asf.fw)
+        patches = merge_ccx_image(data, force=True)
+        self.asf.fw = list(data)
+        print("  %d EDF merge patches applied" % len(patches))
+
             
 def str2bool(v):
     if isinstance(v, bool):
@@ -590,6 +605,7 @@ if __name__ == "__main__":
         {'arg':"patch-fw-breath",       'desc':"Add breath binary to allow direct pressure control.",   'default':False, 'function':'patch_breath'},
         {'arg':"patch-fw-graph",        'desc':"Add graph binary to allow graphing of pressures.",      'default':False, 'function':'patch_graph'},
         {'arg':"patch-motor-nagscreen", 'desc':"Remove \"Motor life exceeded\" nag screen",             'default':True,  'function':'motor_nagscreen'},
+        {'arg':"patch-edf-merge",       'desc':"Merge universal EDF signal superset into CCX.",         'default':True,  'function':'patch_edf_merge'},
     ]
     
     for arg in patch_list_yn:
