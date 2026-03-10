@@ -456,6 +456,18 @@ class ASFirmwarePatches(object):
             addr = self.asf.find_var(var)
             self.asf.fw[addr] |= 1
 
+    def patch_defaults(self):
+        # language (eng)
+        self.asf.patch(b'\x00', self.asf.find_var(0x0212) + 0x08, clobber=True)
+        # press. units: 0=cmH2O 1=hPa
+        self.asf.patch(b'\x00', self.asf.find_var(0x028C) + 0x08, clobber=True)
+        # mask: 0=Pillows 1=Full 2=Nasal 3=Pediatric
+        self.asf.patch(b'\x00', self.asf.find_var(0x0213) + 0x08, clobber=True)
+        # tube: SlimLine, Standard, 3m
+        self.asf.patch(b'\x00', self.asf.find_var(0x0214) + 0x08, clobber=True)
+        # Essentials: Plus, On
+        self.asf.patch(b'\x00', self.asf.find_var(0x0216) + 0x08, clobber=True)
+
     def patch_logos(self):
 
         #Change these to adjust logos, rest should work automatically.
@@ -600,6 +612,7 @@ if __name__ == "__main__":
         {'arg':"patch-gui-config",      'desc':"Enable all of the editable options in the settings menu.",
                                                                                                         'default':True,  'function':'gui_config'},
         {'arg':"patch-asv-ps-range",    'desc':"Unlock ASV/ASVAuto pressure support range.",            'default':True,  'function':'asv_unlock_ps_range'},
+        {'arg':"patch-defaults",        'desc':"Change firmware defaults.",                             'default':True,  'function':'patch_defaults'},
         {'arg':"patch-logos",           'desc':"Change start-up logos.",                                'default':False, 'function':'patch_logos'},
         {'arg':"patch-fw-serialmonitor",'desc':"Add monitor binary running on USART3 accessory port.",  'default':False, 'function':'patch_uart3_monitor'},
         {'arg':"patch-fw-breath",       'desc':"Add breath binary to allow direct pressure control.",   'default':False, 'function':'patch_breath'},

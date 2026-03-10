@@ -662,6 +662,23 @@ motor_nagscreen () {
     printf '\x05\xe0' | patch $offset
 }
 
+patch_defaults() {
+    echo -n "Patching firmware defaults... "
+    local G8_DEFAULT=0x08
+    # language (eng)
+    printf '\x00' | patch $(( $(find_g8_var 0x0212) + G8_DEFAULT )) || die failed
+    # press. units: 0=cmH2O 1=hPa
+    printf '\x00' | patch $(( $(find_g8_var 0x028C) + G8_DEFAULT )) || die failed
+    # mask: 0=Pillows 1=Full 2=Nasal 3=Pediatric
+    printf '\x00' | patch $(( $(find_g8_var 0x0213) + G8_DEFAULT )) || die failed
+    # tube: SlimLine, Standard, 3m
+    printf '\x00' | patch $(( $(find_g8_var 0x0214) + G8_DEFAULT )) || die failed
+    # Essentials: Plus, On
+    printf '\x00' | patch $(( $(find_g8_var 0x0216) + G8_DEFAULT )) || die failed
+
+    echo
+}
+
 patch_crc() {
     local regions=(
         "$BLX_OFF $BLX_SIZE"
@@ -706,10 +723,12 @@ extra_modes
 gui_config
 motor_nagscreen
 unlock_languages
+patch_defaults
 
 asv_unlock_ps_range
 
 custom_palette
+
 
 patch_edf_merge
 
