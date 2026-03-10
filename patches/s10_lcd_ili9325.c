@@ -197,15 +197,15 @@ STATIC void ili9325_power_on(void)
 
 
 /*
- * Board-level init. Called after hardware RESET.
+ * Board-level init. Called after display control asserts hardware RESET.
  * Replaces BL to ILI9341 init at 0x0807BD28.
  */
 HW_INIT void lcd_board_init(void)
 {
+    original_board_init();
+
     if (is_ili932x())
         ili9325_power_on();
-    else
-        original_board_init();
 }
 
 
