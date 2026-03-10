@@ -181,5 +181,37 @@ $(BUILD)/stm32-s9-lcd.bin: patch-airsense-s9 s9_lcd_ili9225 | $(BUILD)
 	PATCH_S9_LCD=1 ./patch-airsense-s9 stm32-s9.bin $@
 
 
+# S10 LCD patch - ILI9325/ILI9328 driver for AirSense 10
+#
+# Build: make s10_lcd_ili9325
+# Usage: PATCH_S10_LCD=1 ./patch-airsense stm32.bin output.bin
+
+S10_LCD_OFFSET ?= 0x080FD800
+S10_LCD_VERSIONS := 0401
+
+$(BUILD)/s10_lcd_ili9325.o: $(SRC)/s10_lcd_ili9325.c | $(BUILD)
+	$(CC) $(CFLAGS) -Wno-unused-parameter -c -o $@ $<
+
+define S10_LCD_VERSION_template
+$(BUILD)/s10_$(1)_stubs.o: $(SRC)/s10_$(1)_stubs.S | $(BUILD)
+	$$(AS) $$(ASFLAGS) -c -o $$@ $$<
+
+$(BUILD)/s10_lcd_ili9325_$(1).elf: $(BUILD)/s10_lcd_ili9325.o $(BUILD)/s10_$(1)_stubs.o | $(BUILD)
+	$$(LD) --nostdlib --no-dynamic-linker \
+		--Ttext $$(S10_LCD_OFFSET) --entry lcd_controller_init --sort-section=name \
+		-o $$@ $$^
+
+$(BUILD)/s10_lcd_ili9325_$(1).bin: $(BUILD)/s10_lcd_ili9325_$(1).elf
+	$$(OBJCOPY) -Obinary $$< $$@
+endef
+
+$(foreach v,$(S10_LCD_VERSIONS),$(eval $(call S10_LCD_VERSION_template,$(v))))
+
+s10_lcd_ili9325: $(foreach v,$(S10_LCD_VERSIONS),$(BUILD)/s10_lcd_ili9325_$(v).bin)
+	@echo "S10 LCD patches built:"
+	@$(foreach v,$(S10_LCD_VERSIONS),echo "  $(BUILD)/s10_lcd_ili9325_$(v).bin";)
+	@echo "Inject offset: $(S10_LCD_OFFSET)"
+
+
 clean:
 	$(RM) $(BUILD)/*

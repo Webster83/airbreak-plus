@@ -533,6 +533,111 @@ asv_disable_backup_rate () {
     printf '\x01\xf0\x0f\x08' | patch 0xf44e0
 }
 
+patch_lcd_ili9325() {
+    # ILI9325/ILI9328.
+
+    local ver=${CDX_VER#SX567-}
+    local BIN=build/s10_lcd_ili9325_${ver}.bin
+    local BIN_ELF=build/s10_lcd_ili9325_${ver}.elf
+    if [ ! -r "$BIN" ]; then
+        die "LCD patch binary not found: $BIN (run make s10_lcd_ili9325)"
+    fi
+
+    # inject address (must match Makefile S10_LCD_OFFSET)
+    local LCD_FLASH=${S10_LCD_OFFSET:-0x080FD800}
+    local LCD_OFF=$(( LCD_FLASH - 0x08000000 ))
+
+    # pool entries: controller init and hw_init function pointers
+    local POOL_CTRL POOL_HWINIT EXPECTED_CTRL EXPECTED_HWINIT
+    case "$CDX_VER" in
+        SX567-0401)
+            POOL_CTRL=0x7C020
+            EXPECTED_CTRL='\x17\x2F\x0E\x08'   # 0x080E2F17 (ILI9341 controller)
+            POOL_HWINIT=0x7C01C
+            EXPECTED_HWINIT='\x87\x92\x0D\x08'  # 0x080D9287 (ILI9341 hw_init)
+            ;;
+        *)
+            echo "  patch_lcd_ili9325: skipped (unsupported CDX version $CDX_VER)"
+            return
+            ;;
+    esac
+
+    if ! printf '%b' "$EXPECTED_CTRL" | check_patch "$POOL_CTRL"; then
+        echo "  patch_lcd_ili9325: unexpected bytes at controller pool 0x${POOL_CTRL}"
+        return 1
+    fi
+    if ! printf '%b' "$EXPECTED_HWINIT" | check_patch "$POOL_HWINIT"; then
+        echo "  patch_lcd_ili9325: unexpected bytes at hw_init pool 0x${POOL_HWINIT}"
+        return 1
+    fi
+
+    echo "Patching LCD driver (ILI9325) at offset $(printf '0x%X' $LCD_OFF)"
+    patch_direct "$BIN" "$LCD_OFF"
+
+    # controller_init at offset 0x000 from inject base
+    local CTRL_ADDR=$(( LCD_FLASH + 1 ))
+    local B0 B1 B2 B3
+    B0=$(printf '%02X' $(( CTRL_ADDR & 0xFF )))
+    B1=$(printf '%02X' $(( (CTRL_ADDR >> 8) & 0xFF )))
+    B2=$(printf '%02X' $(( (CTRL_ADDR >> 16) & 0xFF )))
+    B3=$(printf '%02X' $(( (CTRL_ADDR >> 24) & 0xFF )))
+    printf "\\x${B0}\\x${B1}\\x${B2}\\x${B3}" | patch "$POOL_CTRL"
+    printf "  controller_init pool 0x%X -> 0x%08X\n" "$POOL_CTRL" "$CTRL_ADDR"
+
+    # post_init (hw_init slot) - extract offset from elf
+    local POST_OFF
+    POST_OFF=$(arm-none-eabi-nm "$BIN_ELF" 2>/dev/null | awk '/lcd_post_init/{printf "0x%s", $1}')
+    if [ -z "$POST_OFF" ]; then
+        die "  Cannot find lcd_post_init in ${BIN_ELF}"
+    fi
+    local HW_ADDR=$(( POST_OFF + 1 ))
+    B0=$(printf '%02X' $(( HW_ADDR & 0xFF )))
+    B1=$(printf '%02X' $(( (HW_ADDR >> 8) & 0xFF )))
+    B2=$(printf '%02X' $(( (HW_ADDR >> 16) & 0xFF )))
+    B3=$(printf '%02X' $(( (HW_ADDR >> 24) & 0xFF )))
+    printf "\\x${B0}\\x${B1}\\x${B2}\\x${B3}" | patch "$POOL_HWINIT"
+    printf "  post_init pool 0x%X -> 0x%08X\n" "$POOL_HWINIT" "$HW_ADDR"
+
+    # BL patch: redirect board-level ILI9341 init to our ILI9325 init
+    local BL_OFF EXPECTED_BL BOARD_INIT_ADDR
+    case "$CDX_VER" in
+        SX567-0401)
+            BL_OFF=0x7C030
+            EXPECTED_BL='\xFF\xF7\x7A\xFE'  # bl 0x0807BD28 (ILI9341 board init)
+            ;;
+    esac
+
+    if ! printf '%b' "$EXPECTED_BL" | check_patch "$BL_OFF"; then
+        echo "  patch_lcd_ili9325: unexpected bytes at BL 0x${BL_OFF}"
+        return 1
+    fi
+
+    BOARD_INIT_ADDR=$(arm-none-eabi-nm "$BIN_ELF" 2>/dev/null | awk '/lcd_board_init/{printf "0x%s", $1}')
+    if [ -z "$BOARD_INIT_ADDR" ]; then
+        die "  Cannot find lcd_board_init in ${BIN_ELF}"
+    fi
+
+    # Compute Thumb BL encoding: src=0x0807C030+4, dst=BOARD_INIT_ADDR
+    local BL_BYTES
+    BL_BYTES=$(python3 -c "
+import struct, sys
+src = 0x0807C034
+dst = $BOARD_INIT_ADDR
+offset = dst - src
+S = 1 if offset < 0 else 0
+if offset < 0: offset += (1 << 25)
+I1 = (offset >> 23) & 1; I2 = (offset >> 22) & 1
+imm10 = (offset >> 12) & 0x3FF; imm11 = (offset >> 1) & 0x7FF
+J1 = (~(I1 ^ S)) & 1; J2 = (~(I2 ^ S)) & 1
+hw1 = 0xF000 | (S << 10) | imm10
+hw2 = 0xD000 | (J1 << 13) | (J2 << 11) | imm11
+sys.stdout.buffer.write(struct.pack('<HH', hw1, hw2))
+")
+    printf '%s' "$BL_BYTES" | patch "$BL_OFF"
+    printf "  board_init BL 0x%X -> 0x%08X\n" "$BL_OFF" "$BOARD_INIT_ADDR"
+}
+
+
 motor_nagscreen () {
 
     local offset=0x0f23e0
@@ -599,6 +704,10 @@ unlock_languages
 asv_unlock_ps_range
 
 custom_palette
+
+if [[ $PATCH_S10_LCD == 1 ]] ; then
+    patch_lcd_ili9325
+fi
 
 
 
