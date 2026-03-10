@@ -270,7 +270,7 @@ G12_HEADER_SIZE = 72  # 3 x 24B headers (CSL, AEV, EVE)
 
 # g[12] header gap arrays - var_id arrays pointed to by CSL/AEV/EVE headers at +0x10.
 # These sit between g[11]+96 and g[12] in native firmware, contiguous: CSL[n] + AEV[m] + EVE[k].
-# The count field at header +0x08
+# The count field at header +0x08 specifies how many u16 entries per type.
 G12_GAP_CSL = [0x00B3, 0x00AB, 0x0247, 0x0023]  # superset (4)
 G12_GAP_AEV = [0x00B3, 0x0023]                  # all variants (2)
 G12_GAP_EVE = [0x00B3, 0x004E, 0x0220, 0x0023]  # all variants (4)
@@ -369,6 +369,12 @@ G4_ACT_PATCHES = [
     451, 452, 453, 454, 455, 456, 457, 458,
 ]
 
+# g[8] variable descriptor activation flags.
+# Records where at least one variant has ACT=1 but not all do.
+G8_ACT_PATCHES = [
+    10, 11, 20, 21, 30, 37, 38, 39, 55, 56, 57, 58, 99, 100, 160,
+]
+
 
 
 class CCXMergeError(Exception):
@@ -423,7 +429,6 @@ def ccx_off(addr):
 
 
 def ccx_addr(off):
-    """Convert CCX file offset to absolute flash address."""
     return CCX_BASE + off
 
 
@@ -625,7 +630,7 @@ def build_merge_block(free_start, g12_block=None, source_data=None, g=None):
     
     str_addrs = {}
     layout['strings_start'] = cur_addr()
-    for name in sorted(all_strings):  # sorted for deterministic output
+    for name in sorted(all_strings):
         str_addrs[name] = cur_addr()
         buf.extend(name.encode('ascii'))
         buf.append(0x00)
@@ -831,7 +836,7 @@ def build_merge_block(free_start, g12_block=None, source_data=None, g=None):
     # g[26]: 8 records x 20B = 160B (internal ptrs to 0x080092xx data arrays, shared)
     #        + superset tail: APN(4B) + CSN(4B) + BRH(8B) = 16B
     # g[27]: 3 records x 16B = 48B (APN/CSN/BRH with counts+ptrs into g[26] tail)
-    #        + 24B shared tail (OXH var_ids + rates)
+    #        + 24B shared tail (OXH var_ids + rates, identical all variants)
     if source_data is not None and g is not None:
         align4()
         g26_src = ccx_off(g[26])
@@ -846,6 +851,7 @@ def build_merge_block(free_start, g12_block=None, source_data=None, g=None):
             new_count = len(sup_varids)
             buf[rec_buf_off] = new_count
             
+            # Write superset arrays into merge block
             layout[f'g26_r{rec_idx}_varids'] = cur_addr()
             for v in sup_varids:
                 buf.extend(struct.pack('<H', v))
@@ -972,11 +978,11 @@ def apply_patches(data, g, layout):
     if 'gap_csl' in layout:
         new_g12_off = ccx_off(layout['g12_block'])
         
-        # CSL header +4: AS=0x01, VA/ASV=0x00.
-        #old_val = data[new_g12_off + 4]
-        #if old_val != 0x00:
-        #    patches.append(f"g12 CSL hdr+4: 0x{old_val:02X} -> 0x00")
-        #    write_u8(data, new_g12_off + 4, 0x00)
+        # CSL header +4: AS=0x01, VA/ASV=0x00. Zero it for superset compatibility.
+        old_val = data[new_g12_off + 4]
+        if old_val != 0x00:
+            patches.append(f"g12 CSL hdr+4: 0x{old_val:02X} -> 0x00")
+            write_u8(data, new_g12_off + 4, 0x00)
         
         for h, (tag, gap_key, gap_arr) in enumerate([
             ('CSL', 'gap_csl', G12_GAP_CSL),
@@ -996,7 +1002,7 @@ def apply_patches(data, g, layout):
                 patches.append(f"g12 {tag} gap ptr: 0x{old_ptr:08X} -> 0x{new_ptr:08X}")
                 write_u32(data, hdr_off + 16, new_ptr)
     
-    # Redirect globals[13] + globals[14] -> consolidated block 
+    # Redirect globals[13] + globals[14] -> consolidated block
     # All PSTR patches (strtab, field_rec_count, chain ptrs, var_id unmask,
     # NPD count, g[14] back-pointer) are pre-applied in the merge block copy.
     if 'g13_block' in layout:
@@ -1010,6 +1016,7 @@ def apply_patches(data, g, layout):
     
     # Redirect globals[15..20, 22..24] -> opaque relocated block
     # Internal pointers already delta-adjusted by build_merge_block sweep.
+    # g[21] is handled separately (dedicated merge block section).
     # g[25] is a literal value (0x31), not a pointer - left untouched.
     if 'g15_block' in layout:
         for i in range(15, 25):
@@ -1062,6 +1069,18 @@ def apply_patches(data, g, layout):
     if act_count:
         patches.append(f"g[4] ACT bit0: {act_count}/{len(G4_ACT_PATCHES)} records activated")
     
+    # Patch g[8] ACT flags
+    g8_off = ccx_off(g[8])
+    g8_act_count = 0
+    for rec_idx in G8_ACT_PATCHES:
+        rec_off = g8_off + rec_idx * 20
+        old_flags = read_u16(data, rec_off)
+        if not (old_flags & 0x0001):
+            write_u16(data, rec_off, old_flags | 0x0001)
+            g8_act_count += 1
+    if g8_act_count:
+        patches.append(f"g[8] ACT bit0: {g8_act_count}/{len(G8_ACT_PATCHES)} records activated")
+
     return patches
 
 
@@ -1284,6 +1303,9 @@ def validate_result(data, g, layout):
     
     # g[15]..g[24] internal pointer integrity
     # Verify all intra-block pointers were correctly delta-adjusted.
+    # When merge block is near original location, old and new ranges overlap
+    # a correctly adjusted pointer may still fall in the old range.
+    # Only flag pointers in old range that are NOT also in new range.
     if 'g15_24_old_start' in layout:
         old_start = layout['g15_24_old_start']
         old_end = layout['g15_24_old_end']
@@ -1315,6 +1337,17 @@ def validate_result(data, g, layout):
     if act_mismatches:
         errors.append(f"g[4] ACT bit0: {act_mismatches} records missing ACT")
     
+    # g[8] ACT flags
+    g8_off = ccx_off(g[8])
+    g8_mismatches = 0
+    for rec_idx in G8_ACT_PATCHES:
+        rec_off = g8_off + rec_idx * 20
+        actual = read_u16(data, rec_off)
+        if not (actual & 0x0001):
+            g8_mismatches += 1
+    if g8_mismatches:
+        errors.append(f"g[8] ACT bit0: {g8_mismatches} records missing ACT")
+
     return errors
 
 
@@ -1421,7 +1454,6 @@ def main():
           f" ({len(g12_block)}B: 72B hdr + {SUPERSET_FIELD_COUNT}x10B recs"
           f" + {SUPERSET_FIELD_COUNT}x2B col1 + {SUPERSET_FIELD_COUNT}x2B col2)")
     
-
     free_start = find_free_space(data, g)
     free_end = FREE_SPACE_LIMIT
     
@@ -1449,6 +1481,7 @@ def main():
     print(f"Merge target: CCX+0x{merge_start:05X} (reclaiming {free_start - merge_start}B of relocated data)")
     print(f"Available: CCX+0x{merge_start:05X}..0x{free_end:05X} ({avail_size} bytes)")
     
+    # Build merge block targeting the reclaimed area
     merge_block, layout = build_merge_block(merge_start, g12_block, source_data=data, g=g)
     print(f"Merge block: {layout['total_size']} bytes at CCX+0x{merge_start:05X}")
     
@@ -1459,6 +1492,8 @@ def main():
     if args.dry_run:
         print(f"\n- DRY RUN - (no output written)")
     
+    # Erase relocated data region - everything from merge_start..free_start
+    # is data we're relocating into the merge block, safe to reclaim.
     erased_count = 0
     for i in range(merge_start, free_start):
         if data[i] != ERASED:
@@ -1468,6 +1503,7 @@ def main():
     
     data[merge_start:merge_start + len(merge_block)] = merge_block
     
+    # pointer patches
     patches = apply_patches(data, g, layout)
     print(f"\nPatches applied ({len(patches)}):")
     for p in patches:
@@ -1482,10 +1518,12 @@ def main():
     else:
         print(f"\nValidation: OK")
     
+
     old_crc = struct.unpack_from('>H', data, CCX_CRC_OFFSET)[0]
     new_crc = update_ccx_crc(data)
     print(f"CCX CRC16: 0x{old_crc:04X} -> 0x{new_crc:04X}")
     
+
     if not args.dry_run:
         full_data[ccx_start:ccx_start + ccx_size] = data
         
@@ -1496,6 +1534,7 @@ def main():
         print(f"STR signals: {sig_count} -> {len(STR_SIGNAL_NAMES)}")
         print(f"BRP signals: -> {len(BRP_SIGNALS)}")
         print(f"PLD signals: -> {len(PLD_SIGNALS)}")
+
         n_csl = sum(1 for r in SUPERSET_RECORDS if r[1] == 0x00)
         n_aev = sum(1 for r in SUPERSET_RECORDS if r[1] == 0x01)
         n_eve = sum(1 for r in SUPERSET_RECORDS if r[1] == 0x02)
