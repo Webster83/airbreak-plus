@@ -192,7 +192,16 @@ STATIC void ili9325_power_on(void)
 
     ili_write_reg(0x07, 0x0133);
     delay_ms(50);
+
+    // Clear GRAM — ILI9325 has random content on cold power-up
+    ili_write_reg(0x20, 0x0000);
+    ili_write_reg(0x21, 0x0000);
     lcd_write_cmd(0x22);
+    {
+        volatile int i;
+        for (i = 0; i < 320 * 240; i++)
+            lcd_write_data(0x0000);
+    }
 }
 
 
