@@ -313,6 +313,13 @@ class ASFirmwarePatches(object):
             self.asf.patch(b'\x00\x20\xc0\x46', 0x3190, clobber=True) # CDX
         else:
             raise IOError("Unknown bootloader version: '%s'" % bid)
+
+    def bypass_psucheck(self):
+        # power supply ID (adc_and_object_2826_stuff)
+        if bid.startswith('SX577-0200'):
+            self.asf.patch(b'\x00\x20\x70\x47', 0x2882, clobber=True)
+        else:
+            print("  bypass_psucheck: skipped (unsupported bootloader version %s)" % self.asf.bid)
             
     def unlock_ui_limits(self):
         # patch min/max pressure limits to allow full range
@@ -597,6 +604,7 @@ if __name__ == "__main__":
     
     patch_list_yn = [
         {'arg':"patch-bypass-start",    'desc':"Bypass checks that block start-up.",                    'default':True,  'function':'bypass_startcheck'},
+        {'arg':"patch-bypass-psuid",    'desc':"Bypass Power Supply check at start-up.",                'default':True,  'function':'bypass_psucheck'},
         {'arg':"patch-unlock-uilimits", 'desc':"Unlock higher UI limits.",                              'default':True,  'function':'unlock_ui_limits'},
         {'arg':"patch-unlock-languages",'desc':"Unlock all built-in languages",                         'default':True,  'function':'unlock_languages'},
         {'arg':"patch-extra-debug",     'desc':"Add extra debug to display.",                           'default':True,  'function':'extra_debug'},

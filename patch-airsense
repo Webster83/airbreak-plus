@@ -222,6 +222,19 @@ patch_tamper() {
     echo
 }
 
+patch_psu_id() {
+    echo -n "Patching Power Supply ID check... "
+    case "$BID" in
+        SX577-0200*)
+            printf '\x00\x20\x70\x47' | patch 0x2882 && echo -n "ok" || die "patch failed"
+            ;;
+        *)
+            echo "skipped (unsupported bootloader version $BID)"
+            ;;
+    esac
+    echo
+}
+
 
 patch_direct() {
     BIN_FILE=$1
@@ -709,6 +722,7 @@ patch_crc() {
 
 
 patch_tamper
+patch_psu_id
 
 if [[ $PATCH_BACKUP_RATE == 1 ]] ; then
     asv_disable_backup_rate
