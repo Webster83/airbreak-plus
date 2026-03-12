@@ -120,51 +120,84 @@ read_u32() {
             printf "%d\n", unpack("V", $b)'
 }
 
-find_ta_offset() {
+find_ta_offset_std() {
     # Scan CCX for Table A anchor pattern:
     #   A[0].var_id = 0x7FFF  (at +0x1C)
     #   A[2].var_id = 0x0000  (at +2*40 + 0x1C)
     #   A[3].var_id = 0x0002  (at +3*40 + 0x1C)
 
-    local result
-    result=$(perl -e '
+    perl -e '
         use strict; use warnings;
         open my $fh, "<:raw", $ARGV[0] or die;
         local $/; my $d = <$fh>;
 
-        my $ccx_off  = 0x3000;
-        my $ccx_size = 0x1D800;
+        my $ccx_off = 0x3000;
 
         for (my $p = $ccx_off + 0x1000; $p < $ccx_off + 0x8000; $p += 4) {
             my $vid0 = unpack("v", substr($d, $p + 0*40 + 0x1C, 2));
             next unless $vid0 == 0x7FFF;
+
             my $vid2 = unpack("v", substr($d, $p + 2*40 + 0x1C, 2));
             next unless $vid2 == 0x0000;
+
             my $vid3 = unpack("v", substr($d, $p + 3*40 + 0x1C, 2));
             next unless $vid3 == 0x0002;
 
-            # verify min <= default <= max for A[4]
-            my $def4 = unpack("V", substr($d, $p + 4*40 + 0, 4));
-            my $max4 = unpack("V", substr($d, $p + 4*40 + 4, 4));
-            my $min4 = unpack("V", substr($d, $p + 4*40 + 8, 4));
-            next unless $min4 <= $def4 && $def4 <= $max4;
-
-            # Table A is always 180 records (verified across 0905/0907/1201/1203)
             printf "%d\n", $p;
             exit 0;
         }
         exit 1;
-    ' "$OUT") || {
+    ' "$1"
+}
+
+find_ta_offset_13xx() {
+    #   A[0].var_id = 0x7FFF
+    #   A[1].var_id = 0x7FFF
+    #   A[2].var_id = 0x0001
+
+    perl -e '
+        use strict; use warnings;
+        open my $fh, "<:raw", $ARGV[0] or die;
+        local $/; my $d = <$fh>;
+
+        my $ccx_off = 0x3000;
+
+        for (my $p = $ccx_off + 0x500; $p < $ccx_off + 0x8000; $p += 4) {
+            my $vid0 = unpack("v", substr($d, $p + 0*40 + 0x1C, 2));
+            next unless $vid0 == 0x7FFF;
+
+            my $vid1 = unpack("v", substr($d, $p + 1*40 + 0x1C, 2));
+            next unless $vid1 == 0x7FFF;
+
+            my $vid2 = unpack("v", substr($d, $p + 2*40 + 0x1C, 2));
+            next unless $vid2 == 0x0001;
+
+            printf "%d\n", $p;
+            exit 0;
+        }
+        exit 1;
+    ' "$1"
+}
+
+find_ta_offset() {
+    local result
+
+    if result=$(find_ta_offset_std "$OUT"); then
+        TA_OFF=$result
+        TA_COUNT=180
+    elif result=$(find_ta_offset_13xx "$OUT"); then
+        TA_OFF=$result
+        TA_COUNT=247
+    else
         echo "WARNING: Table A not found in CCX (unsupported layout?)"
         TA_OFF=""
         TA_COUNT=""
         return 1
-    }
+    fi
 
-    TA_OFF=$result
-    TA_COUNT=180
     printf "Table A found: file offset 0x%05X (%d records)\n" "$TA_OFF" "$TA_COUNT"
 }
+
 
 # Prints file offset of the Table A record with matching var_id at +0x1C.
 # Returns 1 if not found.
@@ -318,7 +351,8 @@ s9_extra_modes() {
     # var_id 0x0109 (ZT6) on 12xx+, 0x0108 (ZTM) on 09xx.
 
     local rec
-    if rec=$(find_ta_var 0x0109) || rec=$(find_ta_var 0x0108); then
+    # 13xx || 12xx || 09xx
+    if rec=$(find_ta_var 0x1B8) || rec=$(find_ta_var 0x0109) || rec=$(find_ta_var 0x0108); then
         echo "Patching therapy mode mask (all modes enabled)"
         printf '\xff\xff' | patch $(( rec + 0x18 ))
     else
@@ -353,17 +387,33 @@ s9_unlock_ui_limits() {
     echo "Patching UI pressure limits"
 
     local TA_MAX=0x04
-    local vars=(
-        0x0004  # EPAP
-        0x0008  # EPAP range
-        0x000B  # Start EPAP
-        0x0013  # Set Pressure
-        0x0015  # IPAP
-        0x001E  # Min EPAP
-        0x0021  # Min PS
-        0x0024  # Max Pressure
-        0x0029  # Max IPAP
-    )
+    local vars
+
+    case "$CDX_VER" in
+        SX474-1301)
+            vars=(
+                0x0005 0x0009 0x000C
+                0x0014 0x0016
+                0x0022 0x0023 0x0028 0x002B 0x002D
+                0x0030 0x0031 0x0032 0x0039 0x003B
+                0x004E 0x00A9 0x00AA 0x00AB 0x00AC
+                0x00E6 0x00E7
+            )
+            ;;
+        *)
+            vars=(
+                0x0004  # EPAP
+                0x0008  # EPAP range
+                0x000B  # Start EPAP
+                0x0013  # Set Pressure
+                0x0015  # IPAP
+                0x001E  # Min EPAP
+                0x0021  # Min PS
+                0x0024  # Max Pressure
+                0x0029  # Max IPAP
+            )
+            ;;
+    esac
 
     local rec var
     for var in "${vars[@]}"; do
