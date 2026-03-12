@@ -354,15 +354,15 @@ s9_unlock_ui_limits() {
 
     local TA_MAX=0x04
     local vars=(
-        0x0004  # EPAP (RSS)
-        0x0008  # EPAP range (ZRG)
-        0x000B  # Start EPAP (AHP)
-        0x0013  # Set Pressure (CJP)
-        0x0015  # IPAP (CPE)
-        0x001E  # Min EPAP (ETZ)
-        0x0021  # Min PS (HDR)
-        0x0024  # Max Pressure (HIS/IEA)
-        0x0029  # Max IPAP (AIE)
+        0x0004  # EPAP
+        0x0008  # EPAP range
+        0x000B  # Start EPAP
+        0x0013  # Set Pressure
+        0x0015  # IPAP
+        0x001E  # Min EPAP
+        0x0021  # Min PS
+        0x0024  # Max Pressure
+        0x0029  # Max IPAP
     )
 
     local rec var
