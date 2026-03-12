@@ -374,6 +374,38 @@ s9_unlock_ui_limits() {
     done
 }
 
+patch_alarm_module() {
+    # ST-A firmware refuses to work without alarm module attached
+
+    case "$CDX_VER" in
+        SX474-1301)
+            patch_data=(
+                #offset|expected|patch
+                "0x61dc8|\x10\xB5\x04\x46|\x70\x47\x00\xBF"
+            )
+            ;;
+        *)
+            echo "${FUNCNAME[0]}: skipped (unsupported CDX version $CDX_VER)"
+            return
+            ;;
+    esac
+
+    for patchset in "${patch_data[@]}"; do
+        IFS='|' read -r offset expected_bytes patch_bytes <<< "$patchset"
+
+        if ! printf '%b' "$expected_bytes" | check_patch "$offset"; then
+            echo "${FUNCNAME[0]}: unexpected bytes at patch location ($offset)"
+            return 1
+        fi
+    done
+
+    echo "Patching alarm module detection"
+    for patchset in "${patch_data[@]}"; do
+        IFS='|' read -r offset expected_bytes patch_bytes <<< "$patchset"
+        printf '%b' "$patch_bytes" | patch "$offset"
+    done
+}
+
 patch_crc() {
     local regions=(
         "$BLX_OFF $BLX_SIZE"
@@ -456,6 +488,7 @@ patch_lcd_ili9225() {
 
 
 patch_tamper
+patch_alarm_module
 
 motor_nagscreen
 
