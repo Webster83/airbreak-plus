@@ -59,7 +59,7 @@ STATIC void delay_ms(int ms)
 }
 
 // Read controller ID register. Returns 0x9325, 0x9328, or something else.
-STATIC uint16 read_lcd_id(void)
+static inline uint16 read_lcd_id(void)
 {
     lcd_write_cmd(0x0000);
     return ili_read_data();
@@ -67,8 +67,18 @@ STATIC uint16 read_lcd_id(void)
 
 STATIC int is_ili932x(void)
 {
-    uint16 id = read_lcd_id();
-    return (id == 0x9325 || id == 0x9328);
+    int tries;
+    for (tries = 0; tries < 3; tries++) {
+        uint16 id = read_lcd_id();
+        if (id == 0x9325 || id == 0x9328)
+            return 1;
+        if (tries < 2) {
+            volatile int i;
+            for (i = 0; i < 42000; i++) // ~1ms settle
+                ;
+        }
+    }
+    return 0;
 }
 
 
