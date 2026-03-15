@@ -875,41 +875,50 @@ def cmd_list(groups=None):
                 print(f"    {name:4s}  {desc}")
             else:
                 print(f"    {name:4s}")
+
+    if not groups:
+        in_groups = set(v for vl in GROUPS.values() for v in vl)
+        ungrouped = sorted(v for v in VAR_DESC if v not in in_groups)
+        if ungrouped:
+            print(f"\n  (ungrouped) ({len(ungrouped)} vars):")
+            for name in ungrouped:
+                print(f"    {name:4s}  {VAR_DESC[name]}")
     return 0
 
-def cmd_caps(ser, groups=None, verbose=False):
+def cmd_caps(ser, targets=None, verbose=False):
     """Query variable limits/capabilities from device (G S # + G C #)."""
-    if groups:
+    if targets:
         group_list = []
-        for g in groups:
+        for g in targets:
             upper = g.upper()
             if upper in GROUPS:
                 group_list.append(upper)
-            elif upper in VAR_TO_GROUP:
-                group_list.append(('_single', upper))
             else:
-                print(f"[!] Unknown group or variable: {g}")
-                return 1
+                # Any 2-4 char name — treat as single variable (known or not)
+                group_list.append(('_single', upper))
     else:
         group_list = sorted(GROUPS.keys())
+
+    def _query(name):
+        vft, val = get_var(ser, name)
+        cft, caps = get_var_caps(ser, name)
+        desc = VAR_DESC.get(name, '')
+        if vft == 'R':
+            ann = format_value(name, val)
+            val_str = f"{val} ({ann})" if ann else val
+        elif vft == 'E':
+            val_str = f"[E] {val}"
+        else:
+            val_str = "(no response)"
+        caps_str = f"  caps: {caps}" if cft == 'R' else ""
+        desc_str = f"  ({desc})" if verbose and desc else ""
+        return f"{val_str}{caps_str}{desc_str}"
 
     for item in group_list:
         if isinstance(item, tuple) and item[0] == '_single':
             name = item[1]
             grp = VAR_TO_GROUP.get(name, '-')
-            desc = VAR_DESC.get(name, '')
-            vft, val = get_var(ser, name)
-            cft, caps = get_var_caps(ser, name)
-            if vft == 'R':
-                ann = format_value(name, val)
-                val_str = f"{val} ({ann})" if ann else val
-            elif vft == 'E':
-                val_str = f"[E] {val}"
-            else:
-                val_str = "(no response)"
-            caps_str = f"  caps: {caps}" if cft == 'R' else ""
-            desc_str = f"  ({desc})" if verbose and desc else ""
-            print(f"  [{grp}] {name:4s} = {val_str}{caps_str}{desc_str}")
+            print(f"  [{grp}] {name:4s} = {_query(name)}")
         else:
             grp = item
             vars_list = GROUPS[grp]
@@ -919,19 +928,7 @@ def cmd_caps(ser, groups=None, verbose=False):
                 header += f" — {grp_desc}"
             print(f"\n{header}:")
             for name in vars_list:
-                desc = VAR_DESC.get(name, '')
-                vft, val = get_var(ser, name)
-                cft, caps = get_var_caps(ser, name)
-                if vft == 'R':
-                    ann = format_value(name, val)
-                    val_str = f"{val} ({ann})" if ann else val
-                elif vft == 'E':
-                    val_str = f"[E] {val}"
-                else:
-                    val_str = "(no response)"
-                caps_str = f"  caps: {caps}" if cft == 'R' else ""
-                desc_str = f"  ({desc})" if verbose and desc else ""
-                print(f"    {name:4s} = {val_str}{caps_str}{desc_str}")
+                print(f"    {name:4s} = {_query(name)}")
     return 0
 
 
@@ -985,7 +982,8 @@ Examples:
   %(prog)s -p /dev/ttyACM0 restore -i config.json --exclude-groups BGL
   %(prog)s list
   %(prog)s list --groups MGL DGL
-  %(prog)s -p /dev/ttyACM0 caps --groups MGL
+  %(prog)s -p /dev/ttyACM0 caps MGL
+  %(prog)s -p /dev/ttyACM0 caps IPC MOP EPR
 """)
 
     parser.add_argument('-p', '--port', help='Serial port (required for device commands)')
@@ -1026,7 +1024,7 @@ Examples:
     p_list.add_argument('--groups', nargs='+', help='Only list these groups')
 
     p_caps = sub.add_parser('caps', help='Query variable values and limits from device')
-    p_caps.add_argument('--groups', nargs='+', help='Groups or variable names to query')
+    p_caps.add_argument('targets', nargs='*', help='Variable names, group names, or "all" (default: all)')
 
     args = parser.parse_args()
 
@@ -1084,7 +1082,7 @@ Examples:
             return 0
 
         elif args.command == 'caps':
-            return cmd_caps(ser, args.groups, verbose=args.verbose)
+            return cmd_caps(ser, args.targets, verbose=args.verbose)
 
     finally:
         ser.close()
