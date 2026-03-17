@@ -332,9 +332,35 @@ VAR_DESC = {
     'FLG': 'Flow calibration something?',
     'PZH': 'Pressure calibration something?',
     'PSH': 'Pressure calibration something?',
+
+    'AIE': 'Avg I:E Ratio [%]',
+    'IER': 'I:E Ratio [%]',
+    'IE9': 'I:E Ratio P95 [%]',
+    'IEA': 'I:E Ratio Max [%]',
+    'IEM': 'I:E Ratio Median [%]',
+
+    'INT': 'Inspiration Time [s]',
+    'EXT': 'Expiration Time [s]',
+    'IN5': 'Inspiration Time 5-Breath [s]',
+    'EX5': 'Expiration Time 5-Breath [s]',
+    'ISM': 'Insp Time Median [s]',
+    'IS9': 'Insp Time P95 [s]',
+    'ISA': 'Insp Time Max [s]',
+    'MIS': 'Mean Insp Time [s]',
+
+    'TCV': 'Trigger/Cycle Event',
+    'VCR': 'Spont Cycle Ratio [%]',
+    'TGT': 'Target Ventilation [L/min]',
+    'MTT': 'Mean Target Minute Vent [L/min]',
+    'VA9': 'Target Vent P95 [L/min]',
+    'VAA': 'Target Vent Max [L/min]',
+    'VAM': 'Target Vent Median [L/min]',
+    'BRR': 'Backup Resp Rate',
+    'VSR': 'Spont Trigger Ratio',
+    'ZSE': 'Saved System Error',
 }
 
-# Variable scaling metadata from ResScan protocol definition (M36 V39)
+# Variable scaling metadata from ResScan protocol definition (M36)
 # Format: (scale_divisor, decimal_places, unit_string)
 # Raw value ÷ scale_divisor = display value.  decimal_places for formatting.
 # Only includes variables with non-trivial scaling.
@@ -392,6 +418,14 @@ VAR_SCALE = {
     'FFL': (100, 2, ''),
     # Power applied: raw / 100
     'PPA': (100, 0, '%'), 'TPA': (100, 0, '%'),
+    # Insp/exp timing (bilevel): raw / 50 = seconds
+    'INT': (50, 1, 's'), 'EXT': (50, 1, 's'), 'IN5': (50, 1, 's'), 'EX5': (50, 1, 's'),
+    'ISM': (50, 1, 's'), 'IS9': (50, 1, 's'), 'ISA': (50, 1, 's'), 'MIS': (50, 1, 's'),
+    # Spont cycle ratio: raw / 2 = %
+    'VCR': (2, 1, '%'),
+    # Target ventilation (ASV): raw / 8 = L/min
+    'TGT': (8, 1, 'L/min'), 'MTT': (8, 1, 'L/min'),
+    'VA9': (8, 1, 'L/min'), 'VAA': (8, 1, 'L/min'), 'VAM': (8, 1, 'L/min'),
 }
 
 # Enum option labels from ResScan metadata (M36 V39)
@@ -444,6 +478,9 @@ ENUM_OPTIONS = {
     'ZRP': {0: 'No', 1: 'Yes'},
     'CSR': {0: 'None', 1: 'CSR Start', 2: 'CSR End'},
     'MST': {0: 'On', 1: 'Off', 2: 'Debounce'},
+    'TCV': {0: 'None', 1: 'Spont Trig', 2: 'TeMax Trig', 3: 'TeMin Trig',
+            4: 'Timed Trig', 5: 'Spont Cycle', 6: 'TiMax Cycle', 7: 'TiMin Cycle',
+            8: 'Timed Cycle'},
 }
 
 
