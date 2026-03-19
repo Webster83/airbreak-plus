@@ -316,7 +316,7 @@ class ASFirmwarePatches(object):
 
     def bypass_psucheck(self):
         # power supply ID (adc_and_object_2826_stuff)
-        if bid.startswith('SX577-0200'):
+        if self.asf.bid.startswith('SX577-0200'):
             self.asf.patch(b'\x00\x20\x70\x47', 0x2882, clobber=True)
         else:
             print("  bypass_psucheck: skipped (unsupported bootloader version %s)" % self.asf.bid)
