@@ -265,6 +265,17 @@ patch_pointer() {
     fi
 }
 
+# Convert address to a little-endian Thumb pointer string for patch_pointer
+le_thumb_ptr() {
+    local addr=$(printf "%d" "$1")
+    local thumb=$(( addr | 1 ))
+    printf '\\x%02x\\x%02x\\x%02x\\x%02x' \
+        $((thumb & 0xFF)) \
+        $(((thumb >> 8) & 0xFF)) \
+        $(((thumb >> 16) & 0xFF)) \
+        $(((thumb >> 24) & 0xFF))
+}
+
 patch_code_common() {
     echo "Patching common_code.c"
     patch_direct build/common_code.bin 0xfe000
@@ -546,6 +557,38 @@ asv_disable_backup_rate () {
     printf '\x01\xf0\x0f\x08' | patch 0xf44e0
 }
 
+
+patch_vid_spoof() {
+
+    # Must match Makefile VID_SPOOF_OFFSET
+    local VID_SPOOF_OFFSET=0xFEF00
+
+    local ver=${CDX_VER#SX567-}
+    local BIN=build/vid_spoof_${ver}.bin
+    if [ ! -r "$BIN" ]; then
+        echo "  ${FUNCNAME[0]}: $BIN not found (unsupported version or run make vid_spoof)"
+        return 1
+    fi
+    local VTABLE_ENTRY EXPECTED_PTR
+    case "$ver" in
+        0401) VTABLE_ENTRY=0xF14CC; EXPECTED_PTR='\x1d\xa5\x06\x08' ;;
+        0306) VTABLE_ENTRY=0xF126C; EXPECTED_PTR='\x1d\xa5\x06\x08' ;;
+        0305) VTABLE_ENTRY=0xF1350; EXPECTED_PTR='\x19\xa5\x06\x08' ;;
+        0302) VTABLE_ENTRY=0xF0B54; EXPECTED_PTR='\xf5\x9d\x06\x08' ;;
+        *) echo "  ${FUNCNAME[0]}: skipped (unsupported CDX version $CDX_VER)"; return ;;
+    esac
+    if ! printf '%b' "$EXPECTED_PTR" | check_patch $VTABLE_ENTRY; then
+        echo "  ${FUNCNAME[0]}: unexpected bytes at vtable entry, already patched?"
+        return 1
+    fi
+    echo "Patching VID spoof..."
+    local HOOK_FLASH=$(( VID_SPOOF_OFFSET + 0x08000000 ))
+    patch_pointer "$BIN" $VID_SPOOF_OFFSET $VTABLE_ENTRY "$(le_thumb_ptr $HOOK_FLASH)"
+    printf "  payload: %s at 0x%X\n" "$BIN" $VID_SPOOF_OFFSET
+    printf "  vtable:  0x%X -> 0x%08X\n" $VTABLE_ENTRY $(( HOOK_FLASH | 1 ))
+}
+
+
 patch_lcd_ili9325() {
     # ILI9325/ILI9328.
 
@@ -570,17 +613,17 @@ patch_lcd_ili9325() {
             EXPECTED_HWINIT='\x87\x92\x0D\x08'  # 0x080D9287 (ILI9341 hw_init)
             ;;
         *)
-            echo "  patch_lcd_ili9325: skipped (unsupported CDX version $CDX_VER)"
+            echo "  ${FUNCNAME[0]}: skipped (unsupported CDX version $CDX_VER)"
             return
             ;;
     esac
 
     if ! printf '%b' "$EXPECTED_CTRL" | check_patch "$POOL_CTRL"; then
-        echo "  patch_lcd_ili9325: unexpected bytes at controller pool 0x${POOL_CTRL}"
+        echo "  ${FUNCNAME[0]}: unexpected bytes at controller pool 0x${POOL_CTRL}"
         return 1
     fi
     if ! printf '%b' "$EXPECTED_HWINIT" | check_patch "$POOL_HWINIT"; then
-        echo "  patch_lcd_ili9325: unexpected bytes at hw_init pool 0x${POOL_HWINIT}"
+        echo "  ${FUNCNAME[0]}: unexpected bytes at hw_init pool 0x${POOL_HWINIT}"
         return 1
     fi
 
@@ -588,14 +631,8 @@ patch_lcd_ili9325() {
     patch_direct "$BIN" "$LCD_OFF"
 
     # controller_init at offset 0x000 from inject base
-    local CTRL_ADDR=$(( LCD_FLASH + 1 ))
-    local B0 B1 B2 B3
-    B0=$(printf '%02X' $(( CTRL_ADDR & 0xFF )))
-    B1=$(printf '%02X' $(( (CTRL_ADDR >> 8) & 0xFF )))
-    B2=$(printf '%02X' $(( (CTRL_ADDR >> 16) & 0xFF )))
-    B3=$(printf '%02X' $(( (CTRL_ADDR >> 24) & 0xFF )))
-    printf "\\x${B0}\\x${B1}\\x${B2}\\x${B3}" | patch "$POOL_CTRL"
-    printf "  controller_init pool 0x%X -> 0x%08X\n" "$POOL_CTRL" "$CTRL_ADDR"
+    printf "$(le_thumb_ptr $LCD_FLASH)" | patch "$POOL_CTRL"
+    printf "  controller_init pool 0x%X -> 0x%08X\n" "$POOL_CTRL" $(( LCD_FLASH | 1 ))
 
     # post_init (hw_init slot) - extract offset from elf
     local POST_OFF
@@ -603,13 +640,8 @@ patch_lcd_ili9325() {
     if [ -z "$POST_OFF" ]; then
         die "  Cannot find lcd_post_init in ${BIN_ELF}"
     fi
-    local HW_ADDR=$(( POST_OFF + 1 ))
-    B0=$(printf '%02X' $(( HW_ADDR & 0xFF )))
-    B1=$(printf '%02X' $(( (HW_ADDR >> 8) & 0xFF )))
-    B2=$(printf '%02X' $(( (HW_ADDR >> 16) & 0xFF )))
-    B3=$(printf '%02X' $(( (HW_ADDR >> 24) & 0xFF )))
-    printf "\\x${B0}\\x${B1}\\x${B2}\\x${B3}" | patch "$POOL_HWINIT"
-    printf "  post_init pool 0x%X -> 0x%08X\n" "$POOL_HWINIT" "$HW_ADDR"
+    printf "$(le_thumb_ptr $POST_OFF)" | patch "$POOL_HWINIT"
+    printf "  post_init pool 0x%X -> 0x%08X\n" "$POOL_HWINIT" $(( POST_OFF | 1 ))
 
     # BL patch: redirect board-level ILI9341 init to our ILI9325 init
     local BL_OFF EXPECTED_BL BOARD_INIT_ADDR
@@ -621,7 +653,7 @@ patch_lcd_ili9325() {
     esac
 
     if ! printf '%b' "$EXPECTED_BL" | check_patch "$BL_OFF"; then
-        echo "  patch_lcd_ili9325: unexpected bytes at BL 0x${BL_OFF}"
+        echo "  ${FUNCNAME[0]}: unexpected bytes at BL 0x${BL_OFF}"
         return 1
     fi
 
@@ -739,6 +771,7 @@ motor_nagscreen
 unlock_languages
 patch_defaults
 
+patch_vid_spoof
 asv_unlock_ps_range
 
 custom_palette

@@ -4,18 +4,21 @@
 SRC=patches
 BUILD=build
 
+VID_SPOOF_VERSIONS := 0401 0306 0305 0302
+VID_SPOOF_BINS = $(foreach v,$(VID_SPOOF_VERSIONS),$(BUILD)/vid_spoof_$(v).bin)
+
 all: $(BUILD)/stm32-patched.bin $(BUILD)/stm32-asv.bin
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/stm32-patched.bin: patch-airsense $(BUILD)/common_code.bin $(BUILD)/graph.bin
+$(BUILD)/stm32-patched.bin: patch-airsense $(BUILD)/common_code.bin $(BUILD)/graph.bin $(VID_SPOOF_BINS)
 	export PATCH_CODE=1 && ./patch-airsense stm32.bin $@
 
-$(BUILD)/stm32-asv.bin: patch-airsense $(BUILD)/common_code.bin $(BUILD)/graph.bin $(BUILD)/squarewave.bin $(BUILD)/asv_task_wrapper.bin $(BUILD)/wrapper_limit_max_pdiff.bin
+$(BUILD)/stm32-asv.bin: patch-airsense $(BUILD)/common_code.bin $(BUILD)/graph.bin $(BUILD)/squarewave.bin $(BUILD)/asv_task_wrapper.bin $(BUILD)/wrapper_limit_max_pdiff.bin $(VID_SPOOF_BINS)
 	export PATCH_CODE=1 && export PATCH_S=1 && export PATCH_ASV_TASK_WRAPPER=1 && export PATCH_VAUTO_WRAPPER=1 && ./patch-airsense stm32.bin $@
 
-binaries: $(BUILD)/common_code.bin $(BUILD)/graph.bin $(BUILD)/squarewave.bin $(BUILD)/asv_task_wrapper.bin $(BUILD)/wrapper_limit_max_pdiff.bin
+binaries: $(BUILD)/common_code.bin $(BUILD)/graph.bin $(BUILD)/squarewave.bin $(BUILD)/asv_task_wrapper.bin $(BUILD)/wrapper_limit_max_pdiff.bin $(VID_SPOOF_BINS)
 
 serve:
 	mkdocs serve
@@ -211,6 +214,47 @@ s10_lcd_ili9325: $(foreach v,$(S10_LCD_VERSIONS),$(BUILD)/s10_lcd_ili9325_$(v).b
 	@echo "S10 LCD patches built:"
 	@$(foreach v,$(S10_LCD_VERSIONS),echo "  $(BUILD)/s10_lcd_ili9325_$(v).bin";)
 	@echo "Inject offset: $(S10_LCD_OFFSET)"
+
+
+#
+# VID Spoof - MOP-based Variant ID override
+#
+
+VID_SPOOF_OFFSET := 0x80fef00
+
+#                       ORIG        HANDLER     MOP         VTENTRY
+vid_spoof_addrs_0401 := 0x0806A51D  0x20009694  0x200104A2  0xF14CC
+vid_spoof_addrs_0306 := 0x0806A51D  0x20009694  0x200104A2  0xF126C
+vid_spoof_addrs_0305 := 0x0806A519  0x20009694  0x20010736  0xF1350
+vid_spoof_addrs_0302 := 0x08069DF5  0x20009694  0x20010736  0xF0B54
+
+vid_spoof_ORIG     = $(word 1,$(vid_spoof_addrs_$(1)))
+vid_spoof_HANDLER  = $(word 2,$(vid_spoof_addrs_$(1)))
+vid_spoof_MOP      = $(word 3,$(vid_spoof_addrs_$(1)))
+vid_spoof_VTABLE   = $(word 4,$(vid_spoof_addrs_$(1)))
+
+define vid_spoof_build_template
+$(BUILD)/vid_spoof_$(1).o: $(SRC)/vid_spoof.c | $(BUILD)
+	$$(CC) $$(CFLAGS) \
+		-DVID_SPOOF_ADDR_ORIG=$(call vid_spoof_ORIG,$(1)) \
+		-DVID_SPOOF_ADDR_HANDLER=$(call vid_spoof_HANDLER,$(1)) \
+		-DVID_SPOOF_ADDR_MOP=$(call vid_spoof_MOP,$(1)) \
+		-c -o $$@ $$<
+
+$(BUILD)/vid_spoof_$(1).elf: $(BUILD)/vid_spoof_$(1).o | $(BUILD)
+	$$(LD) --nostdlib --no-dynamic-linker \
+		--Ttext $(VID_SPOOF_OFFSET) --entry start --sort-section=name \
+		-o $$@ $$^
+
+$(BUILD)/vid_spoof_$(1).bin: $(BUILD)/vid_spoof_$(1).elf
+	$$(OBJCOPY) -Obinary $$< $$@
+endef
+
+$(foreach v,$(VID_SPOOF_VERSIONS),$(eval $(call vid_spoof_build_template,$(v))))
+
+vid_spoof: $(VID_SPOOF_BINS)
+	@echo "VID spoof patches built:"
+	@$(foreach v,$(VID_SPOOF_VERSIONS),echo "  $(BUILD)/vid_spoof_$(v).bin";)
 
 
 clean:

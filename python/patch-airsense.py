@@ -556,6 +556,49 @@ class ASFirmwarePatches(object):
         
         self.asf.patch(fw, 0xBB734, clobber=True)
 
+
+    def patch_vid_spoof(self):
+        """Hook MOP writeback to dynamically set VID per therapy mode"""
+        import os, struct
+
+        # Must match Makefile VID_SPOOF_OFFSET
+        VID_SPOOF_OFFSET = 0xFEF00
+        VID_SPOOF_VERSIONS = {
+            #             vtable_entry  expected_vt
+            'SX567-0401': (0xF14CC, b'\x1d\xa5\x06\x08'),
+            'SX567-0306': (0xF126C, b'\x1d\xa5\x06\x08'),
+            'SX567-0305': (0xF1350, b'\x19\xa5\x06\x08'),
+            'SX567-0302': (0xF0B54, b'\xf5\x9d\x06\x08'),
+        }
+
+        info = VID_SPOOF_VERSIONS.get(self.asf.cdx_ver)
+        if info is None:
+            print("  patch_vid_spoof: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
+            return
+
+        vtable_entry, expected_vt = info
+
+        if bytes(self.asf.fw[vtable_entry:vtable_entry+4]) != expected_vt:
+            print("  patch_vid_spoof: unexpected bytes at vtable entry, already patched?")
+            return
+
+        ver = self.asf.cdx_ver.replace('SX567-', '')
+        bin_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                '..', 'build', 'vid_spoof_%s.bin' % ver)
+        if not os.path.exists(bin_path):
+            print("  patch_vid_spoof: build/vid_spoof_%s.bin not found (run make vid_spoof)" % ver)
+            return
+
+        with open(bin_path, 'rb') as f:
+            payload = f.read()
+
+        print("Patching VID spoof (%d bytes at 0x%X)" % (len(payload), VID_SPOOF_OFFSET))
+        self.asf.patch(payload, VID_SPOOF_OFFSET, checkempty=True)
+
+        hook_thumb = 0x08000000 + VID_SPOOF_OFFSET + 1
+        self.asf.patch(struct.pack('<I', hook_thumb), vtable_entry, clobber=True)
+
+
     def motor_nagscreen(self):
         """ Remove "Motor life exceeded" nag screen """
         try:
@@ -625,6 +668,7 @@ if __name__ == "__main__":
         {'arg':"patch-fw-serialmonitor",'desc':"Add monitor binary running on USART3 accessory port.",  'default':False, 'function':'patch_uart3_monitor'},
         {'arg':"patch-fw-breath",       'desc':"Add breath binary to allow direct pressure control.",   'default':False, 'function':'patch_breath'},
         {'arg':"patch-fw-graph",        'desc':"Add graph binary to allow graphing of pressures.",      'default':False, 'function':'patch_graph'},
+        {'arg':"patch-fw-vidspoof",     'desc':"Hook MOP write to dynamically set VID per therapy mode.", 'default':True, 'function':'patch_vid_spoof'},
         {'arg':"patch-motor-nagscreen", 'desc':"Remove \"Motor life exceeded\" nag screen",             'default':True,  'function':'motor_nagscreen'},
         {'arg':"patch-edf-merge",       'desc':"Merge universal EDF signal superset into CCX.",         'default':True,  'function':'patch_edf_merge'},
     ]
