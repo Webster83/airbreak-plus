@@ -322,7 +322,7 @@ VAR_DESC = {
 
     'QCD': 'Cell Signal',
     'QCO': 'Module Operator',
-    'QCV': 'Module Service Provider',
+    'QCV': 'Module Service',
     'QSI': 'Module Serial Number',
     'QTI': 'Module Type',
     'QVI': 'Module SW Version',
@@ -610,10 +610,22 @@ def read_responses(ser, timeout=1.0):
     ser.timeout = old_timeout
     return data, parse_responses(data)
 
-def send_cmd(ser, cmd_str, timeout=0.5, quiet=False):
+def send_cmd(ser, cmd_str, timeout=0.5, quiet=False, no_response=False):
+    if getattr(ser, 'text_mode', False):
+        resp_text = ser.send_text_cmd(cmd_str, timeout=timeout)
+        if not quiet and resp_text:
+            print(f"  [R] {resp_text}")
+        # Wrap in compatible format: raw bytes + response list
+        if resp_text:
+            payload = resp_text.encode('ascii', errors='replace')
+            return payload, [{'type': 'R', 'payload': payload}]
+        return b'', []
+
     ser.reset_input_buffer()
     ser.write(build_q_frame(cmd_str))
     ser.flush()
+    if no_response:
+        return b'', []
     raw, responses = read_responses(ser, timeout=timeout)
     if not quiet:
         for r in responses:
@@ -644,9 +656,7 @@ def switch_baud(ser, target, quiet=False):
     old = ser.baudrate
     if not quiet:
         print(f"[*] Switching baud: {old} -> {target} (BDD {BDD_RATES[target]})...")
-    ser.reset_input_buffer()
-    ser.write(build_q_frame(f"P S #BDD {BDD_RATES[target]}"))
-    ser.flush()
+    send_cmd(ser, f"P S #BDD {BDD_RATES[target]}", timeout=0.5, quiet=True, no_response=True)
     time.sleep(0.3)
     read_responses(ser, timeout=0.5)
     ser.baudrate = target
@@ -971,6 +981,16 @@ def cmd_caps(ser, targets=None, verbose=False):
 
 def connect(ser, baud_arg):
     """Connect and probe or set baud rate. Returns True on success."""
+    if getattr(ser, 'text_mode', False):
+        # Text mode: arbiter handles baud, just verify device responds
+        print("[*] Verifying device (text mode)...")
+        _, resp = send_cmd(ser, "G S #BID", timeout=1.0, quiet=True)
+        if not any(b'BID' in r['payload'] for r in resp):
+            print("[!] Device not responding")
+            return False
+        print("[+] Device responding via arbiter")
+        return True
+
     if baud_arg == 'auto':
         print("[*] Probing device...")
         baud = probe_baud(ser)
@@ -1023,7 +1043,9 @@ Examples:
   %(prog)s -p /dev/ttyACM0 caps IPC MOP EPR
 """)
 
-    parser.add_argument('-p', '--port', help='Serial port (required for device commands)')
+    parser.add_argument('-p', '--port', help='Serial port or tcp:host[:port] (required for device commands)')
+    parser.add_argument('--tcp-mode', choices=['raw', 'transparent', 'text'], default='text',
+                        help='TCP mode: text (arbiter, default), transparent (raw Q-frames via AirBridge), raw (dumb proxy)')
     parser.add_argument('--baud', default='auto', help='Baud rate: auto, 57600, 115200, 460800')
     parser.add_argument('-v', '--verbose', action='store_true', help='Show variable descriptions')
 
@@ -1077,7 +1099,11 @@ Examples:
         print("[!] --port is required for this command")
         return 1
 
-    ser = serial.Serial(args.port, 57600, timeout=1.0)
+    if args.port.startswith('tcp:'):
+        from tcp_serial import open_tcp
+        ser = open_tcp(args.port, args.tcp_mode, timeout=1.0)
+    else:
+        ser = serial.Serial(args.port, 57600, timeout=1.0)
 
     try:
         if not connect(ser, args.baud):

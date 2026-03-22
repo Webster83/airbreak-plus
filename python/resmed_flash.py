@@ -692,7 +692,9 @@ Examples:
   %(prog)s -p /dev/ttyACM0 -f dump.bin --no-wait              Fail if device not found
   %(prog)s -p /dev/ttyACM0 --info                             Show device info
 """)
-    parser.add_argument('-p', '--port', required=True, help='Serial port')
+    parser.add_argument('-p', '--port', required=True, help='Serial port or tcp:host[:port]')
+    parser.add_argument('--tcp-mode', choices=['raw', 'transparent'], default='transparent',
+                        help='TCP mode: transparent (AirBridge, default), raw (dumb proxy)')
     parser.add_argument('-f', '--file', help='Firmware file to flash')
     parser.add_argument('--block', action='append', help='Target block (repeatable): config, firmware, all, bootloader')
     parser.add_argument('--baud', default='auto', help='Transfer baud: auto, 57600, 115200, 460800')
@@ -708,7 +710,11 @@ Examples:
     parser.add_argument('--yolo', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    ser = serial.Serial(args.port, 57600, timeout=1.0)
+    if args.port.startswith('tcp:'):
+        from tcp_serial import open_tcp
+        ser = open_tcp(args.port, args.tcp_mode, timeout=1.0)
+    else:
+        ser = serial.Serial(args.port, 57600, timeout=1.0)
 
     try:
         if args.info:
