@@ -31,3 +31,6 @@ NSTUB(0x080D8C0D, flexcolor_write_data)
 
 // IWDG watchdog reload
 NSTUB(0x080875BB, iwdg_reload)
+
+// emWin display driver accessor
+NSTUB(0x08080CDB, lcd_get_device)

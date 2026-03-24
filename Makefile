@@ -201,7 +201,7 @@ $(BUILD)/s10_$(1)_stubs.o: $(SRC)/s10_$(1)_stubs.S | $(BUILD)
 
 $(BUILD)/s10_lcd_ili9325_$(1).elf: $(BUILD)/s10_lcd_ili9325.o $(BUILD)/s10_$(1)_stubs.o | $(BUILD)
 	$$(LD) --nostdlib --no-dynamic-linker \
-		--Ttext $$(S10_LCD_OFFSET) --entry lcd_controller_init --sort-section=name \
+		--Ttext $$(S10_LCD_OFFSET) --entry lcd_board_init --sort-section=name \
 		-o $$@ $$^
 
 $(BUILD)/s10_lcd_ili9325_$(1).bin: $(BUILD)/s10_lcd_ili9325_$(1).elf

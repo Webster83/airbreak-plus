@@ -1,18 +1,11 @@
 /*
  * s10_lcd_ili9325.c - Universal ILI9325/ILI9328/ILI9341 LCD driver for AirSense 10
  *
- * Reads controller ID at runtime. If ILI9325/9328, uses our driver.
- * Otherwise falls through to original ILI9341 code.
- *
- * Three patch points:
- *   Pool 0x7C020 (controller_init, r6): vtable callbacks
- *   Pool 0x7C01C (post_init, r7): FlexColor plumbing
- *   BL   0x7C030 (board_init): hardware power-on sequence
+ * Calls original ILI9341 board init first, then detects controller via ID read.
+ * ILI9325/9328: overrides FlexColor vtable + runs ILI9325 power-on.
+ * ILI9341: returns immediately
  */
 
-#define MAIN    __attribute__((section(".text.0.main")))
-#define HW_INIT __attribute__((section(".text.0.hw_init")))
-#define CTRL    __attribute__((section(".text.0.ctrl_init")))
 #define STATIC  static __attribute__((section(".text.x.nonmain")))
 
 typedef unsigned int      uint32;
@@ -21,22 +14,9 @@ typedef unsigned char     uint8;
 
 extern void lcd_write_cmd(uint16 index);
 extern void lcd_write_data(uint16 value);
-extern void flexcolor_ensure_init(void *driver);
 extern void iwdg_reload(void);
-extern void flexcolor_set_interface(void *ctx, int bits);
-
-// original ILI9341 functions (called when ID != 9325/9328)
-extern void original_controller_init(void *driver);
-extern void original_hw_init(void *driver);
 extern void original_board_init(void);
-
-// FlexColor draw functions (controller-agnostic)
-extern void flexcolor_draw_bitmap(void);
-extern void flexcolor_fill_rect(void);
-extern void flexcolor_draw_hline(void);
-extern void flexcolor_draw_vline(void);
-extern void flexcolor_cs_assert(void);
-extern void flexcolor_write_data(void);
+extern void *lcd_get_device(int layer);
 
 STATIC void ili_write_reg(uint16 reg, uint16 val)
 {
@@ -58,13 +38,16 @@ STATIC void delay_ms(int ms)
     }
 }
 
-// Read controller ID register. Returns 0x9325, 0x9328, or something else.
+// Read controller ID register (reg 0x00).
+// ILI9325 returns 0x9325, ILI9328 returns 0x9328, ILI9341 returns 0x0000.
 static inline uint16 read_lcd_id(void)
 {
     lcd_write_cmd(0x0000);
     return ili_read_data();
 }
 
+// Detect ILI9325/9328 with retries for cold boot stability.
+// ILI9325 may need time after power-on before ID register is readable.
 STATIC int is_ili932x(void)
 {
     int tries;
@@ -216,65 +199,27 @@ STATIC void ili9325_power_on(void)
 
 
 /*
- * Board-level init. Called after display control asserts hardware RESET.
- * Replaces BL to ILI9341 init at 0x0807BD28.
+ * Entry point. Replaces BL to ILI9341 board init at 0x0807BD28.
+ * Called from display control function after hardware RESET.
  */
-HW_INIT void lcd_board_init(void)
+void lcd_board_init(void)
 {
     original_board_init();
 
-    if (is_ili932x())
-        ili9325_power_on();
-}
-
-
-/*
- * Slot r6 (runs FIRST): controller vtable callbacks.
- */
-CTRL void lcd_controller_init(void *driver)
-{
-    if (!is_ili932x()) {
-        original_controller_init(driver);
+    if (!is_ili932x())
         return;
-    }
 
-    void *ctx;
-    flexcolor_ensure_init(driver);
-    ctx = *(void **)((uint8 *)driver + 8);
+    // Override vtable with ILI9325 callbacks
+    void *driver = lcd_get_device(0);
+    void *ctx = *(void **)((uint8 *)driver + 8);
 
     *(void **)((uint8 *)ctx + 0x9C) = (void *)ili9325_set_window;
     *(void **)((uint8 *)ctx + 0xA0) = (void *)ili9325_set_cursor;
     *(void **)((uint8 *)ctx + 0xA4) = (void *)ili9325_set_orient;
     *(void **)((uint8 *)ctx + 0xAC) = (void *)ili9325_read_pixel;
     *(void **)((uint8 *)ctx + 0xBC) = (void *)ili9325_read_setup;
-    *(void **)((uint8 *)ctx + 0x8C) = (void *)flexcolor_set_interface;
 
     *(uint16 *)((uint8 *)ctx + 0x26) &= ~0x0003;
-}
 
-
-/*
- * Slot r7 (runs SECOND): FlexColor plumbing.
- */
-MAIN void lcd_post_init(void *driver)
-{
-    if (!is_ili932x()) {
-        original_hw_init(driver);
-        return;
-    }
-
-    void *ctx;
-    flexcolor_ensure_init(driver);
-    ctx = *(void **)((uint8 *)driver + 8);
-
-    *(void **)((uint8 *)ctx + 0xC8) = (void *)flexcolor_draw_bitmap;
-    *(void **)((uint8 *)ctx + 0xCC) = (void *)flexcolor_fill_rect;
-    *(void **)((uint8 *)ctx + 0xD0) = (void *)flexcolor_draw_hline;
-    *(void **)((uint8 *)ctx + 0xD4) = (void *)flexcolor_draw_vline;
-    *(void **)((uint8 *)ctx + 0x94) = (void *)flexcolor_cs_assert;
-    *(void **)((uint8 *)ctx + 0x98) = (void *)flexcolor_write_data;
-
-    *(uint32 *)((uint8 *)ctx + 0xE0) = *(uint32 *)((uint8 *)ctx + 0xB8);
-    flexcolor_set_interface(ctx, 0x10);
-    *(uint32 *)((uint8 *)ctx + 0x38) = 0x10;
+    ili9325_power_on();
 }

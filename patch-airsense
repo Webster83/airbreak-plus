@@ -590,7 +590,8 @@ patch_vid_spoof() {
 
 
 patch_lcd_ili9325() {
-    # ILI9325/ILI9328.
+    # Universal ILI9325/ILI9328 + ILI9341 LCD driver.
+    # Runtime detection after hardware RESET, transparent on ILI9341 boards.
 
     local ver=${CDX_VER#SX567-}
     local BIN=build/s10_lcd_ili9325_${ver}.bin
@@ -599,56 +600,18 @@ patch_lcd_ili9325() {
         die "LCD patch binary not found: $BIN (run make s10_lcd_ili9325)"
     fi
 
-    # inject address (must match Makefile S10_LCD_OFFSET)
     local LCD_FLASH=${S10_LCD_OFFSET:-0x080FD800}
     local LCD_OFF=$(( LCD_FLASH - 0x08000000 ))
 
-    # pool entries: controller init and hw_init function pointers
-    local POOL_CTRL POOL_HWINIT EXPECTED_CTRL EXPECTED_HWINIT
-    case "$CDX_VER" in
-        SX567-0401)
-            POOL_CTRL=0x7C020
-            EXPECTED_CTRL='\x17\x2F\x0E\x08'   # 0x080E2F17 (ILI9341 controller)
-            POOL_HWINIT=0x7C01C
-            EXPECTED_HWINIT='\x87\x92\x0D\x08'  # 0x080D9287 (ILI9341 hw_init)
-            ;;
-        *)
-            echo "  ${FUNCNAME[0]}: skipped (unsupported CDX version $CDX_VER)"
-            return
-            ;;
-    esac
-
-    if ! printf '%b' "$EXPECTED_CTRL" | check_patch "$POOL_CTRL"; then
-        echo "  ${FUNCNAME[0]}: unexpected bytes at controller pool 0x${POOL_CTRL}"
-        return 1
-    fi
-    if ! printf '%b' "$EXPECTED_HWINIT" | check_patch "$POOL_HWINIT"; then
-        echo "  ${FUNCNAME[0]}: unexpected bytes at hw_init pool 0x${POOL_HWINIT}"
-        return 1
-    fi
-
-    echo "Patching LCD driver (ILI9325) at offset $(printf '0x%X' $LCD_OFF)"
-    patch_direct "$BIN" "$LCD_OFF"
-
-    # controller_init at offset 0x000 from inject base
-    printf "$(le_thumb_ptr $LCD_FLASH)" | patch "$POOL_CTRL"
-    printf "  controller_init pool 0x%X -> 0x%08X\n" "$POOL_CTRL" $(( LCD_FLASH | 1 ))
-
-    # post_init (hw_init slot) - extract offset from elf
-    local POST_OFF
-    POST_OFF=$(arm-none-eabi-nm "$BIN_ELF" 2>/dev/null | awk '/lcd_post_init/{printf "0x%s", $1}')
-    if [ -z "$POST_OFF" ]; then
-        die "  Cannot find lcd_post_init in ${BIN_ELF}"
-    fi
-    printf "$(le_thumb_ptr $POST_OFF)" | patch "$POOL_HWINIT"
-    printf "  post_init pool 0x%X -> 0x%08X\n" "$POOL_HWINIT" $(( POST_OFF | 1 ))
-
-    # BL patch: redirect board-level ILI9341 init to our ILI9325 init
-    local BL_OFF EXPECTED_BL BOARD_INIT_ADDR
+    local BL_OFF EXPECTED_BL
     case "$CDX_VER" in
         SX567-0401)
             BL_OFF=0x7C030
             EXPECTED_BL='\xFF\xF7\x7A\xFE'  # bl 0x0807BD28 (ILI9341 board init)
+            ;;
+        *)
+            echo "  ${FUNCNAME[0]}: skipped (unsupported CDX version $CDX_VER)"
+            return
             ;;
     esac
 
@@ -657,17 +620,21 @@ patch_lcd_ili9325() {
         return 1
     fi
 
+    echo "Patching LCD driver (ILI9325) at offset $(printf '0x%X' $LCD_OFF)"
+    patch_direct "$BIN" "$LCD_OFF"
+
+    local BOARD_INIT_ADDR
     BOARD_INIT_ADDR=$(arm-none-eabi-nm "$BIN_ELF" 2>/dev/null | awk '/lcd_board_init/{printf "0x%s", $1}')
     if [ -z "$BOARD_INIT_ADDR" ]; then
         die "  Cannot find lcd_board_init in ${BIN_ELF}"
     fi
 
-    # Compute Thumb BL encoding: src=0x0807C030+4, dst=BOARD_INIT_ADDR
+    # Compute Thumb BL encoding: src=BL_OFF+0x08000000+4, dst=BOARD_INIT_ADDR
+    local BL_SRC=$(( BL_OFF + 0x08000004 ))
     local BL_BYTES
     BL_BYTES=$(python3 -c "
 import struct, sys
-src = 0x0807C034
-dst = $BOARD_INIT_ADDR
+src, dst = $BL_SRC, $BOARD_INIT_ADDR
 offset = dst - src
 S = 1 if offset < 0 else 0
 if offset < 0: offset += (1 << 25)
@@ -679,7 +646,7 @@ hw2 = 0xD000 | (J1 << 13) | (J2 << 11) | imm11
 sys.stdout.buffer.write(struct.pack('<HH', hw1, hw2))
 ")
     printf '%s' "$BL_BYTES" | patch "$BL_OFF"
-    printf "  board_init BL 0x%X -> 0x%08X\n" "$BL_OFF" "$BOARD_INIT_ADDR"
+    printf "  BL 0x%X -> 0x%08X (lcd_board_init)\n" "$BL_OFF" "$BOARD_INIT_ADDR"
 }
 
 
