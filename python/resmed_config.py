@@ -578,7 +578,7 @@ def parse_responses(data: bytes) -> list:
         if data[i:i+1] == b'U' and i+1 < len(data) and data[i+1:i+2] != b'U':
             try:
                 ft = chr(data[i+1])
-                if ft in 'EFKLPQR':
+                if ft in 'EFKLOPQRTf':
                     length = int(data[i+2:i+5], 16)
                     if i + length <= len(data):
                         raw_payload = data[i+5:i+length-4]
@@ -591,26 +591,31 @@ def parse_responses(data: bytes) -> list:
         i += 1
     return responses
 
-def read_responses(ser, timeout=1.0):
+def read_responses(ser, timeout=1.0, multi_frame=False):
     old_timeout = ser.timeout
-    ser.timeout = 0.02
+    if multi_frame:
+        ser.timeout = 0.1
+        trail_wait, trail_ext = 0.3, 0.1
+    else:
+        ser.timeout = 0.02
+        trail_wait, trail_ext = 0.02, 0.02
     data = b''
     deadline = time.time() + timeout
     while time.time() < deadline:
         chunk = ser.read(4096)
         if chunk:
             data += chunk
-            trail_deadline = time.time() + 0.02
+            trail_deadline = time.time() + trail_wait
             while time.time() < trail_deadline:
                 chunk = ser.read(4096)
                 if chunk:
                     data += chunk
-                    trail_deadline = time.time() + 0.02
+                    trail_deadline = time.time() + trail_ext
             break
     ser.timeout = old_timeout
     return data, parse_responses(data)
 
-def send_cmd(ser, cmd_str, timeout=0.5, quiet=False, no_response=False):
+def send_cmd(ser, cmd_str, timeout=0.5, quiet=False, no_response=False, multi_frame=False):
     if getattr(ser, 'text_mode', False):
         resp_text = ser.send_text_cmd(cmd_str, timeout=timeout)
         if not quiet and resp_text:
@@ -626,7 +631,8 @@ def send_cmd(ser, cmd_str, timeout=0.5, quiet=False, no_response=False):
     ser.flush()
     if no_response:
         return b'', []
-    raw, responses = read_responses(ser, timeout=timeout)
+    mf = multi_frame or cmd_str.startswith('G F &')
+    raw, responses = read_responses(ser, timeout=timeout, multi_frame=mf)
     if not quiet:
         for r in responses:
             print(f"  [{r['type']}] {r['payload'].decode('ascii', errors='replace')}")
@@ -684,7 +690,7 @@ def negotiate_best_baud(ser):
 def get_var(ser, name):
     """Read a single variable. Returns (frame_type, value_str).
     R-frame: ('R', value).  E-frame: ('E', error_code).  No response: (None, None)."""
-    _, resp = send_cmd(ser, f"G S #{name}", timeout=0.5, quiet=True)
+    _, resp = send_cmd(ser, f"G S #{name}", timeout=1, quiet=True)
     for r in resp:
         payload = r['payload'].decode('ascii', errors='replace')
         if '=' in payload:
