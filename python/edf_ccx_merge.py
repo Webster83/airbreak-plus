@@ -709,7 +709,9 @@ def build_merge_block(free_start, g12_block=None, source_data=None, g=None):
     # g[11] headers sit at the tail of the g[28] block.
     #
     # Layout:
-    #   OXH header (20B) - copied from source, internal ptrs point outside (unchanged)
+    #   OXH header (20B) - copied from source, +8/+12 ptrs fixed to inline arrays
+    #   OXH var_ids [6] (12B) - relocated from before g[28] (in erase range)
+    #   OXH rates [6]   (12B) - relocated from before g[28] (in erase range)
     #   BRP var_ids [4]  (8B)
     #   BRP samples [4]  (8B)
     #   PLD var_ids [14] (28B)
@@ -729,10 +731,27 @@ def build_merge_block(free_start, g12_block=None, source_data=None, g=None):
         
         align4()
         layout['g28_block'] = cur_addr()
+        g28_buf_start = len(buf)
         
         # Copy OXH header (20 bytes) from source
         buf.extend(source_data[g28_off:g28_off + OXH_HDR_SIZE])
         
+        # Relocate OXH var_id and rate arrays.
+        # These sit BEFORE g[28] in the original layout (in the erase range).
+        # The header at +8/+12 still points to the old addresses after copy.
+        oxh_count = source_data[g28_off]
+        oxh_p1 = ccx_off(read_u32(source_data, g28_off + 8))
+        oxh_p2 = ccx_off(read_u32(source_data, g28_off + 12))
+
+        layout['g28_oxh_var_ids'] = cur_addr()
+        buf.extend(source_data[oxh_p1:oxh_p1 + oxh_count * 2])
+        layout['g28_oxh_rates'] = cur_addr()
+        buf.extend(source_data[oxh_p2:oxh_p2 + oxh_count * 2])
+
+        # Fix OXH header +8/+12 to point to relocated arrays
+        struct.pack_into('<I', buf, g28_buf_start + 8, layout['g28_oxh_var_ids'])
+        struct.pack_into('<I', buf, g28_buf_start + 12, layout['g28_oxh_rates'])
+
         # Inline BRP var_ids + samples
         layout['g28_brp_var_ids'] = cur_addr()
         for _, var_id, _ in BRP_SIGNALS:
