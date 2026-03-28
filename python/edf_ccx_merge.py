@@ -1422,7 +1422,7 @@ def detect_image_type(data):
     )
 
 
-def merge_ccx_image(data, force=False, verbose=True):
+def merge_ccx_image(data, force=False, verbose=False):
     """Merge universal EDF signals into a firmware image in-place.
 
     Args:
@@ -1453,6 +1453,13 @@ def merge_ccx_image(data, force=False, verbose=True):
 
     if variant.startswith("Unknown") and not force:
         raise CCXMergeError("Unknown variant '%s'. Use force=True to proceed." % variant)
+
+    # Capture old signal counts before patching
+    g11_off = ccx_off(g[11])
+    old_brp = ccx[g11_off + 8]
+    old_pld = ccx[g11_off + 32 + 8]
+    old_sad = ccx[g11_off + 64 + 8]
+    old_g21 = read_u16(ccx, ccx_off(g[21]))
 
     g12_headers, old_g12_field_count, old_g12_range = parse_g12_block(ccx, g)
     g12_block = build_g12_block(g12_headers)
@@ -1499,7 +1506,10 @@ def merge_ccx_image(data, force=False, verbose=True):
 
     data[ccx_start:ccx_start + ccx_size] = ccx
 
-    log("  STR: %d -> %d, BRP: -> %d, PLD: -> %d" % (sig_count, len(STR_SIGNAL_NAMES), len(BRP_SIGNALS), len(PLD_SIGNALS)))
+    print("EDF merge: STR %d->%d, BRP %d->%d, PLD %d->%d, g12 %d->%d, g21 %d->%d"
+          % (sig_count, len(STR_SIGNAL_NAMES), old_brp, len(BRP_SIGNALS),
+             old_pld, len(PLD_SIGNALS), old_g12_field_count, SUPERSET_FIELD_COUNT,
+             old_g21, G20_SUPERSET_COUNT))
     return patches
 
 
@@ -1510,6 +1520,7 @@ def main():
     )
     parser.add_argument("input", help="Input binary: CCX, CMX, or full 1MB flash dump")
     parser.add_argument("-o", "--output", help="Output file (default: <input>.merged.bin)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show detailed patch list")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without writing")
     parser.add_argument("--force", action="store_true", help="Skip variant detection warnings")
     args = parser.parse_args()
@@ -1517,22 +1528,19 @@ def main():
     input_path = Path(args.input)
     full_data = bytearray(input_path.read_bytes())
 
-    input_hash = hashlib.sha256(full_data).hexdigest()[:16]
-    print("Input:  %s [%d bytes, sha256:%s]" % (input_path.name, len(full_data), input_hash))
-
     if args.dry_run:
-        print("\n- DRY RUN - (no output written)")
+        print("DRY RUN (no output written)")
         return
 
-    patches = merge_ccx_image(full_data, force=args.force)
-    print("\nPatches applied (%d):" % len(patches))
-    for p in patches:
-        print("  %s" % p)
+    patches = merge_ccx_image(full_data, force=args.force, verbose=args.verbose)
+
+    if args.verbose:
+        print("\nPatches (%d):" % len(patches))
+        for p in patches:
+            print("  %s" % p)
 
     out_path = Path(args.output) if args.output else input_path.with_suffix('.merged.bin')
     out_path.write_bytes(full_data)
-    out_hash = hashlib.sha256(full_data).hexdigest()[:16]
-    print("\nOutput: %s [%d bytes, sha256:%s]" % (out_path.name, len(full_data), out_hash))
 
 
 if __name__ == '__main__':
