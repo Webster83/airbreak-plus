@@ -993,15 +993,15 @@ def apply_patches(data, g, layout):
         patches.append(f"globals[12]: 0x{old_g12:08X} -> 0x{layout['g12_block']:08X}")
         write_u32(data, globals_off + 12 * 4, layout['g12_block'])
     
-    # Patch g[12] header gap arrays + CSL header +4 (in relocated g[12])
+    # Patch g[12] header gap arrays (in relocated g[12])
     if 'gap_csl' in layout:
         new_g12_off = ccx_off(layout['g12_block'])
         
-        # CSL header +4: AS=0x01, VA/ASV=0x00. Zero it for superset compatibility.
-        old_val = data[new_g12_off + 4]
-        if old_val != 0x00:
-            patches.append(f"g12 CSL hdr+4: 0x{old_val:02X} -> 0x00")
-            write_u8(data, new_g12_off + 4, 0x00)
+        # CSL header +4: AS=0x01, VA/ASV=0x00
+        #old_val = data[new_g12_off + 4]
+        #if old_val != 0x00:
+        #    patches.append(f"g12 CSL hdr+4: 0x{old_val:02X} -> 0x00")
+        #    write_u8(data, new_g12_off + 4, 0x00)
         
         for h, (tag, gap_key, gap_arr) in enumerate([
             ('CSL', 'gap_csl', G12_GAP_CSL),
