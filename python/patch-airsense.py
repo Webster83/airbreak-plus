@@ -599,6 +599,12 @@ class ASFirmwarePatches(object):
         self.asf.patch(struct.pack('<I', hook_thumb), vtable_entry, clobber=True)
 
 
+    def patch_past_date(self):
+        """Allow setting past date in menu and UART"""
+        # date direction check: cmp r0,r5 -> cmp r0,r0
+        off = self.asf.find_bytes(bytes.fromhex('0098a8428041c043c00f05b030bd'))
+        self.asf.patch(b'\x80', addr=off + 2, clobber=True)
+
     def motor_nagscreen(self):
         """ Remove "Motor life exceeded" nag screen """
         try:
@@ -669,6 +675,7 @@ if __name__ == "__main__":
         {'arg':"patch-fw-breath",       'desc':"Add breath binary to allow direct pressure control.",   'default':False, 'function':'patch_breath'},
         {'arg':"patch-fw-graph",        'desc':"Add graph binary to allow graphing of pressures.",      'default':False, 'function':'patch_graph'},
         {'arg':"patch-fw-vidspoof",     'desc':"Hook MOP write to dynamically set VID per therapy mode.", 'default':True, 'function':'patch_vid_spoof'},
+        {'arg':"patch-past-date",       'desc':"Allow setting past date in menu and UART.",             'default':True,  'function':'patch_past_date'},
         {'arg':"patch-motor-nagscreen", 'desc':"Remove \"Motor life exceeded\" nag screen",             'default':True,  'function':'motor_nagscreen'},
         {'arg':"patch-edf-merge",       'desc':"Merge universal EDF signal superset into CCX.",         'default':True,  'function':'patch_edf_merge'},
     ]

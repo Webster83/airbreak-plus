@@ -490,7 +490,7 @@ gui_config () {
 
 
 unlock_languages() {
-    printf "Unlocking all languages..."
+    echo "Unlocking all languages..."
     local addr=$(find_g6_var 0x0204)
     # make variable read only to prevent overwriting with eeprom data
     printf '\x06' | patch $addr
@@ -650,6 +650,17 @@ sys.stdout.buffer.write(struct.pack('<HH', hw1, hw2))
 }
 
 
+patch_past_date() {
+    # Allow setting past date in menu and UART
+
+    echo "Patching past date restriction"
+
+    # date direction check: cmp r0,r5 -> cmp r0,r0
+    local off
+    off=$(find_bytes "0098a8428041c043c00f05b030bd") || die "${FUNCNAME[0]}: date direction check not found"
+    printf '\x80' | patch $(( off + 2 ))
+}
+
 patch_edf_merge() {
     echo "Patching EDF signal superset"
     python3 ./python/edf_ccx_merge.py "$OUT" -o "$OUT" --force || die "EDF merge failed"
@@ -736,6 +747,7 @@ extra_modes
 gui_config
 motor_nagscreen
 unlock_languages
+patch_past_date
 patch_defaults
 
 patch_vid_spoof
