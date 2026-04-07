@@ -1,0 +1,259 @@
+#!/bin/bash
+
+die() { echo >&2 "$*" ; exit 1 ; }
+
+IN=$1
+OUT=$2
+
+FLASH_BASE=0x08000000
+
+BLX_OFF=0x00000;  BLX_SIZE=0x20000
+CCX_OFF=0x20000;  CCX_SIZE=0x20000
+CDX_OFF=0x40000;  CDX_SIZE=0x1C0000
+
+DEBUG_PATCH=""
+
+if [ -z "$IN" -o -z "$OUT" ]; then
+    die "Usage: $0 input.bin output.bin"
+fi
+
+if [ ! -r "$IN" ]; then
+    die "$IN: can not open input file"
+fi
+
+patch() {
+    offset=`printf "%d" $1`
+    if [ $DEBUG_PATCH ] ; then
+        printf "patching %08x\n" $1
+    fi
+    dd bs=1 seek=$offset conv=notrunc of="$OUT" status=none
+}
+
+
+read_u32() {
+    local offset=$(printf "%d" "$1")
+    dd if="$OUT" iflag=skip_bytes,count_bytes bs=4096 skip="$offset" count=4 status=none | \
+        perl -e 'read(STDIN, my $b, 4) == 4 or exit 1;
+            printf "%d\n", unpack("V", $b)'
+}
+
+crc16_region() {
+    local offset=$(printf "%d" "$1")
+    local length=$(printf "%d" "$2")
+
+    dd if="$OUT" bs=1 skip="$offset" count="$length" status=none | \
+    perl -e '
+        use strict;
+        use warnings;
+        binmode STDIN;
+        my $crc = 0xFFFF;
+        while (read(STDIN, my $buf, 4096)) {
+            foreach my $byte (unpack("C*", $buf)) {
+                $crc ^= ($byte << 8);
+                for (1..8) {
+                    if ($crc & 0x8000) {
+                        $crc = (($crc << 1) ^ 0x1021) & 0xFFFF;
+                    } else {
+                        $crc = ($crc << 1) & 0xFFFF;
+                    }
+                }
+            }
+        }
+        printf "%04X\n", $crc;
+    '
+}
+
+declare -A _globals_cache
+
+# master table: trampoline at CCX+0x100, pointer at CCX+0x104
+globals_addr() {
+    if [[ -z "${_globals_addr+x}" ]]; then
+        local mt_ptr
+        mt_ptr=$(read_u32 $(( CCX_OFF + 0x104 ))) || die "cannot read master table pointer"
+        _globals_addr=$(( mt_ptr - FLASH_BASE ))
+    fi
+    echo "$_globals_addr"
+}
+
+globals_offset() {
+    if [[ -z "${_globals_cache[$1]+x}" ]]; then
+        local ptr
+        ptr=$(read_u32 $(( $(globals_addr) + $1 * 4 ))) || return 1
+        _globals_cache[$1]=$(( ptr - FLASH_BASE ))
+    fi
+    echo "${_globals_cache[$1]}"
+}
+
+
+detect_platform() {
+    local platform model codename
+    platform=$(dd if="$OUT" iflag=skip_bytes,count_bytes bs=4096 skip=$(( CCX_OFF + 0x18 )) count=16 status=none | tr -d '\0')
+    model=$(dd if="$OUT" iflag=skip_bytes,count_bytes bs=4096 skip=$(( CCX_OFF + 0x28 )) count=16 status=none | tr -d '\0')
+    codename=$(dd if="$OUT" iflag=skip_bytes,count_bytes bs=4096 skip=$(( CCX_OFF + 0x38 )) count=16 status=none | tr -d '\0')
+
+    if [ "$platform" != "SIMPLICITY" ]; then
+        die "Not an AS11 firmware (platform='$platform')"
+    fi
+
+    echo "Platform:  $platform / $model / $codename"
+}
+
+# Compute array geometry from CCX
+setup_arrays() {
+    G2_BASE=$(globals_offset 2)  || die "cannot read globals[2]"
+    G5_BASE=$(globals_offset 5)  || die "cannot read globals[5]"
+    G1_BASE=$(globals_offset 1)  || die "cannot read globals[1]"
+    G3_BASE=$(globals_offset 3)  || die "cannot read globals[3]"
+
+    G2_STRIDE=32;  G2_ID_BASE=0x0000
+    G5_STRIDE=16;  G5_ID_BASE=0x02AC
+    G1_STRIDE=10;  G1_ID_BASE=0x0412
+    G3_STRIDE=20
+
+    # count records in a single perl pass (read-only)
+    eval "$(perl -e '
+        use strict; use warnings;
+        my ($file, $g2, $g5, $g1, $g3) = @ARGV;
+        open my $fh, "<:raw", $file or die "open: $!";
+        local $/; my $data = <$fh>; close $fh;
+
+        sub count_recs {
+            my ($base, $stride) = @_;
+            my $n = 0;
+            while (1) {
+                my $off = $base + $n * $stride;
+                last if $off + $stride > length($data);
+                my $vt = unpack("v", substr($data, $off, 2));
+                last if $vt < 0x200 || $vt > 0xFFF;
+                $n++;
+            }
+            return $n;
+        }
+        printf "G2_COUNT=%d\n", count_recs($g2, 32);
+        printf "G5_COUNT=%d\n", count_recs($g5, 16);
+        printf "G1_COUNT=%d\n", count_recs($g1, 10);
+        printf "G3_COUNT=%d\n", count_recs($g3, 20);
+    ' "$OUT" "$G2_BASE" "$G5_BASE" "$G1_BASE" "$G3_BASE")" \
+        || die "array count failed"
+
+    printf "Arrays:    g2=%d g5=%d g1=%d g3=%d\n" \
+        "$G2_COUNT" "$G5_COUNT" "$G1_COUNT" "$G3_COUNT"
+}
+
+# Unlock all 11 therapy modes.
+# g5 mode selectors: n_opts==11, mask restricted to bits 0-10.
+extra_modes() {
+    local result
+    result=$(perl -0777 -e '
+        open my $fh, "+<:raw", $ARGV[0] or die "open: $!";
+        local $/; my $data = <$fh>;
+        my ($g5, $count) = ('"$G5_BASE"', '"$G5_COUNT"');
+        my $patched = 0;
+        for my $i (0 .. $count - 1) {
+            my $off = $g5 + $i * 16;
+            my $n_opts = unpack("C", substr($data, $off + 9, 1));
+            next unless $n_opts == 11;
+            my $mask = unpack("V", substr($data, $off + 12, 4));
+            next if $mask == 0x07FF;               # already unlocked
+            next if $mask == 0 || ($mask & ~0x7FF); # not a mode gate
+            substr($data, $off + 12, 4) = pack("V", 0x07FF);
+            $patched++;
+        }
+        seek($fh, 0, 0) or die; print $fh $data; close $fh;
+        print "$patched";
+    ' "$OUT")
+    echo "Patching mode gates... $result selectors"
+}
+
+# Set ACT flag (bit 0 of vid_type) on all inactive descriptors in g2, g5, g1.
+gui_config() {
+    local result
+    result=$(perl -0777 -e '
+        open my $fh, "+<:raw", $ARGV[0] or die "open: $!";
+        local $/; my $data = <$fh>;
+        sub activate {
+            my ($data_ref, $base, $stride, $count) = @_;
+            my $n = 0;
+            for my $i (0 .. $count - 1) {
+                my $off = $base + $i * $stride;
+                my $vt = unpack("v", substr($$data_ref, $off, 2));
+                if ($vt >= 0x200 && !($vt & 1)) {
+                    substr($$data_ref, $off, 1) = chr(ord(substr($$data_ref, $off, 1)) | 1);
+                    $n++;
+                }
+            }
+            return $n;
+        }
+        my $g2 = activate(\$data, '"$G2_BASE"', 32, '"$G2_COUNT"');
+        my $g5 = activate(\$data, '"$G5_BASE"', 16, '"$G5_COUNT"');
+        my $g1 = activate(\$data, '"$G1_BASE"', 10, '"$G1_COUNT"');
+        seek($fh, 0, 0) or die; print $fh $data; close $fh;
+        print "g2=$g2 g5=$g5 g1=$g1";
+    ' "$OUT")
+    echo "Patching ACT flags... $result"
+}
+
+# Activate any inactive g3 mode-visibility groups.
+gui_visibility() {
+    local result
+    result=$(perl -0777 -e '
+        open my $fh, "+<:raw", $ARGV[0] or die "open: $!";
+        local $/; my $data = <$fh>;
+        my ($g3, $count) = ('"$G3_BASE"', '"$G3_COUNT"');
+        my $n = 0;
+        for my $i (0 .. $count - 1) {
+            my $off = $g3 + $i * 20;
+            my $vt = unpack("v", substr($data, $off, 2));
+            if ($vt >= 0x200 && !($vt & 1)) {
+                substr($data, $off, 1) = chr(ord(substr($data, $off, 1)) | 1);
+                $n++;
+            }
+        }
+        seek($fh, 0, 0) or die; print $fh $data; close $fh;
+        print $n;
+    ' "$OUT")
+    if (( result > 0 )); then
+        echo "Patching g3 visibility... $result groups"
+    fi
+}
+
+patch_crc() {
+    local regions=(
+        "$BLX_OFF $BLX_SIZE"
+        "$CCX_OFF $CCX_SIZE"
+        "$CDX_OFF $CDX_SIZE"
+    )
+
+    local off size payload_len crc
+
+    echo "Updating checksums"
+
+    for r in "${regions[@]}"; do
+        read -r off size <<< "$r"
+        off=$(printf "%d" "$off")
+        size=$(printf "%d" "$size")
+        payload_len=$(( size - 2 ))
+
+        crc=$(crc16_region "$off" "$payload_len") || {
+            echo "${FUNCNAME[0]}: CRC calculation failed"
+            return 1
+        }
+
+        printf "  block @0x%05X (%d bytes) -> CRC %s\n" "$off" "$size" "$crc"
+
+        printf '%b' "\x${crc:0:2}" "\x${crc:2:2}" | patch $(( off + payload_len ))
+    done
+}
+
+
+cp "$IN" "$OUT" || die "$OUT: copy failed"
+detect_platform
+setup_arrays
+
+extra_modes
+gui_config
+gui_visibility
+
+patch_crc  # ALWAYS keep it as last patch applied
+
+sha256sum "$OUT"
