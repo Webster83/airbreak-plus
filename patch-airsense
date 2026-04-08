@@ -675,6 +675,7 @@ motor_nagscreen () {
         if offset=$(find_bytes C000B304) ; then
             echo "Patching \"Motor life exceeded\" threshold"
             printf '\xFF\xFF\xFF\x7F' | patch $offset
+            return 0
         else
             echo "${FUNCNAME[0]}: runtime threshold not found!"
             return 1
