@@ -30,6 +30,40 @@ patch() {
 }
 
 
+find_bytes() {
+    # return values:
+    # 0: single address found (print on stdout)
+    # 1: not found
+    # 2: >1 occurrences found
+    local hex="$1"
+    perl -0777 -e '
+        my ($file, $hex) = @ARGV;
+
+        open my $fh, "<:raw", $file or exit 1;
+        local $/;
+        my $data = <$fh>;
+
+        my $pattern = pack("H*", $hex);
+
+        my @pos;
+        my $i = 0;
+        while (($i = index($data, $pattern, $i)) != -1) {
+            push @pos, $i;
+            $i++;
+            last if @pos > 1;
+        }
+
+        if (@pos == 1) {
+            print "$pos[0]\n";
+            exit 0;
+        } elsif (@pos > 1) {
+            exit 2;
+        } else {
+            exit 1;
+        }
+    ' "$OUT" "$hex"
+}
+
 read_u32() {
     local offset=$(printf "%d" "$1")
     dd if="$OUT" iflag=skip_bytes,count_bytes bs=4096 skip="$offset" count=4 status=none | \
@@ -217,6 +251,18 @@ gui_visibility() {
     fi
 }
 
+motor_nagscreen() {
+    local offset
+    if offset=$(find_bytes C000B304) ; then
+        echo -n "Patching \"Motor life exceeded\" threshold"
+        printf '\xFF\xFF\xFF\x7F' | patch $offset
+        echo "ok"
+    else
+        echo "${FUNCNAME[0]}: threshold not found!"
+        return 1
+    fi
+}
+
 patch_crc() {
     local regions=(
         "$BLX_OFF $BLX_SIZE"
@@ -253,6 +299,7 @@ setup_arrays
 extra_modes
 gui_config
 gui_visibility
+motor_nagscreen
 
 patch_crc  # ALWAYS keep it as last patch applied
 
