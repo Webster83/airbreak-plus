@@ -116,11 +116,13 @@ STR_SIGNAL_NAMES = [
     "TgtVent.50", "TgtVent.95", "TgtVent.Max",
     # [104-109] AEV (6 entries - superset, AV has 3-subset)
     "AHI", "HI", "AI", "OAI", "CAI", "UAI",
-    # [110-114] CSL tail - identical across all 4 variants
+    # [110] AEV (AS-only, 81-field AutoSet variants)
+    "RIN",
+    # [111-115] CSL tail - identical across all 4 variants
     "Fault.Device", "Fault.Alarm", "Fault.Humidifier", "Fault.HeatedTube", "Crc16",
 ]
 
-assert len(STR_SIGNAL_NAMES) == 115
+assert len(STR_SIGNAL_NAMES) == 116
 
 # g[12] field records - interleaved superset
 #
@@ -141,7 +143,7 @@ def _aev(vid):
 
 _EXT_REC = bytes([0x0D, 0x03]) + struct.pack('<HHHH', 0x012F, 0x0130, 0x0200, 0x0001)
 
-# Complete interleaved field record sequence (115 records)
+# Complete interleaved field record sequence (116 records)
 SUPERSET_RECORDS = [
     # [0] Date
     _CSL_A,
@@ -186,12 +188,14 @@ SUPERSET_RECORDS = [
     # [104-109] AEV (6 entries)
     _aev(0x0114), _aev(0x0117), _aev(0x0115),
     _aev(0x0121), _aev(0x0122), _aev(0x0118),
-    # [110-114] CSL tail (Fault.*, Crc16)
+    # [110] AEV (RIN - AS-only)
+    _aev(0x0152),
+    # [111-115] CSL tail (Fault.*, Crc16)
     _CSL_A, _CSL_A, _CSL_A, _CSL_A, _CSL_A,
 ]
 
 SUPERSET_FIELD_COUNT = len(SUPERSET_RECORDS)
-assert SUPERSET_FIELD_COUNT == 115
+assert SUPERSET_FIELD_COUNT == 116
 
 # g[13]+0x10 -> col1 start, g[13]+0x14 -> col2 start.
 # col1 = EDF signal column ID for this record
@@ -230,7 +234,9 @@ SUPERSET_COL1 = [
     0x002D, 0x002B, 0x002C,
     # [104-109] AEV (6)
     0x004C, 0x004F, 0x004D, 0x0056, 0x0057, 0x0058,
-    # [110-114] CSL tail (5)
+    # [110] AEV (RIN)
+    0x0050,
+    # [111-115] CSL tail (5)
     0x0201, 0x0202, 0x01FF, 0x0200, 0x0023,
 ]
 SUPERSET_COL2 = [
@@ -260,7 +266,9 @@ SUPERSET_COL2 = [
     0x0001, 0x0001, 0x0001,
     # [104-109] AEV: all 1
     0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001,
-    # [110-114] CSL tail: all 1
+    # [110] AEV (RIN)
+    0x0001,
+    # [111-115] CSL tail: all 1
     0x0001, 0x0001, 0x0001, 0x0001, 0x0001,
 ]
 assert len(SUPERSET_COL1) == SUPERSET_FIELD_COUNT
@@ -569,10 +577,10 @@ def build_g12_block(headers):
     
     Layout:
         +0x000: 3x24B headers (from source, unchanged)
-        +0x048: 115 superset field records x 10B (interleaved CSL/EVE/AEV/EXT)
-        +0x4FA: 115 x 2B col1 array (chain_start)
-        +0x5C8: 115 x 2B col2 array (chain_mid)
-        +0x696: end
+        +0x048: 116 superset field records x 10B (interleaved CSL/EVE/AEV/EXT)
+        +0x4D0: 116 x 2B col1 array (chain_start)
+        +0x5B8: 116 x 2B col2 array (chain_mid)
+        +0x6A0: end
     
     Returns the block bytes.
     """
