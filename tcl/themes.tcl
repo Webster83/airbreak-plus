@@ -5,46 +5,93 @@
 namespace eval theme {
 
     # --------------------------------------------------------
-    # Address layout
+    # Address layout (per-version)
     # --------------------------------------------------------
-    variable base_addr 0xf26f8
-    variable end_addr  0xf279c
     variable entry_len 4
-
-
-    # --------------------------------------------------------
-    # Color groups
-    # --------------------------------------------------------
+    variable cdx_ver ""
+    variable base_addr
+    variable end_addr
     variable groups
-    array set groups {
-        selected {0xf271c}
 
-        whites {
-            0xf26f8 0xf2714 0xf2720
-            0xf2738 0xf273c 0xf2740
-            0xf274c 0xf2768 0xf2774
-            0xf278c 0xf2790 0xf2794
-        }
+    # --------------------------------------------------------
+    # Detect CDX version and set palette addresses
+    # --------------------------------------------------------
+    proc _detect_version {} {
+        variable cdx_ver
+        variable base_addr
+        variable end_addr
+        variable groups
 
-        bright {
-            0xf26fc 0xf2704 0xf2750
-            0xf2758 0xf276c
-        }
+        set cdx_ver [patch::read_string 0x40000 11 -nul]
 
-        mid {
-            0xf2700 0xf2754
+        switch -exact -- $cdx_ver {
+            SX567-0401 - SX567-0306 {
+                set base_addr 0xf26f8
+                set end_addr  0xf279c
+                array set groups {
+                    selected {0xf271c}
+                    whites {
+                        0xf26f8 0xf2714 0xf2720
+                        0xf2738 0xf273c 0xf2740
+                        0xf274c 0xf2768 0xf2774
+                        0xf278c 0xf2790 0xf2794
+                    }
+                    bright {
+                        0xf26fc 0xf2704 0xf2750
+                        0xf2758 0xf276c
+                    }
+                    mid {
+                        0xf2700 0xf2754
+                    }
+                    low {
+                        0xf2708 0xf270c 0xf2728
+                        0xf2744 0xf275c 0xf2760
+                        0xf277c 0xf2798
+                    }
+                    black {
+                        0xf2710 0xf272c 0xf2748
+                        0xf2764 0xf2780 0xf279c
+                    }
+                }
+            }
+            SX567-0402 {
+                set base_addr 0xf2970
+                set end_addr  0xf2a14
+                array set groups {
+                    selected {0xf2994}
+                    whites {
+                        0xf2970 0xf298c 0xf2998
+                        0xf29b0 0xf29b4 0xf29b8
+                        0xf29c4 0xf29e0 0xf29ec
+                        0xf2a04 0xf2a08 0xf2a0c
+                    }
+                    bright {
+                        0xf2974 0xf297c 0xf29c8
+                        0xf29d0 0xf29e4
+                    }
+                    mid {
+                        0xf2978 0xf29cc
+                    }
+                    low {
+                        0xf2980 0xf2984 0xf29a0
+                        0xf29bc 0xf29d4 0xf29d8
+                        0xf29f4 0xf2a10
+                    }
+                    black {
+                        0xf2988 0xf29a4 0xf29c0
+                        0xf29dc 0xf29f8 0xf2a14
+                    }
+                }
+            }
+            default {
+                error "theme: unsupported CDX version \"$cdx_ver\""
+            }
         }
+    }
 
-        low {
-            0xf2708 0xf270c 0xf2728
-            0xf2744 0xf275c 0xf2760
-            0xf277c 0xf2798
-        }
-
-        black {
-            0xf2710 0xf272c 0xf2748
-            0xf2764 0xf2780 0xf279c
-        }
+    proc _ensure_version {} {
+        variable cdx_ver
+        if {$cdx_ver eq ""} { _detect_version }
     }
 
 
@@ -425,6 +472,7 @@ namespace eval theme {
     # --------------------------------------------------------
 
     proc apply {name} {
+        _ensure_version
         variable themes
 
         if {![dict exists $themes $name]} {
@@ -486,6 +534,7 @@ namespace eval theme {
 
 
     proc patch_group {group givencolor} {
+        _ensure_version
         variable groups
 
         if {![info exists groups($group)]} {
@@ -502,6 +551,7 @@ namespace eval theme {
     }
 
     proc patch_groups {group_color_pairs} {
+        _ensure_version
         variable groups
 
         patch::with_guard {
@@ -567,6 +617,7 @@ namespace eval theme {
     # --------------------------------------------------------
 
     proc current {{arg ""}} {
+        _ensure_version
         variable themes
         variable groups
         variable base_addr
@@ -636,6 +687,7 @@ namespace eval theme {
     # --------------------------------------------------------
 
     proc usage {} {
+        _ensure_version
         variable themes
         variable groups
         variable base_addr
