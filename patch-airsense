@@ -686,21 +686,23 @@ patch_edf_merge() {
 
 motor_nagscreen () {
 
-    local offset=0x0f23e0
-    if ! printf '\x05\xdb' | check_patch $offset ; then
-        echo "${FUNCNAME[0]}: unexpected bytes at patch location! Trying treshold patch..."
-        if offset=$(find_bytes C000B304) ; then
-            echo "Patching \"Motor life exceeded\" threshold"
-            printf '\xFF\xFF\xFF\x7F' | patch $offset
-            return 0
-        else
-            echo "${FUNCNAME[0]}: runtime threshold not found!"
-            return 1
-        fi
+    local offset
+    if offset=$(find_bytes "0E49884205DB03210F20") ; then
+        echo "Patching \"Motor life exceeded\" nag screen"
+        printf '\x05\xe0' | patch $(( offset + 4 ))
+        return 0
     fi
 
-    echo "Patching \"Motor life exceeded\" nag screen"
-    printf '\x05\xe0' | patch $offset
+    # fallback: find and patch runtime threshold
+    echo "${FUNCNAME[0]}: BLT patch failed, trying threshold patch..."
+    if offset=$(find_bytes C000B304) ; then
+        echo "Patching \"Motor life exceeded\" threshold"
+        printf '\xFF\xFF\xFF\x7F' | patch $offset
+        return 0
+    fi
+
+    echo "${FUNCNAME[0]}: neither patch location found!"
+    return 1
 }
 
 patch_defaults() {
