@@ -1,7 +1,40 @@
 namespace eval lang {
 
-    variable MASK_ADDR  0x2001ff3c
-    variable LANG_ADDR  0x200104b6
+    variable MASK_ADDR ""
+    variable LANG_ADDR ""
+    variable cdx_ver ""
+
+    proc _detect_version {} {
+        variable MASK_ADDR
+        variable LANG_ADDR
+        variable cdx_ver
+
+        set ver_bytes [read_memory 0x08040000 8 11]
+        set cdx_ver ""
+        foreach b $ver_bytes {
+            if {$b == 0} break
+            append cdx_ver [format %c $b]
+        }
+
+        switch -exact -- $cdx_ver {
+            SX567-0401 - SX567-0306 {
+                set MASK_ADDR 0x2001ff3c
+                set LANG_ADDR 0x200104b6
+            }
+            SX567-0402 {
+                set MASK_ADDR 0x2001ff3c
+                set LANG_ADDR 0x200104c2
+            }
+            default {
+                error "lang: unsupported CDX version \"$cdx_ver\""
+            }
+        }
+    }
+
+    proc _ensure_version {} {
+        variable cdx_ver
+        if {$cdx_ver eq ""} { _detect_version }
+    }
 
     # Language table: id -> name
     variable LANG_NAME
@@ -162,6 +195,7 @@ namespace eval lang {
     # ---------------- commands ----------------
 
     proc lang {{value ""}} {
+        _ensure_version
         variable LANG_ADDR
 
         if {$value in {"-h" "--help" "help"}} {
@@ -180,6 +214,7 @@ namespace eval lang {
 
 
     proc mask {args} {
+        _ensure_version
         variable MASK_ADDR
 
         if {[llength $args] == 1 && [lindex $args 0] in {"-h" "--help" "help"}} {
