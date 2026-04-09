@@ -4,21 +4,29 @@
 SRC=patches
 BUILD=build
 
-VID_SPOOF_VERSIONS := 0401 0306 0305 0302
+VID_SPOOF_VERSIONS := 0401 0306 0305 0302 0402
 VID_SPOOF_BINS = $(foreach v,$(VID_SPOOF_VERSIONS),$(BUILD)/vid_spoof_$(v).bin)
+
+S10_CODE_VERSIONS := 0401 0402
+S10_CODE_BINS = $(foreach v,$(S10_CODE_VERSIONS),\
+	$(BUILD)/common_code_$(v).bin \
+	$(BUILD)/graph_$(v).bin \
+	$(BUILD)/squarewave_$(v).bin \
+	$(BUILD)/asv_task_wrapper_$(v).bin \
+	$(BUILD)/wrapper_limit_max_pdiff_$(v).bin)
 
 all: $(BUILD)/stm32-patched.bin $(BUILD)/stm32-asv.bin
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/stm32-patched.bin: patch-airsense $(BUILD)/common_code.bin $(BUILD)/graph.bin $(VID_SPOOF_BINS)
+$(BUILD)/stm32-patched.bin: patch-airsense $(S10_CODE_BINS) $(VID_SPOOF_BINS)
 	export PATCH_CODE=1 && ./patch-airsense stm32.bin $@
 
-$(BUILD)/stm32-asv.bin: patch-airsense $(BUILD)/common_code.bin $(BUILD)/graph.bin $(BUILD)/squarewave.bin $(BUILD)/asv_task_wrapper.bin $(BUILD)/wrapper_limit_max_pdiff.bin $(VID_SPOOF_BINS)
+$(BUILD)/stm32-asv.bin: patch-airsense $(S10_CODE_BINS) $(VID_SPOOF_BINS)
 	export PATCH_CODE=1 && export PATCH_S=1 && export PATCH_ASV_TASK_WRAPPER=1 && export PATCH_VAUTO_WRAPPER=1 && ./patch-airsense stm32.bin $@
 
-binaries: $(BUILD)/common_code.bin $(BUILD)/graph.bin $(BUILD)/squarewave.bin $(BUILD)/asv_task_wrapper.bin $(BUILD)/wrapper_limit_max_pdiff.bin $(VID_SPOOF_BINS)
+binaries: $(S10_CODE_BINS) $(VID_SPOOF_BINS)
 
 serve:
 	mkdocs serve
@@ -29,32 +37,61 @@ deploy:
 # but if you substantially increase the amount of code, beware collisions.
 # I've already had several happen in the past, whoops :F
 
-$(BUILD)/common_code.elf: $(BUILD)/common_code.o $(BUILD)/stubs.o
+# Per-version S10 code patches
+# Each version has its own stubs.S with platform-specific addresses.
+# Binaries are built per-version: common_code_0401.bin, graph_0402.bin, etc.
+#
+# Code cave layout (unified across versions):
+#   0x80fd000  graph         (~1KB growth room)
+#   0x80fd400  squarewave
+#   0x80fd800  s10_lcd_ili9325
+#   0x80fdf00  asv_task_wrapper / asv_disable_backup_rate
+#   0x80fe000  common_code
+#   0x80fef00  vid_spoof
+#   0x80ff000  wrapper_limit_max_pdiff
+
 common_code-offset := 0x80fe000
-
-# The graphing is too large to fit directly in the location at 0x8067d2c,
-# so it is in high in the flash and the function pointer is fixed up at 0x80f9c88
-$(BUILD)/graph.elf: $(BUILD)/graph.o $(BUILD)/stubs.o
-graph-offset := 0x80fcd40
-graph-extra := --just-symbols=$(BUILD)/common_code.elf
-
-$(BUILD)/squarewave.elf: $(BUILD)/squarewave.o $(BUILD)/stubs.o
-squarewave-offset := 0x80fd200
-squarewave-extra := --just-symbols=$(BUILD)/common_code.elf
-
-$(BUILD)/asv_task_wrapper.elf: $(BUILD)/asv_task_wrapper.o $(BUILD)/stubs.o
+graph-offset := 0x80fd000
+squarewave-offset := 0x80fd400
 asv_task_wrapper-offset := 0x80fdf00
-asv_task_wrapper-extra := --just-symbols=$(BUILD)/common_code.elf
-
-$(BUILD)/wrapper_limit_max_pdiff.elf: $(BUILD)/wrapper_limit_max_pdiff.o $(BUILD)/stubs.o
 wrapper_limit_max_pdiff-offset := 0x80ff000
-wrapper_limit_max_pdiff-extra := --just-symbols=$(BUILD)/common_code.elf
 
-# If there is a new version of the ghidra XML, the stubs.S
-# file will be regenerated so that the addresses and functions
-# are at the correct address in the ELF image.
-#stubs.S: stm32.bin.xml
-#	./ghidra2stubs < $< > $@
+define S10_CODE_VERSION_template
+$(BUILD)/s10_$(1)_stubs.o: $(SRC)/s10_$(1)_stubs.S | $(BUILD)
+	$$(AS) $$(ASFLAGS) -c -o $$@ $$<
+
+$(BUILD)/common_code_$(1).elf: $(BUILD)/common_code.o $(BUILD)/s10_$(1)_stubs.o | $(BUILD)
+	$$(LD) --nostdlib --no-dynamic-linker \
+		--Ttext $(common_code-offset) --entry start --sort-section=name \
+		-o $$@ $$^
+
+$(BUILD)/graph_$(1).elf: $(BUILD)/graph.o $(BUILD)/s10_$(1)_stubs.o | $(BUILD)
+	$$(LD) --nostdlib --no-dynamic-linker \
+		--Ttext $(graph-offset) \
+		--just-symbols=$$(BUILD)/common_code_$(1).elf \
+		--entry start --sort-section=name -o $$@ $$^
+
+$(BUILD)/squarewave_$(1).elf: $(BUILD)/squarewave.o $(BUILD)/s10_$(1)_stubs.o | $(BUILD)
+	$$(LD) --nostdlib --no-dynamic-linker \
+		--Ttext $(squarewave-offset) \
+		--just-symbols=$$(BUILD)/common_code_$(1).elf \
+		--entry start --sort-section=name -o $$@ $$^
+
+$(BUILD)/asv_task_wrapper_$(1).elf: $(BUILD)/asv_task_wrapper.o $(BUILD)/s10_$(1)_stubs.o | $(BUILD)
+	$$(LD) --nostdlib --no-dynamic-linker \
+		--Ttext $(asv_task_wrapper-offset) \
+		--just-symbols=$$(BUILD)/common_code_$(1).elf \
+		--entry start --sort-section=name -o $$@ $$^
+
+$(BUILD)/wrapper_limit_max_pdiff_$(1).elf: $(BUILD)/wrapper_limit_max_pdiff.o $(BUILD)/s10_$(1)_stubs.o | $(BUILD)
+	$$(LD) --nostdlib --no-dynamic-linker \
+		--Ttext $(wrapper_limit_max_pdiff-offset) \
+		--just-symbols=$$(BUILD)/common_code_$(1).elf \
+		--entry start --sort-section=name -o $$@ $$^
+endef
+
+$(foreach v,$(S10_CODE_VERSIONS),$(eval $(call S10_CODE_VERSION_template,$(v))))
+
 
 
 CROSS ?= arm-none-eabi-
@@ -89,7 +126,6 @@ LDFLAGS ?= \
 	--entry start \
 	--sort-section=name \
 
-# TODO: Sort sections by name, lay out main before the rest, to avoid inlining everything
 
 # $(BUILD)/shared_code.o: $(BUILD)/shared_code.c
 # 	$(CC) $(CFLAGS) -static -shared -c -o $@ $<
@@ -190,15 +226,12 @@ $(BUILD)/stm32-s9-lcd.bin: patch-airsense-s9 s9_lcd_ili9225 | $(BUILD)
 # Usage: PATCH_S10_LCD=1 ./patch-airsense stm32.bin output.bin
 
 S10_LCD_OFFSET ?= 0x080FD800
-S10_LCD_VERSIONS := 0401
+S10_LCD_VERSIONS := 0401 0402
 
 $(BUILD)/s10_lcd_ili9325.o: $(SRC)/s10_lcd_ili9325.c | $(BUILD)
 	$(CC) $(CFLAGS) -Wno-unused-parameter -c -o $@ $<
 
 define S10_LCD_VERSION_template
-$(BUILD)/s10_$(1)_stubs.o: $(SRC)/s10_$(1)_stubs.S | $(BUILD)
-	$$(AS) $$(ASFLAGS) -c -o $$@ $$<
-
 $(BUILD)/s10_lcd_ili9325_$(1).elf: $(BUILD)/s10_lcd_ili9325.o $(BUILD)/s10_$(1)_stubs.o | $(BUILD)
 	$$(LD) --nostdlib --no-dynamic-linker \
 		--Ttext $$(S10_LCD_OFFSET) --entry lcd_board_init --sort-section=name \
@@ -223,6 +256,7 @@ s10_lcd_ili9325: $(foreach v,$(S10_LCD_VERSIONS),$(BUILD)/s10_lcd_ili9325_$(v).b
 VID_SPOOF_OFFSET := 0x80fef00
 
 #                       ORIG        HANDLER     MOP         VTENTRY
+vid_spoof_addrs_0402 := 0x0806A51D  0x200096A0  0x200104AE  0xF1744
 vid_spoof_addrs_0401 := 0x0806A51D  0x20009694  0x200104A2  0xF14CC
 vid_spoof_addrs_0306 := 0x0806A51D  0x20009694  0x200104A2  0xF126C
 vid_spoof_addrs_0305 := 0x0806A519  0x20009694  0x20010736  0xF1350

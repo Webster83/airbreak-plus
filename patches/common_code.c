@@ -46,25 +46,25 @@ typedef struct {
   void** pointers;
 } magic_ptr_t;
 
-// At the very start of a segment of memory addresses not used by the device.
-// Other candidates include: 0be0, 2978, 2980, 4560
-magic_ptr_t * const magic_ptr = (void*) (0x20000be0); 
+// NSTUB defines magic_ptr as an absolute symbol at the RAM address.
+extern magic_ptr_t magic_ptr __attribute__((section(".absolute")));
+#define magic_ptr_p (&magic_ptr)
 const unsigned MAGIC = 0x07E49001;
 
 void *get_pointer(ptr_index index, int size, void (*init_fn)(void*)) {
   const int max_pointers = __PTR_LAST;
-  if (magic_ptr->magic != MAGIC) {
-    magic_ptr->pointers = malloc(sizeof(void*) * max_pointers);
-    magic_ptr->magic = MAGIC;
+  if (magic_ptr_p->magic != MAGIC) {
+    magic_ptr_p->pointers = malloc(sizeof(void*) * max_pointers);
+    magic_ptr_p->magic = MAGIC;
     for(int i=0; i<max_pointers; i++) {
-      magic_ptr->pointers[i] = 0;
+      magic_ptr_p->pointers[i] = 0;
     }
   }
-  if (magic_ptr->pointers[index] == 0) {
-    magic_ptr->pointers[index] = malloc(size);
-    init_fn(magic_ptr->pointers[index]);
+  if (magic_ptr_p->pointers[index] == 0) {
+    magic_ptr_p->pointers[index] = malloc(size);
+    init_fn(magic_ptr_p->pointers[index]);
   }
-  return magic_ptr->pointers[index];
+  return magic_ptr_p->pointers[index];
 }
 
 

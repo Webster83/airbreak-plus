@@ -16,9 +16,9 @@ typedef __fp16 float16;
 typedef enum { false, true } bool;
 
 
-// PAP memory addresses
-static float * const fvars = (void*) 0x2000e948;
-static int * const ivars = (void*) 0x2000e750;
+// PAP memory addresses (resolved from per-version stubs.S)
+extern float fvars[];
+extern int ivars[];
 
 static float *cmd_ps = &fvars[0x29]; // (cmH2O)
 static float *cmd_epap = &fvars[0x28]; // (cmH2O)
