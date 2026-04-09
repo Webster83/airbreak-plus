@@ -524,7 +524,7 @@ def detect_variant(data, g):
         s = data[off:off + 30].split(b'\x00')[0].decode('ascii', errors='replace')
         names.append(s)
     
-    if n == 80 and "S.AS.MaxPress" in names:
+    if n in (80, 81) and "S.AS.MaxPress" in names:
         return "AutoSet", n
     elif n == 97 and "S.VA.StartPress" in names:
         return "VAuto", n
