@@ -15,7 +15,7 @@ import argparse
 import hashlib
 import crcmod
 import crcmod.predefined
-import os.path
+import os
 import struct
 import re
 import sys
@@ -381,6 +381,7 @@ class ASFirmwarePatches(object):
     def extra_menu(self):
         #try enabling extra menu items
         cdx_patches = {
+            'SX567-0402': [(0x66470, b'\x01\x20')],
             'SX567-0401': [(0x66470, b'\x01\x20')],
             'SX567-0306': [(0x66470, b'\x01\x20')],
             'SX567-0305': [(0x66470, b'\x01\x20')],
@@ -396,9 +397,13 @@ class ASFirmwarePatches(object):
     def all_menu(self):
         # If you want all menu items to always be visible, let this section run
         cdx_patches = {
-            'SX567-0401': [
+            'SX567-0402': [
                 (0x6e502, b'\x01\x20'),  # force status bit 5 always on - always editable
                 (0x6e4c4, b'\x01\x20'),  # force status bit 4 always on - visible regardless of mode
+            ],
+            'SX567-0401': [
+                (0x6e502, b'\x01\x20'),
+                (0x6e4c4, b'\x01\x20'),
             ],
             'SX567-0306': [
                 (0x6e502, b'\x01\x20'),
@@ -421,6 +426,7 @@ class ASFirmwarePatches(object):
         #
         # CDX code patches: zero the 0xfa (5.0 cmH2O) immediate in add.w/sub.w
         cdx_patches = {
+            'SX567-0402': [(0x76c08, b'\x00'), (0x76c34, b'\x00'), (0x76cca, b'\x00')],
             'SX567-0401': [(0x76c08, b'\x00'), (0x76c34, b'\x00'), (0x76cca, b'\x00')],
             'SX567-0306': [(0x76c08, b'\x00'), (0x76c34, b'\x00'), (0x76cca, b'\x00')],
             'SX567-0305': [(0x76c0c, b'\x00'), (0x76c38, b'\x00'), (0x76cce, b'\x00')],
@@ -536,17 +542,118 @@ class ASFirmwarePatches(object):
         irq_location_packed = struct.pack("<I", 0x08000000 + irq_location + 1)
         self.asf.patch(irq_location_packed, 0x402dc, clobber=True)
         
+    def _load_versioned_bin(self, name):
+        """Load a per-version binary from build/. Returns (data, ver) or (None, ver)."""
+        ver = self.asf.cdx_ver.replace('SX567-', '')
+        bin_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                '..', 'build', '%s_%s.bin' % (name, ver))
+        if not os.path.exists(bin_path):
+            print("  %s: build/%s_%s.bin not found (run make)" % (name, name, ver))
+            return None, ver
+        with open(bin_path, 'rb') as f:
+            return f.read(), ver
+
+    def _patch_pointer(self, data, offset, fptr_offset, flash_base=0x08000000):
+        """Inject binary at offset and write Thumb pointer to fptr_offset."""
+        self.asf.patch(data, offset, checkempty=True)
+        thumb_ptr = struct.pack('<I', flash_base + offset + 1)
+        self.asf.patch(thumb_ptr, fptr_offset, clobber=True)
+
+    def patch_common_code(self):
+        """Inject common_code shared library (required by graph, squarewave, etc.)"""
+        data, ver = self._load_versioned_bin('common_code')
+        if data is None:
+            return
+        print("Patching common_code (%d bytes)" % len(data))
+        self.asf.patch(data, 0xfe000, checkempty=True)
+
     def patch_graph(self):
         """Add special graph module"""
-        f = open("../graph.bin", "rb")
-        fw = f.read()
-        f.close()
-        
-        #Place into empty space
-        self.asf.patch(fw, 0xfd000, checkempty=True)
-        
-        #Overwrite calling address
-        self.asf.patch(b'\x01\xd0\x0f\x08', 0xf9c88, clobber=True)
+        data, ver = self._load_versioned_bin('graph')
+        if data is None:
+            return
+        FPTR = {'0401': 0xf9c88, '0402': 0xf9f00}
+        fptr = FPTR.get(ver)
+        if fptr is None:
+            print("  patch_graph: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
+            return
+        print("Patching graph (%d bytes)" % len(data))
+        self._patch_pointer(data, 0xfd000, fptr)
+
+    def patch_squarewave(self):
+        """Add squarewave pressure mode"""
+        data, ver = self._load_versioned_bin('squarewave')
+        if data is None:
+            return
+        FPTR = {'0401': 0xf9778, '0402': 0xf99f0}
+        fptr = FPTR.get(ver)
+        if fptr is None:
+            print("  patch_squarewave: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
+            return
+        print("Patching squarewave (%d bytes)" % len(data))
+        self._patch_pointer(data, 0xfd400, fptr)
+
+    def patch_asv_task_wrapper(self):
+        """Suppress ASV backup breathing rate"""
+        data, ver = self._load_versioned_bin('asv_task_wrapper')
+        if data is None:
+            return
+        FPTR = {'0401': 0xf44e0, '0306': 0xf44e0, '0402': 0xf4758}
+        fptr = FPTR.get(ver)
+        if fptr is None:
+            print("  patch_asv_task_wrapper: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
+            return
+        print("Patching ASV task wrapper (%d bytes)" % len(data))
+        self._patch_pointer(data, 0xfdf00, fptr)
+
+    def patch_wrapper_limit_max_pdiff(self):
+        """Add VAuto/ASV pressure shaping wrapper"""
+        data, ver = self._load_versioned_bin('wrapper_limit_max_pdiff')
+        if data is None:
+            return
+        FPTR = {'0401': 0xf93d0, '0402': 0xf9648}
+        fptr = FPTR.get(ver)
+        if fptr is None:
+            print("  patch_wrapper_limit_max_pdiff: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
+            return
+        print("Patching wrapper_limit_max_pdiff (%d bytes)" % len(data))
+        self._patch_pointer(data, 0xff000, fptr)
+
+    def patch_lcd_ili9325(self):
+        """Universal ILI9325/ILI9328 + ILI9341 LCD driver"""
+        ver = self.asf.cdx_ver.replace('SX567-', '')
+        BL_OFF_MAP = {'0401': 0x7C030, '0402': 0x7C030}
+        bl_off = BL_OFF_MAP.get(ver)
+        if bl_off is None:
+            print("  patch_lcd_ili9325: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
+            return
+        expected_bl = b'\xFF\xF7\x7A\xFE'
+        if bytes(self.asf.fw[bl_off:bl_off+4]) != expected_bl:
+            print("  patch_lcd_ili9325: unexpected bytes at BL 0x%X" % bl_off)
+            return
+        data, ver = self._load_versioned_bin('s10_lcd_ili9325')
+        if data is None:
+            return
+        lcd_offset = 0xFD800
+        print("Patching LCD ILI9325 driver (%d bytes at 0x%X)" % (len(data), lcd_offset))
+        self.asf.patch(data, lcd_offset, checkempty=True)
+        # Compute BL encoding from bl_off to lcd_board_init (entry point = lcd_offset)
+        src = bl_off + 0x08000004
+        dst = 0x08000000 + lcd_offset + 1  # Thumb
+        offset = dst - src
+        S = 1 if offset < 0 else 0
+        if offset < 0:
+            offset += (1 << 25)
+        I1 = (offset >> 23) & 1
+        I2 = (offset >> 22) & 1
+        imm10 = (offset >> 12) & 0x3FF
+        imm11 = (offset >> 1) & 0x7FF
+        J1 = (~(I1 ^ S)) & 1
+        J2 = (~(I2 ^ S)) & 1
+        hw1 = 0xF000 | (S << 10) | imm10
+        hw2 = 0xD000 | (J1 << 13) | (J2 << 11) | imm11
+        bl_bytes = struct.pack('<HH', hw1, hw2)
+        self.asf.patch(bl_bytes, bl_off, clobber=True)
 
     def patch_breath(self):
         """Add breath routine to allow full control"""
@@ -559,44 +666,27 @@ class ASFirmwarePatches(object):
 
     def patch_vid_spoof(self):
         """Hook MOP writeback to dynamically set VID per therapy mode"""
-        import os, struct
-
-        # Must match Makefile VID_SPOOF_OFFSET
         VID_SPOOF_OFFSET = 0xFEF00
-        VID_SPOOF_VERSIONS = {
-            #             vtable_entry  expected_vt
-            'SX567-0401': (0xF14CC, b'\x1d\xa5\x06\x08'),
-            'SX567-0306': (0xF126C, b'\x1d\xa5\x06\x08'),
-            'SX567-0305': (0xF1350, b'\x19\xa5\x06\x08'),
-            'SX567-0302': (0xF0B54, b'\xf5\x9d\x06\x08'),
+        VTABLE_ENTRIES = {
+            '0402': (0xF1744, b'\x1d\xa5\x06\x08'),
+            '0401': (0xF14CC, b'\x1d\xa5\x06\x08'),
+            '0306': (0xF126C, b'\x1d\xa5\x06\x08'),
+            '0305': (0xF1350, b'\x19\xa5\x06\x08'),
+            '0302': (0xF0B54, b'\xf5\x9d\x06\x08'),
         }
-
-        info = VID_SPOOF_VERSIONS.get(self.asf.cdx_ver)
+        data, ver = self._load_versioned_bin('vid_spoof')
+        if data is None:
+            return
+        info = VTABLE_ENTRIES.get(ver)
         if info is None:
             print("  patch_vid_spoof: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
             return
-
         vtable_entry, expected_vt = info
-
         if bytes(self.asf.fw[vtable_entry:vtable_entry+4]) != expected_vt:
             print("  patch_vid_spoof: unexpected bytes at vtable entry, already patched?")
             return
-
-        ver = self.asf.cdx_ver.replace('SX567-', '')
-        bin_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                '..', 'build', 'vid_spoof_%s.bin' % ver)
-        if not os.path.exists(bin_path):
-            print("  patch_vid_spoof: build/vid_spoof_%s.bin not found (run make vid_spoof)" % ver)
-            return
-
-        with open(bin_path, 'rb') as f:
-            payload = f.read()
-
-        print("Patching VID spoof (%d bytes at 0x%X)" % (len(payload), VID_SPOOF_OFFSET))
-        self.asf.patch(payload, VID_SPOOF_OFFSET, checkempty=True)
-
-        hook_thumb = 0x08000000 + VID_SPOOF_OFFSET + 1
-        self.asf.patch(struct.pack('<I', hook_thumb), vtable_entry, clobber=True)
+        print("Patching VID spoof (%d bytes at 0x%X)" % (len(data), VID_SPOOF_OFFSET))
+        self._patch_pointer(data, VID_SPOOF_OFFSET, vtable_entry)
 
 
     def patch_past_date(self):
@@ -673,8 +763,13 @@ if __name__ == "__main__":
         {'arg':"patch-logos",           'desc':"Change start-up logos.",                                'default':False, 'function':'patch_logos'},
         {'arg':"patch-fw-serialmonitor",'desc':"Add monitor binary running on USART3 accessory port.",  'default':False, 'function':'patch_uart3_monitor'},
         {'arg':"patch-fw-breath",       'desc':"Add breath binary to allow direct pressure control.",   'default':False, 'function':'patch_breath'},
+        {'arg':"patch-fw-common-code",  'desc':"Inject shared code library (required by graph, squarewave, etc.).", 'default':False, 'function':'patch_common_code'},
         {'arg':"patch-fw-graph",        'desc':"Add graph binary to allow graphing of pressures.",      'default':False, 'function':'patch_graph'},
+        {'arg':"patch-fw-squarewave",   'desc':"Add squarewave pressure mode.",                         'default':False, 'function':'patch_squarewave'},
+        {'arg':"patch-fw-asv-wrapper",  'desc':"Suppress ASV backup breathing rate.",                   'default':False, 'function':'patch_asv_task_wrapper'},
+        {'arg':"patch-fw-vauto-wrapper",'desc':"Add VAuto/ASV pressure shaping wrapper.",               'default':False, 'function':'patch_wrapper_limit_max_pdiff'},
         {'arg':"patch-fw-vidspoof",     'desc':"Hook MOP write to dynamically set VID per therapy mode.", 'default':True, 'function':'patch_vid_spoof'},
+        {'arg':"patch-fw-lcd",          'desc':"Universal ILI9325/ILI9328 LCD driver.",                 'default':False, 'function':'patch_lcd_ili9325'},
         {'arg':"patch-past-date",       'desc':"Allow setting past date in menu and UART.",             'default':True,  'function':'patch_past_date'},
         {'arg':"patch-motor-nagscreen", 'desc':"Remove \"Motor life exceeded\" nag screen",             'default':True,  'function':'motor_nagscreen'},
         {'arg':"patch-edf-merge",       'desc':"Merge universal EDF signal superset into CCX.",         'default':True,  'function':'patch_edf_merge'},

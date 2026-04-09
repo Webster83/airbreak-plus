@@ -277,39 +277,68 @@ le_thumb_ptr() {
 }
 
 patch_code_common() {
-    echo "Patching common_code.c"
-    patch_direct build/common_code.bin 0xfe000
+    local ver=${CDX_VER#SX567-}
+    local BIN=build/common_code_${ver}.bin
+    echo "Patching common_code.c ($ver)"
+    patch_direct "$BIN" 0xfe000
 }
 
 patch_code_graph() {
-    echo "Patching graphing code"
-    patch_pointer build/graph.bin 0xfcd40 0xf9c88 '\x41\xcd\x0f\x08'
+    local ver=${CDX_VER#SX567-}
+    local BIN=build/graph_${ver}.bin
+    local FPTR
+    case "$ver" in
+        0401) FPTR=0xf9c88 ;;
+        0402) FPTR=0xf9f00 ;;
+        *) echo "  patch_code_graph: unsupported $ver"; return 1 ;;
+    esac
+    echo "Patching graphing code ($ver)"
+    patch_pointer "$BIN" 0xfd000 "$FPTR" "$(le_thumb_ptr 0x80fd000)"
 }
 
-# Replaces not_called_during_loop
 patch_code_squarewave() {
-    echo "Patching Squarewave"
-    patch_pointer build/squarewave.bin 0xfd200 0xf9778 '\x01\xd2\x0f\x08'
+    local ver=${CDX_VER#SX567-}
+    local BIN=build/squarewave_${ver}.bin
+    local FPTR
+    case "$ver" in
+        0401) FPTR=0xf9778 ;;
+        0402) FPTR=0xf99f0 ;;
+        *) echo "  patch_code_squarewave: unsupported $ver"; return 1 ;;
+    esac
+    echo "Patching Squarewave ($ver)"
+    patch_pointer "$BIN" 0xfd400 "$FPTR" "$(le_thumb_ptr 0x80fd400)"
 }
-
-# patch_code_squarewave_pav() {
-#     patch_pointer build/squarewave_pav.bin 0xfd000 0xf9778 '\x01\xd0\x0f\x08'
-# }
 
 patch_code_asv_task_wraper() {
-    echo "Patching ASV task wrapper"
-    patch_pointer build/asv_task_wrapper.bin 0xfdf00 0xf44e0 '\x01\xdf\x0f\x08'
+    local ver=${CDX_VER#SX567-}
+    local BIN=build/asv_task_wrapper_${ver}.bin
+    local FPTR
+    case "$ver" in
+        0401|0306) FPTR=0xf44e0 ;;
+        0402) FPTR=0xf4758 ;;
+        *) echo "  patch_code_asv_task_wraper: unsupported $ver"; return 1 ;;
+    esac
+    echo "Patching ASV task wrapper ($ver)"
+    patch_pointer "$BIN" 0xfdf00 "$FPTR" "$(le_thumb_ptr 0x80fdf00)"
 }
 
 patch_wrapper_limit_max_pdiff() {
-    echo "Patching wrapper for pressure_limit_max_diff"
-    patch_pointer build/wrapper_limit_max_pdiff.bin 0xff000 0xf93d0 '\x01\xf0\x0f\x08'
+    local ver=${CDX_VER#SX567-}
+    local BIN=build/wrapper_limit_max_pdiff_${ver}.bin
+    local FPTR
+    case "$ver" in
+        0401) FPTR=0xf93d0 ;;
+        0402) FPTR=0xf9648 ;;
+        *) echo "  patch_wrapper_limit_max_pdiff: unsupported $ver"; return 1 ;;
+    esac
+    echo "Patching wrapper for pressure_limit_max_diff ($ver)"
+    patch_pointer "$BIN" 0xff000 "$FPTR" "$(le_thumb_ptr 0x80ff000)"
 }
 
 patch_code() {
     if [[ $PATCH_CODE == 1 ]] ; then
         case "$CDX_VER" in
-            SX567-0401*) ;;
+            SX567-0401*|SX567-0402*) ;;
             *) echo "  patch_code: skipped (unsupported CDX version $CDX_VER)"; return ;;
         esac
         echo "Patching code"
@@ -366,7 +395,7 @@ asv_unlock_ps_range () {
 
     # CDX code patches: zero the 0xfa (5.0 cmH2O) immediate in add.w/sub.w
     case "$CDX_VER" in
-        SX567-0401|SX567-0306)
+        SX567-0401|SX567-0306|SX567-0402)
             printf '\x00' | patch 0x76c08  # add.w r1, r0, #0xfa -> #0x00
             printf '\x00' | patch 0x76c34  # sub.w r1, r0, #0xfa -> #0x00
             printf '\x00' | patch 0x76cca  # add.w r1, r0, #0xfa -> #0x00
@@ -539,22 +568,9 @@ custom_palette() {
 }
 
 asv_disable_backup_rate () {
-    case "$CDX_VER" in
-        SX567-0401*) ;;
-        *) echo "  asv_disable_backup_rate: skipped (unsupported CDX version $CDX_VER)"; return ;;
-    esac
-
-    echo "Patching ASV backup rate"
-
-    # Add ASV task wrapper function to empty high flash space.
-    # This function suppresses the backup rate by overriding the breath percentage as needed, and then calls the normal ASV task.
-    # cat backupRate.bin | patch 0xff000 || die "backupRate patch failed"
-    #
-    # Expanded binary patch inline so it doesn't need to be compiled.
-    printf '\x09\x4b\xd3\xf8\x08\x38\x01\x2b\x0b\xd1\x08\x4b\xdf\xed\x08\x7a\x93\xed\x27\x7a\xb4\xee\xe7\x7a\xf1\xee\x10\xfa\xc8\xbf\xc3\xed\x27\x7a\x04\x4b\x18\x47\x00\xbf\x00\xe0\x00\x20\x00\xea\x00\x20\x48\xe1\x7a\x3f\x65\x34\x0e\x08' | patch 0xff000
-
-    # Patch ASV task to point to the wrapper function.
-    printf '\x01\xf0\x0f\x08' | patch 0xf44e0
+    deprecated "Use PATCH_CODE=1 PATCH_ASV_TASK_WRAPPER=1 instead." \
+               "Export FORCE_DEPRECATED=1 to apply anyway." && return
+    patch_code_asv_task_wraper
 }
 
 
@@ -575,6 +591,7 @@ patch_vid_spoof() {
         0306) VTABLE_ENTRY=0xF126C; EXPECTED_PTR='\x1d\xa5\x06\x08' ;;
         0305) VTABLE_ENTRY=0xF1350; EXPECTED_PTR='\x19\xa5\x06\x08' ;;
         0302) VTABLE_ENTRY=0xF0B54; EXPECTED_PTR='\xf5\x9d\x06\x08' ;;
+        0402) VTABLE_ENTRY=0xF1744; EXPECTED_PTR='\x1d\xa5\x06\x08' ;;
         *) echo "  ${FUNCNAME[0]}: skipped (unsupported CDX version $CDX_VER)"; return ;;
     esac
     if ! printf '%b' "$EXPECTED_PTR" | check_patch $VTABLE_ENTRY; then
@@ -605,7 +622,7 @@ patch_lcd_ili9325() {
 
     local BL_OFF EXPECTED_BL
     case "$CDX_VER" in
-        SX567-0401)
+        SX567-0401|SX567-0402)
             BL_OFF=0x7C030
             EXPECTED_BL='\xFF\xF7\x7A\xFE'  # bl 0x0807BD28 (ILI9341 board init)
             ;;
@@ -738,7 +755,7 @@ patch_psu_id
 if [[ $PATCH_BACKUP_RATE == 1 ]] ; then
     asv_disable_backup_rate
 fi
-patch_code # Handled based on environmental variables, no need to comment out
+patch_code
 
 unlock_ui_limits
 extra_debug
