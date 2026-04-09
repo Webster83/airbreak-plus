@@ -393,6 +393,8 @@ unlock_ui_limits() {
 asv_unlock_ps_range () {
     # Disable the ASV and ASVAuto PS range check to allow Max PS < (Min PS + 5)
 
+    echo "Unlocking ASV pressure support range"
+
     # CDX code patches: zero the 0xfa (5.0 cmH2O) immediate in add.w/sub.w
     case "$CDX_VER" in
         SX567-0401|SX567-0306|SX567-0402)
@@ -421,6 +423,7 @@ asv_unlock_ps_range () {
 }
 
 extra_debug() {
+    echo "Enabling extra info on therapy screen"
     # set config variable 0xc value to 4 == enable more debugging data on display
     # Default in VAuto is \x0e, all enabled is \x0f
     # 1000 - ti min, ti max, ti, I:E, spont cyc (doesn't fit graph)
@@ -433,7 +436,7 @@ extra_debug() {
 }
 
 extra_modes() {
-    # ---> This is the real magic <---
+    echo "Enabling all therapy modes"
     # add more mode entries, set config 0x0 mask to all bits high
     # AutoSet default is 0x3, which only enables mode 1 (CPAP) and 2 (AutoSet)
     # Autoset = 03 00, For Her = 03 08
@@ -484,6 +487,7 @@ all_menu() {
 }
 
 gui_config () {
+    echo "Enabling GUI menu items"
     # enable all of the editable options in the settings menu
     # by turning on bit 1 of the config entries.  All of these variables
     # are listed in the gui_create_menus function
@@ -531,6 +535,7 @@ unlock_languages() {
 
 
 custom_palette() {
+    echo "Patching custom color palette"
     # Find palette base by signature - tested on 0401 and 0402
     local base
     base=$(find_bytes "286031BD61020000FFFFFF0096969600") || {
