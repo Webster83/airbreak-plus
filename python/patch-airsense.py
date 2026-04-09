@@ -13,6 +13,7 @@
 
 import argparse
 import hashlib
+import io
 import crcmod
 import crcmod.predefined
 import os
@@ -145,28 +146,28 @@ class ASFirmware(object):
 
         return i1
 
-    def patch(self, patchdata, addr=None, dataseq=None, hash=None, verbose=True, checkreserved=True, checkempty=False, clobber=False):
+    def patch(self, patchdata, addr=None, dataseq=None, hash=None, verbose=None, checkreserved=True, checkempty=False, clobber=False):
         """Updates firmware data with patchdata, based on address, sequence, or hash of sequence"""
-        
+
         #I love Python3(TM)
         patchdata = list(bytes(patchdata))
-        
+
         patchlen = len(patchdata)
-        
+
         #Use simple method - fixed address patch
         if addr:
             pass
-        
+
         elif dataseq:
             addr = self.find_bytes(dataseq)
-            
+
         elif hash:
             raise NotImplementedError("Not yet done")
-            
+
         else:
             raise ValueError("Need to specify one of the patch methods")
 
-        if verbose:
+        if verbose or (verbose is None and getattr(self, 'verbose', False)):
             print("Patching %d bytes at 0x%x"%(patchlen, addr))
 
         #Reservered uses self.reserve_marker to indicate our usage (more obvious when inspecting...)
@@ -313,6 +314,7 @@ class ASFirmwarePatches(object):
             self.asf.patch(b'\x00\x20\xc0\x46', 0x3190, clobber=True) # CDX
         else:
             raise IOError("Unknown bootloader version: '%s'" % bid)
+        print("  BLX/CCX/CDX integrity checks bypassed")
 
     def bypass_psucheck(self):
         # power supply ID (adc_and_object_2826_stuff)
@@ -351,6 +353,7 @@ class ASFirmwarePatches(object):
             addr = self.asf.find_var(var) + G4_MAX
             # max=0x000005DC (1500) min=0x00000032 (50) scale=1/50
             self.asf.patch(b'\xdc\x05\x00\x00\x32\x00\x00\x00', addr, clobber=True)
+        print("  %d pressure variables set to 1.0-30.0 cmH2O" % len(vars))
 
     def unlock_languages(self):
         """
@@ -465,9 +468,13 @@ class ASFirmwarePatches(object):
             0x002A, 0x0055, 0x0082, 0x0084, 0x014B, 0x01DC, 0x01DD,
         ]
 
+        count = 0
         for var in vars:
             addr = self.asf.find_var(var)
-            self.asf.fw[addr] |= 1
+            if not (self.asf.fw[addr] & 1):
+                self.asf.fw[addr] |= 1
+                count += 1
+        print("  %d/%d menu ACT flags set" % (count, len(vars)))
 
     def patch_defaults(self):
         # language (eng)
@@ -564,8 +571,8 @@ class ASFirmwarePatches(object):
         data, ver = self._load_versioned_bin('common_code')
         if data is None:
             return
-        print("Patching common_code (%d bytes)" % len(data))
         self.asf.patch(data, 0xfe000, checkempty=True)
+        print("  common_code: %dB at 0xFE000" % len(data))
 
     def patch_graph(self):
         """Add special graph module"""
@@ -577,8 +584,8 @@ class ASFirmwarePatches(object):
         if fptr is None:
             print("  patch_graph: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
             return
-        print("Patching graph (%d bytes)" % len(data))
         self._patch_pointer(data, 0xfd000, fptr)
+        print("  graph: %dB at 0xFD000" % len(data))
 
     def patch_squarewave(self):
         """Add squarewave pressure mode"""
@@ -590,8 +597,8 @@ class ASFirmwarePatches(object):
         if fptr is None:
             print("  patch_squarewave: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
             return
-        print("Patching squarewave (%d bytes)" % len(data))
         self._patch_pointer(data, 0xfd400, fptr)
+        print("  squarewave: %dB at 0xFD400" % len(data))
 
     def patch_asv_task_wrapper(self):
         """Suppress ASV backup breathing rate"""
@@ -603,8 +610,8 @@ class ASFirmwarePatches(object):
         if fptr is None:
             print("  patch_asv_task_wrapper: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
             return
-        print("Patching ASV task wrapper (%d bytes)" % len(data))
         self._patch_pointer(data, 0xfdf00, fptr)
+        print("  asv_task_wrapper: %dB at 0xFDF00" % len(data))
 
     def patch_wrapper_limit_max_pdiff(self):
         """Add VAuto/ASV pressure shaping wrapper"""
@@ -616,8 +623,8 @@ class ASFirmwarePatches(object):
         if fptr is None:
             print("  patch_wrapper_limit_max_pdiff: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
             return
-        print("Patching wrapper_limit_max_pdiff (%d bytes)" % len(data))
         self._patch_pointer(data, 0xff000, fptr)
+        print("  limit_max_pdiff: %dB at 0xFF000" % len(data))
 
     def patch_lcd_ili9325(self):
         """Universal ILI9325/ILI9328 + ILI9341 LCD driver"""
@@ -635,8 +642,8 @@ class ASFirmwarePatches(object):
         if data is None:
             return
         lcd_offset = 0xFD800
-        print("Patching LCD ILI9325 driver (%d bytes at 0x%X)" % (len(data), lcd_offset))
         self.asf.patch(data, lcd_offset, checkempty=True)
+        print("  lcd_ili9325: %dB at 0x%X" % (len(data), lcd_offset))
         # Compute BL encoding from bl_off to lcd_board_init (entry point = lcd_offset)
         src = bl_off + 0x08000004
         dst = 0x08000000 + lcd_offset + 1  # Thumb
@@ -685,8 +692,8 @@ class ASFirmwarePatches(object):
         if bytes(self.asf.fw[vtable_entry:vtable_entry+4]) != expected_vt:
             print("  patch_vid_spoof: unexpected bytes at vtable entry, already patched?")
             return
-        print("Patching VID spoof (%d bytes at 0x%X)" % (len(data), VID_SPOOF_OFFSET))
         self._patch_pointer(data, VID_SPOOF_OFFSET, vtable_entry)
+        print("  %dB payload at 0x%X, vtable 0x%X" % (len(data), VID_SPOOF_OFFSET, vtable_entry))
 
 
     def patch_past_date(self):
@@ -696,18 +703,17 @@ class ASFirmwarePatches(object):
         self.asf.patch(b'\x80', addr=off + 2, clobber=True)
 
     def motor_nagscreen(self):
-        """ Remove "Motor life exceeded" nag screen """
+        """Remove "Motor life exceeded" nag screen"""
         try:
             self.asf.patch([0x0e, 0x49, 0x88, 0x42, 0x05, 0xe0, 0x03, 0x21, 0x0f, 0x20], dataseq=[0x0e, 0x49, 0x88, 0x42, 0x05, 0xdb, 0x03, 0x21, 0x0f, 0x20], clobber=True)
-            print("Patching \"Motor life exceeded\" nag screen")
+            print("  BLT bypass patched")
         except ValueError:
             # fallback: find and patch runtime threshold
-            print("motor_nagscreen: BLT patch failed. Trying threshold patch...")
             try:
                 self.asf.patch(b'\xFF\xFF\xFF\x7F', dataseq=[0xC0, 0x00, 0xB3, 0x04], clobber=True)
-                print("Patching \"Motor life exceeded\" threshold")
+                print("  threshold set to max")
             except ValueError:
-                print("motor_nagscreen: runtime threshold not found!")
+                print("  WARN: neither patch location found!")
 
     def patch_edf_merge(self):
         """Merge universal EDF signal superset into CCX"""
@@ -718,10 +724,18 @@ class ASFirmwarePatches(object):
             sys.path.insert(0, script_dir)
             from edf_ccx_merge import merge_ccx_image
 
-        data = bytearray(self.asf.fw)
-        patches = merge_ccx_image(data, force=True)
-        self.asf.fw = list(data)
-        print("  %d EDF merge patches applied" % len(patches))
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            data = bytearray(self.asf.fw)
+            patches = merge_ccx_image(data, force=True)
+            self.asf.fw = list(data)
+        finally:
+            sys.stdout = old_stdout
+        summary = buf.getvalue().strip()
+        if summary:
+            print("  %s" % summary)
 
             
 def str2bool(v):
@@ -784,6 +798,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--overwrite", action="store_true", help="Overwrite output file if it exists already.")
     parser.add_argument("--force-deprecated", action="store_true", help="Apply deprecated patches (you know what you're doing).")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show per-patch byte-level details.")
     
     args = parser.parse_args()
 
@@ -791,7 +806,8 @@ if __name__ == "__main__":
     b = open(args.INFILE, "rb")
     asf = ASFirmware(b)
     b.close()
-    
+    asf.verbose = args.verbose
+
     if args.OPERATION == "PATCH":
 
         patches = ASFirmwarePatches(asf)
