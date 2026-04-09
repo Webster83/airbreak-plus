@@ -531,39 +531,39 @@ unlock_languages() {
 
 
 custom_palette() {
-    case "$CDX_VER" in
-        SX567-0401*) ;;
-        *) echo "  custom_palette: skipped (unsupported CDX version $CDX_VER)"; return ;;
-    esac
+    # Find palette base by signature - tested on 0401 and 0402
+    local base
+    base=$(find_bytes "286031BD61020000FFFFFF0096969600") || {
+        echo "  custom_palette: palette signature not found"; return 1
+    }
+    base=$(( base + 8 ))  # first color entry
 
     # Selected item color
-    printf '\xCC\x33\x00\x00' | patch 0xf271c
+    printf '\xCC\x33\x00\x00' | patch $(( base + 0x24 ))
 
     # Whites
-    for addr in \
-        0xf26f8 0xf2714 0xf2720 0xf2738 0xf273c 0xf2740 0xf274c 0xf2768 0xf2774 0xf278c 0xf2790 0xf2794 \
-    ; do
-        printf '\xFF\xBB\x44\x00' | patch $addr 
-    done 
+    for off in 0x00 0x1C 0x28 0x40 0x44 0x48 0x54 0x70 0x7C 0x94 0x98 0x9C ; do
+        printf '\xFF\xBB\x44\x00' | patch $(( base + off ))
+    done
 
     # Bright grays (highlights mostly)
-    for addr in    0xf26fc 0xf2704 0xf2750 0xf2758 0xf276c ; do
-        printf '\x96\x48\x48\x00' | patch $addr 
+    for off in 0x04 0x0C 0x58 0x60 0x74 ; do
+        printf '\x96\x48\x48\x00' | patch $(( base + off ))
     done
 
     # Mid grays (buttons)
-    for addr in 0xf2700 0xf2754 ; do
-        printf '\x64\x32\x32\x00' | patch $addr 
+    for off in 0x08 0x5C ; do
+        printf '\x64\x32\x32\x00' | patch $(( base + off ))
     done
 
     # Low grays (disabled, backgrounds)
-    for addr in 0xf2708 0xf270c 0xf2728 0xf2744 0xf275c 0xf2760 0xf277c 0xf2798 ; do
-        printf '\x40\x20\x20\x00' | patch $addr 
+    for off in 0x10 0x14 0x30 0x4C 0x64 0x68 0x84 0xA0 ; do
+        printf '\x40\x20\x20\x00' | patch $(( base + off ))
     done
 
     # Blacks
-    for addr in 0xf2710 0xf272c 0xf2748 0xf2764 0xf2780 0xf279c ; do
-        printf '\x08\x00\x08\x00' | patch $addr 
+    for off in 0x18 0x34 0x50 0x6C 0x88 0xA4 ; do
+        printf '\x08\x00\x08\x00' | patch $(( base + off ))
     done
 }
 
