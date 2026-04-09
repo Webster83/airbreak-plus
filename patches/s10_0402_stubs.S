@@ -1,4 +1,4 @@
-// SX567-0401 firmware function addresses
+// SX567-0402 firmware function addresses
 
 #define NSTUB(addr,name) \
 	.global name; \
@@ -24,12 +24,12 @@ NSTUB(0x680000A0, gui_context)
 NSTUB(0x08063D5D, malloc)
 NSTUB(0x08082097, tim_read_tim5)
 
-NSTUB(0x080BC993, pressure_limit_max_difference)
-NSTUB(0x2000E948, fvars)
-NSTUB(0x2000E750, ivars)
-NSTUB(0x2000E808, isNotBreathingPtr)
-NSTUB(0x2000EA9C, breathPercentagePtr)
-NSTUB(0x080E3465, asv_task_function)
+NSTUB(0x080BCBC3, pressure_limit_max_difference)
+NSTUB(0x2000E954, fvars)
+NSTUB(0x2000E75C, ivars)
+NSTUB(0x2000E814, isNotBreathingPtr)
+NSTUB(0x2000EAA8, breathPercentagePtr)
+NSTUB(0x080E36DD, asv_task_function)
 
 NSTUB(0x20000BE0, magic_ptr)
 
@@ -37,15 +37,15 @@ NSTUB(0x20000BE0, magic_ptr)
 NSTUB(0x08080E37, lcd_write_cmd)
 NSTUB(0x08080E3F, lcd_write_data)
 NSTUB(0x080814E3, flexcolor_ensure_init)
-NSTUB(0x080E2EF1, flexcolor_set_interface)
-NSTUB(0x080E2F17, original_controller_init)
-NSTUB(0x080D9287, original_hw_init)
+NSTUB(0x080E3169, flexcolor_set_interface)
+NSTUB(0x080E318F, original_controller_init)
+NSTUB(0x080D226F, original_hw_init)
 NSTUB(0x0807BD29, original_board_init)
-NSTUB(0x080D9171, flexcolor_draw_bitmap)
-NSTUB(0x080D9093, flexcolor_fill_rect)
+NSTUB(0x080D93E9, flexcolor_draw_bitmap)
+NSTUB(0x080D9231, flexcolor_fill_rect)
 NSTUB(0x0808143B, flexcolor_draw_hline)
 NSTUB(0x08081389, flexcolor_draw_vline)
-NSTUB(0x080D8C03, flexcolor_cs_assert)
-NSTUB(0x080D8C0D, flexcolor_write_data)
+NSTUB(0x080D8E7B, flexcolor_cs_assert)
+NSTUB(0x080D8E85, flexcolor_write_data)
 NSTUB(0x080875BB, iwdg_reload)
 NSTUB(0x08080CDB, lcd_get_device)
