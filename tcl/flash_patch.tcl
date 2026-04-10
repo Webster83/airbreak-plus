@@ -209,14 +209,11 @@ namespace eval patch {
     }
 
     proc _iwdg_disable {} {
-        reset halt
         $::_CHIPNAME options_write 0 0x2c
-        sleep 100
         reset halt
     }
 
     proc _iwdg_enable {} {
-        reset halt
         $::_CHIPNAME options_write 0 0xcc
         reset
     }
@@ -240,7 +237,6 @@ namespace eval patch {
         if {$_guard_iwdg_was_enabled} {
             _iwdg_disable
         }
-        reset halt
     }
 
     proc _guard_exit {} {
