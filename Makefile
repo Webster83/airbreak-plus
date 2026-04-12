@@ -28,10 +28,6 @@ $(BUILD)/stm32-asv.bin: patch-airsense $(S10_CODE_BINS) $(VID_SPOOF_BINS)
 
 binaries: $(S10_CODE_BINS) $(VID_SPOOF_BINS)
 
-serve:
-	mkdocs serve
-deploy:
-	mkdocs gh-deploy
 
 # There are decent distances between the different patches, 
 # but if you substantially increase the amount of code, beware collisions.

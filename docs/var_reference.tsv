@@ -1,0 +1,748 @@
+# Total UART variables: 744
+# Coverage: edf=89 int=318 gui=37 ann=215 rc=286 str=116 any=381
+#
+var_id	uart	edf_signal	resmed_name	notes
+0x0000	BID		BOOTLOADR_ID	Bootloader ID
+0x0001	FGT		FG_TYPE	FG Type
+0x0002	PCB		PCB_ID	PCB ID
+0x0003	PCD		PRODUCT_CODE	Product Code
+0x0004	PNA		PRODUCT_NAME	Product Name
+0x0005	SID		SOFTWARE_ID	Software ID
+0x0006	SRN		SERIAL_NUM	Serial Number
+0x0007	CID		CONFIG_SOFTWARE_ID	Config Software ID
+0x0008	QTI		MODULE_INT_TYPE	Module Type
+0x0009	QVI		MODULE_INT_SW_VERSION	Module SW Version
+0x000A	QSI		MODULE_INT_SERIAL_NUM	Module Serial Number
+0x000B	QCO		MODULE_INT_OPERATOR	Module Operator
+0x000C	QCV		MODULE_INT_SERVICE	Module Service
+0x000D	LCT		LCD_TEXT	LCD Text
+0x000E	AVR			
+0x000F	FSN			
+0x0010	HID		HEIGHT_UNIT	
+0x0011	MDB			
+0x0012	RSS			
+0x0013	DRX			
+0x0014	DTX			
+0x0015	EXW			
+0x0016	EXR			
+0x0017	CRX			
+0x0018	ZRD			
+0x0019	ZRG			
+0x001A	ZXT			
+0x001B	ZMT			
+0x001C	ZME			
+0x001D	ZPM			
+0x001E	MID		METADATA_ID	Metadata ID
+0x001F	VID		VARIANT_ID	Variant ID
+0x0020	RID		REGION_ID	Region ID
+0x0021	ATO		ACTIV_TIMOUT	Activity Timeout
+0x0022	BLE		BOOT_LOADER_ERR	Bootloader Error
+0x0023	DCR	Crc16	RECORD_CRC	Record CRC
+0x0024	IPC	S.C.Press	CPAP	CPAP Set Pressure
+0x0025	MPA	S.AS.MaxPress	MAX_PRESSURE	AutoSet Max Pressure
+0x0026	IPP	S.BL.IPAP	IPAP	IPAP [cmH2O] (4.0 .. 25.0 step 0.2); Bilevel IPAP
+0x0027	BRR		BACKUP_RESP_RATE	Backup Resp Rate
+0x0028	MCP		MAX_CS_PRESSURE	
+0x0029	MTT		MEAN_TAR_MINVENT	Mean Target Minute Vent [L/min]
+0x002A	TGT		TARGET_VENTILATION	TgMV [L/min] (0.0 .. 30.0 step 0.1); Target Ventilation [L/min]
+0x002B	VA9	TgtVent.95	TAR_MIN_VENT_95	Target Vent P95 [L/min]
+0x002C	VAA	TgtVent.Max	TAR_MIN_VENT_MAX	Target Vent Max [L/min]
+0x002D	VAM	TgtVent.50	TAR_MIN_VENT_MED	Target Vent Median [L/min]
+0x002E	IVP		MAX_IVAPS_PRESSURE	
+0x002F	PHT		IVAPS_HEIGHT	Height [cm] (110 .. 250 step 5); Height
+0x0030	PHI		IVAPS_HEIGHT_INCHES	Height [inches] (44 .. 100 step 2); Height
+0x0031	ADR		ALARM_DUR	
+0x0032	LMA		LOW_MIN_VENT_ALM_THRESHOLD	Low MV [L/min] (0 .. 10 step 1); Low MV Alarm
+0x0033	APX		APNEA_ALM_THRESHOLD	Apnea Alarm [s] (9 .. 60 step 1); Apnea Alarm
+0x0034	SPX		SPO2_ALM_THRESHOLD	Low SpO2 [%] (69 .. 95 step 1); Low SpO2 Alarm
+0x0035	HDR		HOSE_DROP	Hose Drop
+0x0036	MAP		AVG_MASK_PRESS	Avg Mask Pressure
+0x0037	MKF		FILT_MASK_PRESS	Filtered Mask Pressure
+0x0038	MKP		MASK_PRESS	Mask Pressure
+0x0039	MSP	MaskPress.50	MEDP_SESSION	Median Pressure
+0x003A	PM9	MaskPress.95	P95_SESSION	Pressure P95
+0x003B	PMA	MaskPress.Max	MAXP_SESSION	Pressure Max
+0x003C	SPP		SET_PRESSURE	Set Pressure [cmH2O] (0.0 .. 30.0 step 0.2); Set Pressure (runtime)
+0x003D	TEP		TGT_EXP_PRES	Pressure [cmH2O] (2.0 .. 30.0 step 0.2); Target EPAP
+0x003E	TIP		TGT_INSP_PRES	Pressure [cmH2O] (4.0 .. 30.0 step 0.2); Target IPAP
+0x003F	BP9	BlowPress.95	BLOWER_PRESS_95TH	Blower Pressure P95
+0x0040	BP5	BlowPress.5	BLOWER_PRESS_5TH	Blower Pressure P5
+0x0041	ATP		AUTO_PRESS	AutoSet Pressure
+0x0042	MKE		EPR_PRESSURE	EPR Pressure
+0x0043	MKI		BI_THERAPY_PRESSURE	Bilevel Mask Pressure
+0x0044	AEP		AVG_EPR_PRESS	Avg EPR Pressure
+0x0045	AIP		AVG_BI_THERAPY_PRESS	Avg Bilevel Pressure
+0x0046	PI9	TgtIPAP.95	I_95_SESSION	IPAP P95
+0x0047	PIA	TgtIPAP.Max	I_MAX_SESSION	IPAP Max
+0x0048	PIM	TgtIPAP.50	I_MED_SESSION	IPAP Median
+0x0049	PE9	TgtEPAP.95	E_95_SESSION	EPAP P95
+0x004A	PEA	TgtEPAP.Max	E_MAX_SESSION	EPAP Max
+0x004B	PEM	TgtEPAP.50	E_MED_SESSION	EPAP Median
+0x004C	AHI	AHI	AHI_SESSION	
+0x004D	AIS	AI	AI_SESSION	
+0x004E	DUR		APNEA_DUR	Apnea Duration
+0x004F	HIS	HI	HI_SESSION	Hypopnea Index
+0x0050	RIN	RIN	RIN_SESSION	RERA Index
+0x0051	MAV		MEAN_ACHV_ALV_MIN_VENT	
+0x0052	AVM		ALV_MIN_VENT_MED	
+0x0053	AV9		ALV_MIN_VENT_95	
+0x0054	AVA		ALV_MIN_VENT_MAX	
+0x0055	AAV		ACHV_ALV_MIN_VENT	Va [L/min] (0.0 .. 30.0 step 0.1)
+0x0056	CLI	OAI	CAI_SESSION	Central AI
+0x0057	OPI	CAI	OAI_SESSION	Obstructive AI
+0x0058	UAI	UAI	UAI_SESSION	Unknown AI
+0x0059	HMS	S.HumLevel	HUMIDITY_SET	Humidity Level
+0x005A	HTS	S.Temp	HEAT_TB_SET	Tube Temp
+0x005B	HTF		HEAT_TB_SET_F	Tube Temp. [°F] (60 .. 86 step 1); Tube Temp
+0x005C	AFL		AVG_BLOWER_FLOW	Avg Blower Flow
+0x005D	BFM	BlowFlow.50	AVG_BLOWER_FLOW_MED	Avg Blower Flow Median
+0x005E	ABH		ABSOLUTE_AMBIENT_HUMIDITY	Ambient Humidity
+0x005F	ABM	AmbHumidity.50	AMB_HUMIDITY_MED	Ambient Humidity Median
+0x0060	PPA		PLATE_POWER_APPLIED	Plate Power Applied
+0x0061	TPA		TUBE_POWER_APPLIED	Tube Power Applied
+0x0062	HBP		HEATED_TUBE_PWM	Heated Tube PWM
+0x0063	TPM	HTubePow.50	HEATED_TUBE_PWM_MED	Heated Tube PWM Median
+0x0064	HPT		HUMIDIFIER_HOTPLATE_TEMPERATURE	Humidifier Plate Temp
+0x0065	HHM	HumTemp.50	HUM_PLATE_TEMP_MED	Humidifier Plate Temp Median
+0x0066	HTT		HEATED_TUBE_TEMPERATURE	Heated Tube Temp
+0x0067	HTM	HTubeTemp.50	HEATED_TUBE_TEMP_MED	Heated Tube Temp Median
+0x0068	HUP		HUMIDIFIER_PWM	Humidifier PWM
+0x0069	HPM	HumPow.50	HUMIDIFIER_PWM_MED	Humidifier PWM Median
+0x006A	QCD		MODULE_CELL_SIGNAL_DB	Signal [dBm] (-120 .. 0 step 1); Cell Signal
+0x006B	RFL		RESP_FLOW	Resp Flow
+0x006C	BFF		BLOWER_FLOW_FILTERED	Blower Flow Filtered
+0x006D	DFL		DIFF_FLOW	Differential Flow
+0x006E	RF9	Flow.95	RESP_FLOW_95TH	Resp Flow P95
+0x006F	RF5	Flow.5	RESP_FLOW_5TH	Resp Flow P5
+0x0070	EPR	S.EPR.Level	EXP_PRES_REL	EPR Level
+0x0071	FFL		FUZZY_FLOW_LIM	Fuzzy Flow Limit
+0x0072	HRR		HEART_RATE_RAW	Pulse [bpm] (0 .. 500 step 1); Heart Rate Raw
+0x0073	HRS		HEART_RATE_STATUS	Heart Rate Status
+0x0074	HRT		HEART_RATE	Pulse [bpm] (18 .. 300 step 1); Heart Rate
+0x0075	NVS		NONIN_SOFTWARE_VERSION	Oximeter SW Version
+0x0076	OXS		OXIMETRY_SEQUENCE	Oximetry Sequence
+0x0077	SAO		SAO2	SpO2 [%] (0 .. 100 step 1); SpO2
+0x0078	SOM	SpO2.50	SPO2_MED	SpO2 Median
+0x0079	SO9	SpO2.95	SPO2_95	SpO2 P95
+0x007A	SOX	SpO2.Max	SPO2_MAX	SpO2 Max
+0x007B	SAR		SAO2_RAW	SpO2 [%] (0 .. 127 step 1); SpO2 Raw
+0x007C	SAS		SAO_STATUS	SpO2 Status
+0x007D	SAU	SpO2Thresh	SPO2_MINUTES_UNDER_THRESHOLD	SpO2 Minutes Under Threshold
+0x007E	SAV		AVG_SPO2	SpO2 [%] (0 .. 100 step 1); Avg SpO2
+0x007F	IE9	IERatio.95	I_TO_E_95TH	I:E Ratio P95 [%]
+0x0080	IEA	IERatio.Max	I_TO_E_MAX	I:E Ratio Max [%]
+0x0081	IEM	IERatio.50	I_TO_E_MEDIAN	I:E Ratio Median [%]
+0x0082	IER		I_E_RATIO	I:E [%] (0 .. 200 step 1); I:E Ratio [%]
+0x0083	AIE		AVG_I_E_RATIO	Avg I:E Ratio [%]
+0x0084	IN5		B5_INSP_TIME	Ti [s] (0.0 .. 10.0 step 0.2); Inspiration Time 5-Breath [s]
+0x0085	EX5		B5_EXP_TIME	Expiration Time 5-Breath [s]
+0x0086	INT		INSPIRATION_TIME	Inspiration Time [s]
+0x0087	EXT		EXPIRATION_TIME	Expiration Time [s]
+0x0088	ISM	Ti.50	INSP_TIME_MED	Insp Time Median [s]
+0x0089	IS9	Ti.95	INSP_TIME_95	Insp Time P95 [s]
+0x008A	ISA	Ti.Max	INSP_TIME_MAX	Insp Time Max [s]
+0x008B	MIS		MEAN_INSP_TIME	Mean Insp Time [s]
+0x008C	LK9	Leak.95	LEAK_95TH	Leak P95
+0x008D	LKF		FILT_MASK_LEAK	Leak [L/s] (0.00 .. 2.00 step 0.02); Filtered Mask Leak
+0x008E	LKM	Leak.50	LEAK_MED	Leak Median
+0x008F	LKP		HI_RES_LEAK	Leak (Hi-Res)
+0x0090	LMX	Leak.Max	LEAK_MAX	Leak Max
+0x0091	LYK		MASK_LEAK	Leak [L/s] (0.00 .. 2.00 step 0.02); Mask Leak
+0x0092	LK7	Leak.70	LEAK_70TH	Leak P70
+0x0093	MV5		BREATHS5_MV	MV [L/min] (0.0 .. 30.0 step 0.1); Minute Vent 5-Breath
+0x0094	MVT		MEAN_MINVENT	Mean Minute Vent
+0x0095	VT9	MinVent.95	MIN_VENT_95	Minute Vent P95
+0x0096	VTA	MinVent.Max	MIN_VENT_MAX	Minute Vent Max
+0x0097	VTM	MinVent.50	MIN_VENT_MED	Minute Vent Median
+0x0098	RCF		RECUR_PERIOD_FILTER	Recur [mths] (1 .. 24 step 1); Recurrence Filter
+0x0099	RCM		RECUR_PERIOD_MASK	Recur [mths] (1 .. 24 step 1); Recurrence Mask
+0x009A	RCH		RECUR_PERIOD_TUBE	Recur [mths] (1 .. 24 step 1); Recurrence Heated Tube
+0x009B	RCW		RECUR_PERIOD_WATERTUB	Recur [mths] (1 .. 24 step 1); Recurrence Water Tub
+0x009C	RR1		ONBOARD_RR	RR [bpm] (0.0 .. 50.0 step 1.0); Resp Rate (realtime)
+0x009D	RR9	RespRate.95	RESPRATE95TH	Resp Rate P95
+0x009E	RRA	RespRate.Max	RESPRATE_MAX	Resp Rate Max
+0x009F	RRM	RespRate.50	RESPRATE_MED	Resp Rate Median
+0x00A0	RRR		HI_RES_RR	RR [bpm] (0 .. 50 step 1); Resp Rate (Hi-Res)
+0x00A1	SNI		SNORE_IDX	Snore Index
+0x00A2	ATI		AVG_TIDAL	Vt [L] (0.00 .. 4.00 step 0.02); Avg Tidal Volume
+0x00A3	TDD		TIDAL_VOL_5B	Vt [L] (0.00 .. 4.00 step 0.02); Tidal Volume 5-Breath
+0x00A4	TID		TIDAL_VOLUME	Vt [L] (0.00 .. 4.00 step 0.02); Tidal Volume
+0x00A5	TV9	TidVol.95	VP5_TIDAL_95TH	Tidal Volume P95
+0x00A6	TVA	TidVol.Max	VP5_TIDAL_MAX	Tidal Volume Max
+0x00A7	TVM	TidVol.50	VP5_TIDAL_MED	Tidal Volume Median
+0x00A8	VCR	SpontCyc%	SPT_CL_RATIO	Spont Cyc [%] (0.0 .. 100.0 step 1.0); Spont Cycle Ratio [%]
+0x00A9	VSR		SPT_TR_RATIO	Spont Trig [%] (0.0 .. 100.0 step 1.0); Spont Trigger Ratio
+0x00AA	CSD	CSR	REPORTED_CSR_DURATION_PER_SESSION	CSR Duration
+0x00AB	CSZ		CSR_ZERO_DUR	CSR Zero Duration
+0x00AC	CET		CSR_EVENT_TIME	CSR Event Time
+0x00AD	NOC		NUM_OCCURENCES	Occurrence Count
+0x00AE	ZSE		SAVED_SYSTEM_ERROR	Saved System Error
+0x00AF	ZEW			
+0x00B0	ZRE			
+0x00B1	LRP		AVG_LOW_RES_THERAPY_PRESSURE	Avg Low-Res Therapy Pressure
+0x00B2	LRE		AVG_LOW_RES_EPR_PRESSURE	Avg Low-Res EPR Pressure
+0x00B3	ETI		EVENT_TIME	Event Time
+0x00B4	MSE	MaskEvents	NO_MSK_EVTS	Mask Events Count
+0x00B5	OFT	MaskOff	MASKOFF_TIME	Mask Off Time
+0x00B6	OND	Duration	MASKON_DUR	Mask On Duration
+0x00B7	THD	OnDuration	THERAPY_DURATION	Therapy Duration
+0x00B8	ONT	MaskOn	MASKON_TIME	Mask On Time
+0x00B9	CED		COMPLIANCE_ERASE_DATE	Date (0 .. 24836 step 1); Compliance Erase Date
+0x00BA	LSD	Date	CURRENT_SESSION_DATE	Current Session Date
+0x00BB	DSD			
+0x00BC	ZEN			Date (0 .. 2147483647 step 1)
+0x00BD	PHM	PatientHours	PATIENT_HRS_LOW_RES	Patient Hours
+0x00BE	FBD		FIRST_BREATH_DAY	First Breath Day
+0x00BF	FTD		FIRST_THERAPY_DAY	First Therapy Day
+0x00C0	BFL		BLOWER_FLOW	
+0x00C1	FID		FLASH_ID	
+0x00C2	FLG			Flow calibration something?
+0x00C3	FLW		ADC_FLOW	
+0x00C4	FLZ		FLOW_ZERO	Flow calibration something?
+0x00C5	BPR		BLOWER_PRESS	
+0x00C6	CPR		CAL_PRESSURE	
+0x00C7	PRS		ADC_PRESSURE	
+0x00C8	PSH		HI_PRS_SCALE	Pressure calibration something?
+0x00C9	PZH		HI_PRSS_ZERO	Pressure calibration something?
+0x00CA	NOS		ADC_NOISE	
+0x00CB	NSE		AUD_NOISE	
+0x00CC	SNB			Motor calibration something? PWM freq?
+0x00CD	SNZ		SNORE_ZERO	
+0x00CE	PVD			
+0x00CF	PVR			
+0x00D0	RIR			
+0x00D1	VIR			
+0x00D2	CCP			
+0x00D3	CCS			
+0x00D4	MDA			
+0x00D5	CUR			
+0x00D6	FAT			
+0x00D7	FPW			
+0x00D8	KPD			
+0x00D9	KPT			
+0x00DA	LEF			
+0x00DB	MHR		MOTOR_HOUR	Run Hrs [hrs] (0 .. 596523 step 1)
+0x00DC	MHS		MOTOR_HR_SRV	
+0x00DD	MHU		TOTAL_HOURS	Run Hrs (0 .. 596523 step 1)
+0x00DE	SPD		MOTOR_SPEED	
+0x00DF	TEM			
+0x00E0	TEZ			
+0x00E1	UTT			
+0x00E2	VLT		VENTED_LEAK_ALARM_THRESHOLD	
+0x00E3	SDU			
+0x00E4	CAF		CONCAVE_AND_FLAT	
+0x00E5	UQD			Usage [hrs] (0.0 .. 1048575.0 step 0.1)
+0x00E6	URD			
+0x00E7	VRD			Days 4hrs+ (0 .. 65535 step 1)
+0x00E8	WRD			Avg. Usage [hrs] (0.0 .. 1048575.0 step 0.1)
+0x00E9	XRD			Used Hrs [hrs] (0.0 .. 1048575.0 step 0.1)
+0x00EA	DRD			Days Used (0 .. 65535 step 1)
+0x00EB	ZAI			Pressure [cmH2O] (0.0 .. 30.0 step 0.1)
+0x00EC	ZAE			Exp. Pressure [cmH2O] (0.0 .. 20.0 step 0.1)
+0x00ED	LRS			
+0x00EE	ZAT			Vt [L] (0.00 .. 4.00 step 0.02)
+0x00EF	ZA1			I:E [%] (0 .. 200 step 1)
+0x00F0	ZAM			MV [L/min] (0.0 .. 30.0 step 0.1)
+0x00F1	ZAR			RR [bpm] (0 .. 50 step 1)
+0x00F2	ZAZ			Ti [s] (0.1 .. 4.0 step 0.1)
+0x00F3	ZA2			TgMV [L/min] (0.0 .. 30.0 step 0.1)
+0x00F4	ZA3			Va [L/min] (0.0 .. 30.0 step 0.1)
+0x00F5	ZAY			Spont Cyc [%] (0.0 .. 100.0 step 1.0)
+0x00F6	ZAS			Spont Trig [%] (0.0 .. 100.0 step 1.0)
+0x00F7	AQD			AHI (0.0 .. 240.0 step 0.1)
+0x00F8	ARD			AHI (0.0 .. 240.0 step 0.1)
+0x00F9	TRD			Total AI (0.0 .. 240.0 step 0.1)
+0x00FA	CRD			Central AI (0.0 .. 240.0 step 0.1)
+0x00FB	ASR			
+0x00FC	ASF			
+0x00FD	ATH			
+0x00FE	LBL		BACK_LIGHT	
+0x00FF	LLL			
+0x0100	LBH			
+0x0101	LLH			
+0x0102	CSG			
+0x0103	CSC			
+0x0104	CSE			
+0x0105	CST			
+0x0106	CSS			
+0x0107	HAH			
+0x0108	HAT			
+0x0109	HMP			
+0x010A	HSC			
+0x010B	HTR			
+0x010C	HUR			
+0x010D	ZEC			
+0x010E	HET			
+0x010F	HFL			
+0x0110	ZFL			
+0x0111	RFA			
+0x0112	AGT			
+0x0113	XMP			
+0x0114	AHC			
+0x0115	AIC			
+0x0116	APT			
+0x0117	HYC			
+0x0118	UAC			
+0x0119	BSP		PRESS_SUPP	
+0x011A	HPR			
+0x011B	LPR			
+0x011C	PSP		PRES_SUPP	PS [cmH2O] (0.0 .. 25.0 step 0.2)
+0x011D	BPF			
+0x011E	LPF			
+0x011F	ZMP			
+0x0120	BPA			
+0x0121	CAC			
+0x0122	OAC			
+0x0123	SDT			
+0x0124	NBF			
+0x0125	CGT			
+0x0126	RGT			
+0x0127	TEE		TE_ERROR_COUNT	
+0x0128	AMT			
+0x0129	ZEH			
+0x012A	ZET			
+0x012B	RCR		REC_SPT_CL_RATIO	Spont Cyc [%] (0 .. 100 step 1)
+0x012C	RTR		REC_SPT_TR_RATIO	Spont Trig [%] (0 .. 100 step 1)
+0x012D	SBC			
+0x012E	SBD			
+0x012F	TBB			
+0x0130	TBC			
+0x0131	TCT			
+0x0132	DGT			
+0x0133	IGT			
+0x0134	ZVT			
+0x0135	SSD			Date (0 .. 24836 step 1)
+0x0136	DTT			
+0x0137	DUF			Days 4hrs+ (0 .. 2048 step 1)
+0x0138	ZD2			
+0x0139	DUS		DAYS_USED	Days Used (0 .. 2048 step 1)
+0x013A	ZD1			
+0x013B	HOU		PATIENT_HRS	Used Hrs [hrs] (0 .. 65534 step 1)
+0x013C	EGT			
+0x013D	APP		APNEA_PRESS	
+0x013E	FLP		FLATT_PRESS	
+0x013F	SRP		SNORE_PRESS	
+0x0140	LRD			Leak [L/min] (0 .. 120 step 0)
+0x0141	SFK			
+0x0142	ZLF			Leak [L/min] (0 .. 120 step 0)
+0x0143	MFP			
+0x0144	OXT			
+0x0145	QXI			
+0x0146	QXK			
+0x0147	ZDS			
+0x0148	ZLR			Target Pt Rate [bpm] (8.0 .. 30.0 step 1.0)
+0x0149	ZLV			Target Va [L/min] (1.0 .. 30.0 step 0.1)
+0x014A	ZTT			
+0x014B	ZMA			TgVa [L/min] (1.0 .. 30.0 step 0.1)
+0x014C	ZMV			MV [L/min] (1.0 .. 40.0 step 0.1)
+0x014D	ZTV			Vt [ml] (0 .. 4500 step 1)
+0x014E	ZVK			Vt/kg [ml/kg IBW] (0.0 .. 500.0 step 0.1)
+0x014F	ZTA			Target Va [L/min] (1.0 .. 30.0 step 0.1)
+0x0150	ZLN			
+0x0151	ZSU			
+0x0152	RDC			
+0x0153	VGT			
+0x0154	XGT			
+0x0155	ZRC			
+0x0156	ZAV			Vt [ml] (0 .. 4000 step 1)
+0x0157	ZTD			Vt (0 .. 4000 step 1)
+0x0158	APF			
+0x0159	APR			
+0x015A	AST			
+0x015B	AVT			
+0x015C	ARS			
+0x015D	ZFP			
+0x015E	TIT			
+0x015F	ANT			
+0x0160	DDC			
+0x0161	D00		DEBUG_VALUE_SLOT_00	
+0x0162	D01		DEBUG_VALUE_SLOT_01	
+0x0163	D02		DEBUG_VALUE_02	
+0x0164	D03			
+0x0165	D04			
+0x0166	D05			
+0x0167	D06			
+0x0168	D07			
+0x0169	D08			
+0x016A	D09			
+0x016B	ALL			
+0x016C	BGT		BG_TASK_TRIG	
+0x016D	NGT			
+0x016E	UGT			
+0x016F	BTM		BREATH_TIME	
+0x0170	CBP			
+0x0171	GIT			
+0x0172	L01			
+0x0173	L02			
+0x0174	L03			
+0x0175	L04			
+0x0176	L05			
+0x0177	L06			
+0x0178	L07			
+0x0179	L08			
+0x017A	L09			
+0x017B	L10			
+0x017C	L11			
+0x017D	L12			
+0x017E	L13			
+0x017F	L14			
+0x0180	L15			
+0x0181	L16			
+0x0182	L17			
+0x0183	L18			
+0x0184	L19			
+0x0185	L20			
+0x0186	MGT			
+0x0187	PDS			
+0x0188	PDT			
+0x0189	PDD			
+0x018A	PGT			
+0x018B	HBT			
+0x018C	PRP			
+0x018D	RDT		RAMPDOWN_TIME	
+0x018E	RFR			
+0x018F	SCT			
+0x0190	SET		SETTLNG_TIME	
+0x0191	SGT			
+0x0192	SQT			
+0x0193	SRT			
+0x0194	STK			
+0x0195	STW			
+0x0196	TET			
+0x0197	ZDT			
+0x0198	ZEU			
+0x0199	ZTU			
+0x019A	ZEV			
+0x019B	ZJA			
+0x019C	ZLT			
+0x019D	ZMN			
+0x019E	ZNT			
+0x019F	ZPR			
+0x01A0	ZPT			
+0x01A1	ZCT			
+0x01A2	ZT1			
+0x01A3	ZT2			
+0x01A4	ZT3			
+0x01A5	ZT4			
+0x01A6	ZT5			
+0x01A7	ZT6			
+0x01A8	ZT7			
+0x01A9	ZTM			
+0x01AA	ZTS			
+0x01AB	RDP			
+0x01AC	ZXX			
+0x01AD	ZUT			
+0x01AE	ZUD			
+0x01AF	ZUR			
+0x01B0	ZUC			
+0x01B1	ZUS			
+0x01B2	ZUF			
+0x01B3	ZTI			
+0x01B4	ZIS			
+0x01B5	ZSS			
+0x01B6	ZS1			
+0x01B7	ZS2			
+0x01B8	ZS3			
+0x01B9	ZS4			
+0x01BA	ZKM			
+0x01BB	TMD			
+0x01BC	ZML			
+0x01BD	ZVI			
+0x01BE	ZMD			
+0x01BF	ZOV			
+0x01C0	ZMU			
+0x01C1	MPB			
+0x01C2	ZFE			
+0x01C3	S10			
+0x01C4	S20			
+0x01C5	S40			
+0x01C6	S11			
+0x01C7	S22			
+0x01C8	S44			
+0x01C9	S1S			
+0x01CA	S1M			
+0x01CB	SEE			
+0x01CC	SMM			
+0x01CD	SLD			
+0x01CE	SPL			
+0x01CF	ZPP			Set Pressure [cmH2O] (0.0 .. 30.0 step 0.2)
+0x01D0	ZPU			
+0x01D1	ZS5			
+0x01D2	STP	S.C.StartPress	START_PRESSR	CPAP Start Pressure
+0x01D3	MPI	S.AS.MinPress	MIN_PRESSURE	AutoSet Min Pressure
+0x01D4	STU	S.AS.StartPress	START_A_PRES	AutoSet Start Pressure
+0x01D5	MNE	S.VA.MinEPAP	MIN_EPAP	Min EPAP [cmH2O] (4.0 .. 25.0 step 0.2); VAuto Min EPAP
+0x01D6	MXI	S.VA.MaxIPAP	MAX_IPAP_PRS	Max IPAP [cmH2O] (4.0 .. 25.0 step 0.2); VAuto Max IPAP
+0x01D7	SPT	S.VA.PS	PRS_SUPPORT	PS [cmH2O] (0.0 .. 10.0 step 0.2); VAuto PS
+0x01D8	STV	S.VA.StartPress	START_VAUTO_PRES	Start EPAP [cmH2O] (4.0 .. 25.0 step 0.2); VAuto Start EPAP
+0x01D9	EPP	S.BL.EPAP	EPAP	EPAP [cmH2O] (3.0 .. 25.0 step 0.2); Bilevel EPAP
+0x01DA	EPS	S.BL.StartPress	START_EPAP	Start EPAP [cmH2O] (3.0 .. 25.0 step 0.2); Bilevel Start EPAP
+0x01DB	RST	S.RiseTime	RISE_TIME	Rise Time [ms] (150 .. 900 step 50); Rise Time
+0x01DC	ITN	S.TiMin	TI_MIN	Ti Min [s] (0.1 .. 4.0 step 0.1); Ti Min
+0x01DD	ITX	S.TiMax	TI_MAX	Ti Max [s] (0.3 .. 4.0 step 0.1); Ti Max
+0x01DE	RRT		RESP_RATE_SETTING	Resp. Rate [bpm] (5.0 .. 50.0 step 1.0); Resp. Rate
+0x01DF	ITT		TI_TOTAL_TIME	Ti [s] (0.3 .. 4.0 step 0.1); Ti
+0x01E0	EEP	S.AV.EPAP	SET_EEP	EPAP [cmH2O] (4.0 .. 15.0 step 0.2); ASV EPAP
+0x01E1	MNS	S.AV.MinPS	MIN_SWING	Min PS [cmH2O] (0.0 .. 6.0 step 0.2); ASV Min PS
+0x01E2	MXS	S.AV.MaxPS	MAX_SWING	Max PS [cmH2O] (5.0 .. 20.0 step 0.2); ASV Max PS
+0x01E3	STE	S.AV.StartPress	START_EEP	Start EPAP [cmH2O] (4.0 .. 15.0 step 0.2); ASV Start EPAP
+0x01E4	EAX	S.AA.MaxEPAP	ASV_AUTO_MAX_EPAP	Max EPAP [cmH2O] (4.0 .. 15.0 step 0.2); ASVAuto Max EPAP
+0x01E5	EAI	S.AA.MinEPAP	ASV_AUTO_MIN_EPAP	Min EPAP [cmH2O] (4.0 .. 15.0 step 0.2); ASVAuto Min EPAP
+0x01E6	ANS	S.AA.MinPS	ASV_AUTO_MIN_SWING	Min PS [cmH2O] (0.0 .. 6.0 step 0.2); ASVAuto Min PS
+0x01E7	AXS	S.AA.MaxPS	ASV_AUTO_MAX_SWING	Max PS [cmH2O] (5.0 .. 20.0 step 0.2); ASVAuto Max PS
+0x01E8	EAS	S.AA.StartPress	ASV_AUTO_START_EPAP	Start EPAP [cmH2O] (4.0 .. 15.0 step 0.2); ASVAuto Start EPAP
+0x01E9	EPI		IVAPS_EPAP	EPAP [cmH2O] (2.0 .. 25.0 step 0.2); iVAPS EPAP
+0x01EA	WPM		IVAPS_MIN_SWING	Min PS [cmH2O] (0.0 .. 20.0 step 0.2); iVAPS Min PS
+0x01EB	WPA		IVAPS_MAX_SWING	Max PS [cmH2O] (0.0 .. 28.0 step 0.2); iVAPS Max PS
+0x01EC	IBR		IVAPS_TGT_PT_RATE	Target Pt Rate [bpm] (8.0 .. 30.0 step 1.0); iVAPS Target Rate
+0x01ED	WMV		IVAPS_TGT_VA	Target Va [L/min] (1.0 .. 30.0 step 0.1); iVAPS Target Va
+0x01EE	IVS		IVAPS_START_EPAP	Start EPAP [cmH2O] (2.0 .. 25.0 step 0.2); iVAPS Start EPAP
+0x01EF	RMT	S.RampTime	RAMP_TIME	Ramp Time
+0x01F0	ZLP			PS [cmH2O] (0.0 .. 28.0 step 0.2)
+0x01F1	ZDE			Min [cmH2O] (0.0 .. 28.0 step 0.2)
+0x01F2	RDF		REM_DATE_FILTER	Filter (0 .. 24836 step 7); Reminder Due: Filter
+0x01F3	RDM		REM_DATE_MASK	Mask (0 .. 24836 step 7); Reminder Due: Mask
+0x01F4	RDH		REM_DATE_TUBE	Tube (0 .. 24836 step 7); Reminder Due: Tube
+0x01F5	RDW		REM_DATE_WATERTUB	Water Tub (0 .. 24836 step 7); Reminder Due: Water Tub
+0x01F6	UDT			Date (0 .. 24836 step 1)
+0x01F7	ZIC			Calculating… (0 .. 5120 step 1)
+0x01F8	ZIT			Learning… (0 .. 5120 step 1)
+0x01F9	RTI			Time (0 .. 1522491 step 1)
+0x01FA	UTI			Time (0 .. 1522491 step 1)
+0x01FB	AER		APP_ERR_ORI	App Error Origin
+0x01FC	ELV			
+0x01FD	ALB		ACTIVE_ALARM	
+0x01FE	SED			
+0x01FF	SYC	Fault.Humidifier	CLIMATE_CONTROL_ERROR	Climate Control Error
+0x0200	SYH	Fault.HeatedTube	HEATED_TUBE_ERROR	Heated Tube Error
+0x0201	SYS	Fault.Device	SYSTEM_ERROR	System Error
+0x0202	SYT	Fault.Alarm	SYSTEM_ERROR_TWO	System Error Two
+0x0203	TYS		TRANSIENT_SYSTEM_ERROR	Transient System Error
+0x0204	LNC		LANGUAGE_CONFIG	Language Config Bitmask
+0x0205	SDS			
+0x0206	ZRS			
+0x0207	RYS			
+0x0208	EMS			
+0x0209	TSS			
+0x020A	ZPC			
+0x020B	ZOX			
+0x020C	ZPK			
+0x020D	MOP	Mode	OPERATING_MODE	Therapy Mode
+0x020E	ROP		RUNNING_MODE	Run Mode Request
+0x020F	ZRM		PROD_RUN_MODE	Run Mode
+0x0210	BLL		JUMP_TO_PROGRAM	Jump to Bootloader
+0x0211	BLS		BOOTLOADER_STATUS	Bootloader Status
+0x0212	LAN		LANGUAGE	Language
+0x0213	MSK	S.Mask	MASK_TYPE	Mask Type
+0x0214	TBT	S.Tube	HOSE_LENGTH	Tube Type
+0x0215	REM		MANUF_RESET	Erase Data (0=Clinical 1=Compliance 2=ErrorLog 3=All)
+0x0216	ACC	S.PtAccess	PATIENT_ACCESS_TYPE	Patient Access
+0x0217	EBE	S.EasyBreathe	EASYBREATHE_ENABLE	Easy-Breathe
+0x0218	RSC	S.RiseEnable	RISE_TIME_CONTROL	Rise Time; Rise Time Select
+0x0219	IHU		IVAPS_HEIGHT_UNIT	Height Units
+0x021A	ILE		LEARN_MODE	iVAPS LT
+0x021B	BRE		BACKUP_RATE_ENABLE	Backup Rate
+0x021C	ABF	S.ABFilter	AB_FILTER	AB Filter
+0x021D	ALV		ALARM_VOLUME	Alarm Vol/Test
+0x021E	NMF		NV_MASK_ALM_EN	Non-Vent Mask
+0x021F	HLE		HI_LEAK_ALM_EN	High Leak; High Leak Alarm
+0x0220	AET		APN_EV_TYPE	Apnea Event Type
+0x0221	AFC	S.AS.Comfort	AUTOSET_COMFORT	AutoSet Comfort/Response
+0x0222	ALR	S.LeakAlert	AUDIO_ALARM	Leak Alert
+0x0223	CCO	S.ClimateControl	CLIMATE_CTL_OFFON	Climate Control
+0x0224	HMX	S.HumEnable	HUMIDIFIER_SETTING_ENABLE	Humidity Enable
+0x0225	HTB	HeatedTube	HEATED_TUBE	Heated Tube Detected
+0x0226	HTX	S.TempEnable	HEATED_TUBE_SETTING_ENABLE	Tube Temp Enable
+0x0227	HUM	Humidifier	HUMIDIFIER	Humidifier Detected
+0x0228	HOS		HUM_OP_STATE	Humidifier Operating State
+0x0229	HCM		HUM_OP_MODE	Humidifier Operating Mode
+0x022A	TMU		TEMP_UNIT	Temp. Units
+0x022B	HME	S.ExternalHum	HUMID_EXTERNAL	Ext. Humidifier
+0x022C	ZFC			
+0x022D	QGI		MODULE_INT_GROUP	Module Group
+0x022E	QCS		MODULE_CELL_SIGNAL_STRENGTH	Cell Signal Strength
+0x022F	QFC		MODULE_FLIGHT_MODE_CONTROL	Airplane Mode
+0x0230	QNC		MODULE_NETWORK_CONNECTION	Network Connection
+0x0231	LCA		LCD_TXT_ACT	LCD Text Active
+0x0232	EPA	S.EPR.ClinEnable	EPR_ACCESS	EPR Clinical Enable
+0x0233	EPX	S.EPR.EPREnable	EPR_PATIENT	EPR Patient Enable
+0x0234	EPT	S.EPR.EPRType	EPR_TYPE	EPR Type
+0x0235	TLF		THERAPY_LED_ENABLE	Therapy LED
+0x0236	MFT		MASKFITTING	Mask Fitting Mode
+0x0237	RSA			
+0x0238	RPF		RECUR_PERIOD_ENABLE_FILTER	Recurrence Enable: Filter
+0x0239	RPO		RECUR_PERIOD_ENABLE_MASK	Recurrence Enable: Mask
+0x023A	RPH		RECUR_PERIOD_ENABLE_TUBE	Recurrence Enable: Tube
+0x023B	RPW		RECUR_PERIOD_ENABLE_WATERTUB	Recurrence Enable: Water Tub
+0x023C	RXF		REM_DATE_ENABLE_FILTER	Reminder Date Enable: Filter
+0x023D	RXM		REM_DATE_ENABLE_MASK	Reminder Date Enable: Mask
+0x023E	RXH		REM_DATE_ENABLE_TUBE	Reminder Date Enable: Tube
+0x023F	RXW		REM_DATE_ENABLE_WATERTUB	Reminder Date Enable: Water Tub
+0x0240	RMA	S.RampEnable	RAMP_CONTROL	Ramp Enable
+0x0241	ZRP		IS_RAMPING	Is Ramping
+0x0242	SCF		CONFIRM_STOP	Confirm Stop
+0x0243	SST	S.SmartStart	SMART_START	SmartStart
+0x0244	TCV		TRIGGER_CYCLE_EVENT	Trigger/Cycle Event
+0x0245	VCS	S.Cycle	CYCL_SNSTVTY	Cycle; Cycle Sensitivity
+0x0246	VTS	S.Trigger	TRIG_SNSTVTY	Trigger; Trigger Sensitivity
+0x0247	CSR		CSR_EVENT_TYPE	CSR Event Type
+0x0248	MST		MASK_STATUS	Mask Status
+0x0249	HTC			
+0x024A	IMF			
+0x024B	BOL			
+0x024C	CAL		CALIBRATION	
+0x024D	MDC			
+0x024E	LCD			
+0x024F	LET		AVG_EXP_TIME	
+0x0250	RES		RESISTANCE	
+0x0251	ROT			
+0x0252	PBR			
+0x0253	CDS			
+0x0254	SDC			
+0x0255	SCS			
+0x0256	TUD			
+0x0257	MQD			Mask Fit
+0x0258	ZRH			
+0x0259	KEY		KEYPAD_STAT	
+0x025A	UTY			
+0x025B	CTY			
+0x025C	ZBO			
+0x025D	HUC			
+0x025E	HUS			
+0x025F	WUP			
+0x0260	HON			
+0x0261	CEN			
+0x0262	CDT			
+0x0263	ZCU			
+0x0264	ZMR			
+0x0265	ZCC			
+0x0266	ZCS			
+0x0267	ZSD			
+0x0268	CSM			
+0x0269	ZTG			
+0x026A	ZTF			
+0x026B	ZRJ			
+0x026C	ZBD			
+0x026D	ZBR			
+0x026E	RMM			
+0x026F	ZRA			
+0x0270	CYI			
+0x0271	TRI			
+0x0272	UPM			
+0x0273	UPS			
+0x0274	UPK			
+0x0275	EBW			
+0x0276	ZHT			
+0x0277	MFM			
+0x0278	MFA			
+0x0279	ZFM			
+0x027A	OXC			
+0x027B	ZLS			
+0x027C	ZLC			
+0x027D	AOA			
+0x027E	AAA			
+0x027F	CRC			
+0x0280	ZCR			
+0x0281	CYM			
+0x0282	ERC			
+0x0283	ERE			
+0x0284	ETR			
+0x0285	FON			
+0x0286	KPM			
+0x0287	CMS			
+0x0288	CNM			
+0x0289	CMT			
+0x028A	ZPV			
+0x028B	PMS			
+0x028C	PRD		PRESSURE_U	Press. Units; Pressure Units
+0x028D	PSM			
+0x028E	PSU			
+0x028F	AKM			
+0x0290	ASM			
+0x0291	SEP			Period
+0x0292	SRC			
+0x0293	TMM			
+0x0294	BVP			
+0x0295	ZLB			
+0x0296	ZLE			
+0x0297	ZTE			
+0x0298	ZEL			
+0x0299	ZPD			
+0x029A	ZRF			
+0x029B	ZRO			
+0x029C	ZRT			
+0x029D	ECK			
+0x029E	ZWR			
+0x029F	ZWT			
+0x02A0	ZWD			
+0x02A1	ZUI			
+0x02A2	ZPA			
+0x02A3	RPM			
+0x02A4	ZHA			
+0x02A5	RUM			
+0x02A6	ZOA			
+0x02A7	ZKA			
+0x02A8	SPM			
+0x02A9	ZSA			
+0x02AA	ZEA			
+0x02AB	ZUM			
+0x02AC	ZMS			
+0x02AD	ZLM			
+0x02AE	AIR			myAir
+0x02AF	MAM			
+0x02B0	DLA			
+0x02B1	ZYS			
+0x02B2	ANV			
+0x02B3	PCC			
+0x02B4	HPI			
+0x02B5	HUI			
+0x02B6	DAC		DATE_DEC	Date
+0x02B7	TIC		TIME_DEC	Time
+0x02B8	OXH			
+0x02B9	TCE			
+0x02BA	PBT			
+0x02BB	PMD			
+0x02BC	FTX			
+0x02BD	RAW			
+0x02BE	DRT			
+0x02BF	CPU			
+0x02C0	SSK			
+0x02C1	APN			
+0x02C2	CSN			
+0x02C3	BRH			
+0x02C4	BRP			
+0x02C5	PLD			
+0x02C6	SAD			
+0x02C7	CSL			
+0x02C8	AEV			
+0x02C9	EVE			
+0x02CA	STR			
+0x02CB	ABR			
+0x02CC	TXC			
+0x02CD	TXH			
+0x02CE	TXE			
+0x02CF	TXW			
+0x02D0	TRR		TMP_R_RATE	
+0x02D1	DLL			
+0x02D2	ERR			
+0x02D3	ELI			
+0x02D4	ZRL			
+0x02D5	NPD		PROGRAM_NAME_PREFIX	
+0x02D6	NPA			
+0x02D7	AGL			AutoSet params
+0x02D8	CGL			CPAP params
+0x02D9	RGL			Reminders/replacement
+0x02DA	DGL			Bilevel timing
+0x02DB	IGL			Bilevel pressure
+0x02DC	EGL			EPR params
+0x02DD	QXH			ASVAuto params
+0x02DE	QXJ			iVAPS params
+0x02DF	VGL			VAuto params
+0x02E0	XGL			ASV fixed params
+0x02E1	BGL			Board/identity
+0x02E2	NGL			Backlight?
+0x02E3	UGL			Usage data
+0x02E4	MGL			Machine settings
+0x02E5	PGL			Peripherals/accessories
+0x02E6	SGL			System settings
+0x02E7	PDL			
