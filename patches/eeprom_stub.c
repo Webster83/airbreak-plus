@@ -739,10 +739,11 @@ static void cmd_reset(void)
  * Supported commands:
  *   P S #RES 0001  ->  reset into bootloader
  *   P S #RES 0003  ->  fast reset back to CDX
- *   P S #BLL 0001  ->  same as RES 0001, protocol compatibility... 
- *   G S #BID       ->  bootloader version
+ *   P S #BLL 0001  ->  same as RES 0001, protocol compatibility
+ *   G S #BID       ->  bootloader version (from BLX flash)
+ *   G S #BLS       ->  bootloader state (always 0000 = CDX running)
  *   G S #CID       ->  CDX version (our SID tag)
- *   G S #SID       ->  same as CID, also for compatibility
+ *   G S #SID       ->  same as CID, for compatibility
  */
 
 static int hex_nibble(u8 c)
@@ -755,7 +756,7 @@ static int hex_nibble(u8 c)
 
 static u8 nibble_hex(u8 n) { return n < 10 ? '0' + n : 'A' + n - 10; }
 
-static void send_r_frame(const u8 *payload, u16 plen);
+static void send_qr_frame(u8 type, const u8 *payload, u16 plen);
 
 #define BID_FLASH_ADDR  ((const char *)0x08003F80)
 #define BID_MAX_LEN     32
@@ -781,15 +782,32 @@ static void send_gs_response(const char *prefix, u16 pfx_len,
     resp[n++] = ' ';
     memcpy(resp + n, value, val_len);
     n += val_len;
-    send_r_frame(resp, n);
+    send_qr_frame('R', resp, n);
 }
 
-static void send_r_frame(const u8 *payload, u16 plen)
+static void send_error_response(const char *prefix, u16 pfx_len,
+                                const char *code, u16 code_len)
+{
+    u8 resp[128];
+    u16 n = 0;
+    if ((u16)(pfx_len + 3 + code_len) > sizeof(resp))
+        return;
+    memcpy(resp, prefix, pfx_len);
+    n = pfx_len;
+    resp[n++] = ' ';
+    resp[n++] = '=';
+    resp[n++] = ' ';
+    memcpy(resp + n, code, code_len);
+    n += code_len;
+    send_qr_frame('E', resp, n);
+}
+
+static void send_qr_frame(u8 type, const u8 *payload, u16 plen)
 {
     uart_dma_wait();
     u8 *p = tx_buf;
     *p++ = 0x55;
-    *p++ = 'R';
+    *p++ = type;
 
     // Escape payload into tx_buf, compute body length
     u8 *body = p + 3;            // fill len later
@@ -900,14 +918,17 @@ static int handle_q_frame(void)
             send_gs_response("G S #RES", 8, "0000", 4);
         else if (plen >= 8 && memcmp(pl + 5, "BLL", 3) == 0)
             send_gs_response("G S #BLL", 8, "0000", 4);
+        else if (plen >= 8 && memcmp(pl + 5, "BLS", 3) == 0)
+            send_gs_response("G S #BLS", 8, "0000", 4);
         else {
-            send_gs_response((const char *)pl, plen, "6006", 4);
+            u16 pfx = (plen >= 8) ? 8 : plen;
+            send_error_response((const char *)pl, pfx, "6006", 4);
         }
     }
     // P S # for unknown variables
     else if (plen >= 5 && memcmp(pl, "P S #", 5) == 0) {
         u16 pfx = (plen >= 8) ? 8 : plen;
-        send_gs_response((const char *)pl, pfx, "6006", 4);
+        send_error_response((const char *)pl, pfx, "6006", 4);
     }
 
     return -2;
