@@ -263,6 +263,70 @@ motor_nagscreen() {
     fi
 }
 
+# Enable Level 3 commands on the BLE encrypted channel (VCID 0x0396).
+#
+# The RPC permission table has 9-byte entries: [cmd_id] [flag0..flag7]
+# Flag index 1 = BLE encrypted
+#
+# Add/remove cmd_ids in BLE_UNLOCK to control which commands to enable.
+
+BLE_UNLOCK=(
+    5    # SetDateTime
+    # 15   # InitiateUpgrade
+    # 16   # UpgradeDataBlock
+    # 25   # GetLedStatus
+    # 31   # SetNextPowerUpDateTime
+    # 63   # ResetDevice
+    # 64   # StoreSecurityData
+    # 70   # VerifySecurityData
+    # 86   # ClearAutoConnectList
+)
+
+ble_permissions() {
+    if [ ${#BLE_UNLOCK[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    local result
+    result=$(perl -0777 -e '
+        open my $fh, "+<:raw", $ARGV[0] or die "open: $!";
+        local $/; my $data = <$fh>;
+
+        # Anchor: cmd_id 4 (GetDateTime) with all 8 flags = 1
+        # Search only in CDX region to avoid CCX false positive
+        my $anchor = pack("C9", 4, 1,1,1,1,1,1,1,1);
+        my $apos = index($data, $anchor, 0x40000);
+        die "anchor not found" if $apos < 0;
+
+        # Table base: walk back in 9-byte steps while cmd_ids decrease
+        my $base = $apos;
+        while ($base >= 9) {
+            $base -= 9;
+            last if unpack("C", substr($data, $base, 1)) == 0;
+        }
+
+        my @unlock = split /,/, $ARGV[1];
+        my $patched = 0;
+        for my $i (0 .. 88) {
+            my $off = $base + $i * 9;
+            last if $off + 9 > length($data);
+            my $cmd = unpack("C", substr($data, $off, 1));
+            if (grep { $_ == $cmd } @unlock) {
+                my $flag = unpack("C", substr($data, $off + 2, 1));
+                if ($flag == 0) {
+                    substr($data, $off + 2, 1) = chr(1);
+                    $patched++;
+                    printf STDERR "  cmd %d: enabled\n", $cmd;
+                }
+            }
+        }
+        seek($fh, 0, 0) or die; print $fh $data; close $fh;
+        print $patched;
+    ' "$OUT" "$(IFS=,; echo "${BLE_UNLOCK[*]}")")
+
+    echo "Patching BLE permissions... $result commands unlocked"
+}
+
 patch_crc() {
     local regions=(
         "$BLX_OFF $BLX_SIZE"
@@ -300,6 +364,7 @@ extra_modes
 gui_config
 gui_visibility
 motor_nagscreen
+ble_permissions
 
 patch_crc  # ALWAYS keep it as last patch applied
 
