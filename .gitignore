@@ -8,3 +8,7 @@ images/
 *.elf
 *.bin
 .*.swp
+venv
+python/*private*
+patches/*private*
+__pycache__
