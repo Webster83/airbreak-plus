@@ -148,7 +148,7 @@ One-way push from SpO2 module. No response from device.
 0x55 'L' len(3) O X H [seq:2] [OXS:2] [HRR:3] [SAS:2] [SAR:2] [NVS:2] crc(4)
 ```
 
-Full format in `resmed_oximeter_protocol.md`.
+Full format in [oximeter_protocol.md](oximeter_protocol.md).
 
 ## O-frame (session open)
 
