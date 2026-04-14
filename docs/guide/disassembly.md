@@ -11,7 +11,7 @@ Opening the AirSense 10 to access the programming header.
 
 ### 1. Remove faceplate
 
-The front faceplate is only clipped in place -- no screws. Pull it straight off.
+The front faceplate is only clipped in place - no screws. Pull it straight off.
 
 ![Faceplate removal](../images/airsense-faceplate.jpg)
 
