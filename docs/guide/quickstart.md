@@ -54,7 +54,7 @@ telnet localhost 4444
 > dump
 ```
 
-Keep `stm32.bin` safe. This is your only backup.
+**Keep `stm32.bin` safe. This is your only backup.**
 
 ### 4. [Patch](patching.md)
 
