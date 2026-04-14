@@ -2,8 +2,6 @@ site/
 stm32/
 _testing/
 build/
-images/
-
 *.o
 *.elf
 *.bin
