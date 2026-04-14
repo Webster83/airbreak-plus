@@ -95,7 +95,8 @@ UART:
 | Guide | Content |
 |-------|---------|
 | [Disassembly](disassembly.md) | Opening the device |
-| [Wiring](wiring.md) | Programmer connections and pinouts |
+| [SWD wiring](wiring.md) | Programming header connections |
+| [Serial connection](serial_connection.md) | UART accessory port |
 | [OpenOCD](openocd.md) | Firmware dump and basic interaction |
 | [Patching](patching.md) | Building, patch options, customization |
-| [Flashing](flashing.md) | SWD and UART flashing methods |
+| [Flashing](flashing.md) | SWD and UART flashing |
