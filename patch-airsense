@@ -279,19 +279,19 @@ le_thumb_ptr() {
 # encode_thumb_bl SRC_FILE_OFF DST_FLASH_ADDR
 encode_thumb_bl() {
     python3 -c "
-        import struct, sys
-        src = $1 + 0x08000004
-        dst = $2
-        offset = dst - src
-        S = 1 if offset < 0 else 0
-        if offset < 0: offset += (1 << 25)
-        I1 = (offset >> 23) & 1; I2 = (offset >> 22) & 1
-        imm10 = (offset >> 12) & 0x3FF; imm11 = (offset >> 1) & 0x7FF
-        J1 = (~(I1 ^ S)) & 1; J2 = (~(I2 ^ S)) & 1
-        hw1 = 0xF000 | (S << 10) | imm10
-        hw2 = 0xD000 | (J1 << 13) | (J2 << 11) | imm11
-        sys.stdout.buffer.write(struct.pack('<HH', hw1, hw2))
-    "
+import struct, sys
+src = $1 + 0x08000004
+dst = $2
+offset = dst - src
+S = 1 if offset < 0 else 0
+if offset < 0: offset += (1 << 25)
+I1 = (offset >> 23) & 1; I2 = (offset >> 22) & 1
+imm10 = (offset >> 12) & 0x3FF; imm11 = (offset >> 1) & 0x7FF
+J1 = (~(I1 ^ S)) & 1; J2 = (~(I2 ^ S)) & 1
+hw1 = 0xF000 | (S << 10) | imm10
+hw2 = 0xD000 | (J1 << 13) | (J2 << 11) | imm11
+sys.stdout.buffer.write(struct.pack('<HH', hw1, hw2))
+"
 }
 
 patch_code_common() {
