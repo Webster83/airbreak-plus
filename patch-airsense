@@ -75,30 +75,36 @@ crc16_region() {
     local offset=$(printf "%d" "$1")
     local length=$(printf "%d" "$2")
 
-    dd if="$OUT" bs=1 skip="$offset" count="$length" status=none | \
     perl -e '
         use strict;
         use warnings;
 
-        binmode STDIN;
-
-        my $crc = 0xFFFF;
-
-        while (read(STDIN, my $buf, 4096)) {
-            foreach my $byte (unpack("C*", $buf)) {
-                $crc ^= ($byte << 8);
-                for (1..8) {
-                    if ($crc & 0x8000) {
-                        $crc = (($crc << 1) ^ 0x1021) & 0xFFFF;
-                    } else {
-                        $crc = ($crc << 1) & 0xFFFF;
-                    }
-                }
+        my @table;
+        for my $i (0..255) {
+            my $c = $i << 8;
+            for (1..8) {
+                $c = ($c & 0x8000) ? (($c << 1) ^ 0x1021) & 0xFFFF : ($c << 1) & 0xFFFF;
             }
+            $table[$i] = $c;
+        }
+
+        open my $fh, "<:raw", $ARGV[0] or die "open: $!";
+        seek($fh, $ARGV[1], 0) or die "seek: $!";
+
+        my $remaining = $ARGV[2];
+        my $crc = 0xFFFF;
+        while ($remaining > 0) {
+            my $n = $remaining > 65536 ? 65536 : $remaining;
+            my $got = read($fh, my $buf, $n);
+            defined $got && $got == $n or die "read: $!";
+            foreach my $byte (unpack("C*", $buf)) {
+                $crc = (($crc << 8) & 0xFFFF) ^ $table[(($crc >> 8) ^ $byte) & 0xFF];
+            }
+            $remaining -= $n;
         }
 
         printf "%04X\n", $crc;
-    '
+    ' "$OUT" "$offset" "$length"
 }
 
 find_bytes() {
