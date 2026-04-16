@@ -38,21 +38,23 @@ binaries: $(S10_CODE_BINS) $(VID_SPOOF_BINS)
 # Each version has its own stubs.S with platform-specific addresses.
 # Binaries are built per-version: common_code_0401.bin, graph_0402.bin, etc.
 #
-# Code cave layout (unified across versions):
-#   0x80fd000  graph         (~1KB growth room)
+# Code cave layout
+#   0x80fcfa0  vid_spoof
+#   0x80fd000  graph
 #   0x80fd400  squarewave
-#   0x80fd800  s10_lcd_ili9325
-#   0x80fdf00  asv_task_wrapper / asv_disable_backup_rate
-#   0x80fe000  common_code
-#   0x80fef00  vid_spoof
-#   0x80ff000  wrapper_limit_max_pdiff
+#   0x80fd700  asv_task_wrapper
+#   0x80fd800  common_code
+#   0x80fec00  backlight_adapt
+#   0x80fee00  wrapper_limit_max_pdiff
+#   0x80ff600  s10_lcd_ili9325
 
-common_code-offset := 0x80fe000
 graph-offset := 0x80fd000
 squarewave-offset := 0x80fd400
-asv_task_wrapper-offset := 0x80fdf00
-wrapper_limit_max_pdiff-offset := 0x80ff000
-backlight_adapt-offset := 0x80fef48
+asv_task_wrapper-offset := 0x80fd700
+common_code-offset := 0x80fd800
+backlight_adapt-offset := 0x80fec00
+wrapper_limit_max_pdiff-offset := 0x80fee00
+vid_spoof-offset := 0x80fcfa0
 
 define S10_CODE_VERSION_template
 $(BUILD)/s10_$(1)_stubs.o: $(SRC)/s10_$(1)_stubs.S | $(BUILD)
@@ -228,7 +230,7 @@ $(BUILD)/stm32-s9-lcd.bin: patch-airsense-s9 s9_lcd_ili9225 | $(BUILD)
 # Build: make s10_lcd_ili9325
 # Usage: PATCH_S10_LCD=1 ./patch-airsense stm32.bin output.bin
 
-S10_LCD_OFFSET ?= 0x080FD800
+S10_LCD_OFFSET ?= 0x080FF600
 S10_LCD_VERSIONS := 0401 0402
 
 $(BUILD)/s10_lcd_ili9325.o: $(SRC)/s10_lcd_ili9325.c | $(BUILD)
@@ -256,7 +258,7 @@ s10_lcd_ili9325: $(foreach v,$(S10_LCD_VERSIONS),$(BUILD)/s10_lcd_ili9325_$(v).b
 # VID Spoof - MOP-based Variant ID override
 #
 
-VID_SPOOF_OFFSET := 0x80fef00
+VID_SPOOF_OFFSET := 0x80fcfa0
 
 #                       ORIG        HANDLER     MOP         VTENTRY
 vid_spoof_addrs_0402 := 0x0806A51D  0x200096A0  0x200104AE  0xF1744

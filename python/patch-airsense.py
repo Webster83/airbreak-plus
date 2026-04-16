@@ -571,8 +571,8 @@ class ASFirmwarePatches(object):
         data, ver = self._load_versioned_bin('common_code')
         if data is None:
             return
-        self.asf.patch(data, 0xfe000, checkempty=True)
-        print("  common_code: %dB at 0xFE000" % len(data))
+        self.asf.patch(data, 0xfd800, checkempty=True)
+        print("  common_code: %dB at 0xFD800" % len(data))
 
     def patch_graph(self):
         """Add special graph module"""
@@ -610,8 +610,8 @@ class ASFirmwarePatches(object):
         if fptr is None:
             print("  patch_asv_task_wrapper: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
             return
-        self._patch_pointer(data, 0xfdf00, fptr)
-        print("  asv_task_wrapper: %dB at 0xFDF00" % len(data))
+        self._patch_pointer(data, 0xfd700, fptr)
+        print("  asv_task_wrapper: %dB at 0xFD700" % len(data))
 
     def patch_wrapper_limit_max_pdiff(self):
         """Add VAuto/ASV pressure shaping wrapper"""
@@ -623,8 +623,8 @@ class ASFirmwarePatches(object):
         if fptr is None:
             print("  patch_wrapper_limit_max_pdiff: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
             return
-        self._patch_pointer(data, 0xff000, fptr)
-        print("  limit_max_pdiff: %dB at 0xFF000" % len(data))
+        self._patch_pointer(data, 0xfee00, fptr)
+        print("  limit_max_pdiff: %dB at 0xFEE00" % len(data))
 
     def patch_lcd_ili9325(self):
         """Universal ILI9325/ILI9328 + ILI9341 LCD driver"""
@@ -641,7 +641,7 @@ class ASFirmwarePatches(object):
         data, ver = self._load_versioned_bin('s10_lcd_ili9325')
         if data is None:
             return
-        lcd_offset = 0xFD800
+        lcd_offset = 0xFF600
         self.asf.patch(data, lcd_offset, checkempty=True)
         print("  lcd_ili9325: %dB at 0x%X" % (len(data), lcd_offset))
         bl_bytes = self._encode_thumb_bl(bl_off, 0x08000000 + lcd_offset + 1)
@@ -666,7 +666,7 @@ class ASFirmwarePatches(object):
 
     def patch_backlight_adapt(self):
         """improved backlight response to ambient light"""
-        BACKLIGHT_OFFSET = 0xFEF48
+        BACKLIGHT_OFFSET = 0xFEC00
         data, ver = self._load_versioned_bin('backlight_adapt')
         if data is None:
             return
@@ -719,7 +719,7 @@ class ASFirmwarePatches(object):
 
     def patch_vid_spoof(self):
         """Hook MOP writeback to dynamically set VID per therapy mode"""
-        VID_SPOOF_OFFSET = 0xFEF00
+        VID_SPOOF_OFFSET = 0xFCFA0
         VTABLE_ENTRIES = {
             '0402': (0xF1744, b'\x1d\xa5\x06\x08'),
             '0401': (0xF14CC, b'\x1d\xa5\x06\x08'),

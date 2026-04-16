@@ -298,7 +298,7 @@ patch_code_common() {
     local ver=${CDX_VER#SX567-}
     local BIN=build/common_code_${ver}.bin
     echo "Patching common_code.c ($ver)"
-    patch_direct "$BIN" 0xfe000
+    patch_direct "$BIN" 0xfd800
 }
 
 patch_code_graph() {
@@ -337,7 +337,7 @@ patch_code_asv_task_wraper() {
         *) echo "  patch_code_asv_task_wraper: unsupported $ver"; return 1 ;;
     esac
     echo "Patching ASV task wrapper ($ver)"
-    patch_pointer "$BIN" 0xfdf00 "$FPTR" "$(le_thumb_ptr 0x80fdf00)"
+    patch_pointer "$BIN" 0xfd700 "$FPTR" "$(le_thumb_ptr 0x80fd700)"
 }
 
 patch_wrapper_limit_max_pdiff() {
@@ -350,7 +350,7 @@ patch_wrapper_limit_max_pdiff() {
         *) echo "  patch_wrapper_limit_max_pdiff: unsupported $ver"; return 1 ;;
     esac
     echo "Patching wrapper for pressure_limit_max_diff ($ver)"
-    patch_pointer "$BIN" 0xff000 "$FPTR" "$(le_thumb_ptr 0x80ff000)"
+    patch_pointer "$BIN" 0xfee00 "$FPTR" "$(le_thumb_ptr 0x80fee00)"
 }
 
 patch_code() {
@@ -600,7 +600,7 @@ asv_disable_backup_rate () {
 patch_vid_spoof() {
 
     # Must match Makefile VID_SPOOF_OFFSET
-    local VID_SPOOF_OFFSET=0xFEF00
+    local VID_SPOOF_OFFSET=0xFCFA0
 
     local ver=${CDX_VER#SX567-}
     local BIN=build/vid_spoof_${ver}.bin
@@ -640,7 +640,7 @@ patch_lcd_ili9325() {
         die "LCD patch binary not found: $BIN (run make s10_lcd_ili9325)"
     fi
 
-    local LCD_FLASH=${S10_LCD_OFFSET:-0x080FD800}
+    local LCD_FLASH=${S10_LCD_OFFSET:-0x080FF600}
     local LCD_OFF=$(( LCD_FLASH - 0x08000000 ))
 
     local BL_OFF EXPECTED_BL
@@ -690,7 +690,7 @@ patch_backlight_adapt() {
 
     local ver=${CDX_VER#SX567-}
     local BIN=build/backlight_adapt_${ver}.bin
-    local BACKLIGHT_OFFSET=0xFEF48
+    local BACKLIGHT_OFFSET=0xFEC00
 
     case "$ver" in
         0401|0402) ;;
