@@ -644,10 +644,13 @@ class ASFirmwarePatches(object):
         lcd_offset = 0xFD800
         self.asf.patch(data, lcd_offset, checkempty=True)
         print("  lcd_ili9325: %dB at 0x%X" % (len(data), lcd_offset))
-        # Compute BL encoding from bl_off to lcd_board_init (entry point = lcd_offset)
-        src = bl_off + 0x08000004
-        dst = 0x08000000 + lcd_offset + 1  # Thumb
-        offset = dst - src
+        bl_bytes = self._encode_thumb_bl(bl_off, 0x08000000 + lcd_offset + 1)
+        self.asf.patch(bl_bytes, bl_off, clobber=True)
+
+    def _encode_thumb_bl(self, src_off, dst_addr):
+        """Encode a Thumb BL instruction from file offset to absolute address."""
+        src = src_off + 0x08000004
+        offset = dst_addr - src
         S = 1 if offset < 0 else 0
         if offset < 0:
             offset += (1 << 25)
@@ -659,8 +662,51 @@ class ASFirmwarePatches(object):
         J2 = (~(I2 ^ S)) & 1
         hw1 = 0xF000 | (S << 10) | imm10
         hw2 = 0xD000 | (J1 << 13) | (J2 << 11) | imm11
-        bl_bytes = struct.pack('<HH', hw1, hw2)
-        self.asf.patch(bl_bytes, bl_off, clobber=True)
+        return struct.pack('<HH', hw1, hw2)
+
+    def patch_backlight_adapt(self):
+        """improved backlight response to ambient light"""
+        BACKLIGHT_OFFSET = 0xFEF48
+        data, ver = self._load_versioned_bin('backlight_adapt')
+        if data is None:
+            return
+
+        if ver not in ('0401', '0402'):
+            print("  skipped (unsupported version %s)" % ver)
+            return
+
+        # signature: bl A1D0; mov r0,r4; bl A2A4; movs r5,#0
+        try:
+            sig_off = self.asf.find_bytes(bytes.fromhex('00F0D5F8204600F03CF90025'))
+        except ValueError:
+            print("  tick signature not found")
+            return
+
+        hook_off = sig_off + 6
+        expected_bl = b'\x00\xF0\x3C\xF9'
+        if bytes(self.asf.fw[hook_off:hook_off+4]) != expected_bl:
+            print("  unexpected bytes at hook site 0x%X, already patched?" % hook_off)
+            return
+
+        self.asf.patch(data, BACKLIGHT_OFFSET, checkempty=True)
+
+        # NOP the beq that skips ASR->ASF averaging
+        gate_off = sig_off + 0x1C8
+        if bytes(self.asf.fw[gate_off:gate_off+2]) == b'\x4F\xD0':
+            self.asf.patch(b'\x00\xBF', gate_off, clobber=True)
+
+        # redirect bl backlight_state_machine to our payload
+        cave_addr = BACKLIGHT_OFFSET + 0x08000000
+        bl_bytes = self._encode_thumb_bl(hook_off, cave_addr)
+        self.asf.patch(bl_bytes, hook_off, clobber=True)
+
+        # tune defaults
+        G4_DEFAULT = 0x08
+        self.asf.patch(b'\x20', self.asf.find_var(0x00FE) + G4_DEFAULT, clobber=True)  # LBL = 32
+        self.asf.patch(b'\x50', self.asf.find_var(0x0100) + G4_DEFAULT, clobber=True)  # LBH = 80
+        self.asf.patch(struct.pack('<I', 590), self.asf.find_var(0x00FD) + G4_DEFAULT, clobber=True)  # ATH = 590
+
+        print("  backlight_adapt: %dB at 0x%X" % (len(data), BACKLIGHT_OFFSET))
 
     def patch_breath(self):
         """Add breath routine to allow full control"""
@@ -784,6 +830,7 @@ if __name__ == "__main__":
         {'arg':"patch-fw-vauto-wrapper",'desc':"Add VAuto/ASV pressure shaping wrapper.",               'default':False, 'function':'patch_wrapper_limit_max_pdiff'},
         {'arg':"patch-fw-vidspoof",     'desc':"Hook MOP write to dynamically set VID per therapy mode.", 'default':True, 'function':'patch_vid_spoof'},
         {'arg':"patch-fw-lcd",          'desc':"Universal ILI9325/ILI9328 LCD driver.",                 'default':False, 'function':'patch_lcd_ili9325'},
+        {'arg':"patch-fw-backlight",    'desc':"Improved backlight adaptation to ambient light.",       'default':False, 'function':'patch_backlight_adapt'},
         {'arg':"patch-past-date",       'desc':"Allow setting past date in menu and UART.",             'default':True,  'function':'patch_past_date'},
         {'arg':"patch-motor-nagscreen", 'desc':"Remove \"Motor life exceeded\" nag screen",             'default':True,  'function':'motor_nagscreen'},
         {'arg':"patch-edf-merge",       'desc':"Merge universal EDF signal superset into CCX.",         'default':True,  'function':'patch_edf_merge'},

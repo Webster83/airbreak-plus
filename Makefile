@@ -13,7 +13,8 @@ S10_CODE_BINS = $(foreach v,$(S10_CODE_VERSIONS),\
 	$(BUILD)/graph_$(v).bin \
 	$(BUILD)/squarewave_$(v).bin \
 	$(BUILD)/asv_task_wrapper_$(v).bin \
-	$(BUILD)/wrapper_limit_max_pdiff_$(v).bin)
+	$(BUILD)/wrapper_limit_max_pdiff_$(v).bin \
+	$(BUILD)/backlight_adapt_$(v).bin)
 
 all: $(BUILD)/stm32-patched.bin $(BUILD)/stm32-asv.bin
 
@@ -51,6 +52,7 @@ graph-offset := 0x80fd000
 squarewave-offset := 0x80fd400
 asv_task_wrapper-offset := 0x80fdf00
 wrapper_limit_max_pdiff-offset := 0x80ff000
+backlight_adapt-offset := 0x80fef48
 
 define S10_CODE_VERSION_template
 $(BUILD)/s10_$(1)_stubs.o: $(SRC)/s10_$(1)_stubs.S | $(BUILD)
@@ -83,6 +85,11 @@ $(BUILD)/wrapper_limit_max_pdiff_$(1).elf: $(BUILD)/wrapper_limit_max_pdiff.o $(
 	$$(LD) --nostdlib --no-dynamic-linker \
 		--Ttext $(wrapper_limit_max_pdiff-offset) \
 		--just-symbols=$$(BUILD)/common_code_$(1).elf \
+		--entry start --sort-section=name -o $$@ $$^
+
+$(BUILD)/backlight_adapt_$(1).elf: $(BUILD)/backlight_adapt.o $(BUILD)/s10_$(1)_stubs.o | $(BUILD)
+	$$(LD) --nostdlib --no-dynamic-linker \
+		--Ttext $(backlight_adapt-offset) \
 		--entry start --sort-section=name -o $$@ $$^
 endef
 
@@ -285,6 +292,9 @@ $(foreach v,$(VID_SPOOF_VERSIONS),$(eval $(call vid_spoof_build_template,$(v))))
 vid_spoof: $(VID_SPOOF_BINS)
 	@echo "VID spoof patches built:"
 	@$(foreach v,$(VID_SPOOF_VERSIONS),echo "  $(BUILD)/vid_spoof_$(v).bin";)
+
+
+backlight_adapt: $(foreach v,$(S10_CODE_VERSIONS),$(BUILD)/backlight_adapt_$(v).bin)
 
 
 clean:

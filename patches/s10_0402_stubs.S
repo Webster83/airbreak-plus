@@ -33,6 +33,10 @@ NSTUB(0x080E36DD, asv_task_function)
 
 NSTUB(0x20000BE0, magic_ptr)
 
+// Backlight adaptation
+NSTUB(0x08066FC6, variable_get_g8)
+NSTUB(0x0807A2A4, backlight_state_machine)
+
 // LCD driver
 NSTUB(0x08080E37, lcd_write_cmd)
 NSTUB(0x08080E3F, lcd_write_data)

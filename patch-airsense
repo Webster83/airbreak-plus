@@ -276,6 +276,24 @@ le_thumb_ptr() {
         $(((thumb >> 24) & 0xFF))
 }
 
+# encode_thumb_bl SRC_FILE_OFF DST_FLASH_ADDR
+encode_thumb_bl() {
+    python3 -c "
+        import struct, sys
+        src = $1 + 0x08000004
+        dst = $2
+        offset = dst - src
+        S = 1 if offset < 0 else 0
+        if offset < 0: offset += (1 << 25)
+        I1 = (offset >> 23) & 1; I2 = (offset >> 22) & 1
+        imm10 = (offset >> 12) & 0x3FF; imm11 = (offset >> 1) & 0x7FF
+        J1 = (~(I1 ^ S)) & 1; J2 = (~(I2 ^ S)) & 1
+        hw1 = 0xF000 | (S << 10) | imm10
+        hw2 = 0xD000 | (J1 << 13) | (J2 << 11) | imm11
+        sys.stdout.buffer.write(struct.pack('<HH', hw1, hw2))
+    "
+}
+
 patch_code_common() {
     local ver=${CDX_VER#SX567-}
     local BIN=build/common_code_${ver}.bin
@@ -651,23 +669,7 @@ patch_lcd_ili9325() {
         die "  Cannot find lcd_board_init in ${BIN_ELF}"
     fi
 
-    # Compute Thumb BL encoding: src=BL_OFF+0x08000000+4, dst=BOARD_INIT_ADDR
-    local BL_SRC=$(( BL_OFF + 0x08000004 ))
-    local BL_BYTES
-    BL_BYTES=$(python3 -c "
-import struct, sys
-src, dst = $BL_SRC, $BOARD_INIT_ADDR
-offset = dst - src
-S = 1 if offset < 0 else 0
-if offset < 0: offset += (1 << 25)
-I1 = (offset >> 23) & 1; I2 = (offset >> 22) & 1
-imm10 = (offset >> 12) & 0x3FF; imm11 = (offset >> 1) & 0x7FF
-J1 = (~(I1 ^ S)) & 1; J2 = (~(I2 ^ S)) & 1
-hw1 = 0xF000 | (S << 10) | imm10
-hw2 = 0xD000 | (J1 << 13) | (J2 << 11) | imm11
-sys.stdout.buffer.write(struct.pack('<HH', hw1, hw2))
-")
-    printf '%s' "$BL_BYTES" | patch "$BL_OFF"
+    encode_thumb_bl "$BL_OFF" "$BOARD_INIT_ADDR" | patch "$BL_OFF"
     printf "  BL 0x%X -> 0x%08X (lcd_board_init)\n" "$BL_OFF" "$BOARD_INIT_ADDR"
 }
 
@@ -681,6 +683,61 @@ patch_past_date() {
     local off
     off=$(find_bytes "0098a8428041c043c00f05b030bd") || die "${FUNCNAME[0]}: date direction check not found"
     printf '\x80' | patch $(( off + 2 ))
+}
+
+patch_backlight_adapt() {
+    # improved backlight response to ambient light
+
+    local ver=${CDX_VER#SX567-}
+    local BIN=build/backlight_adapt_${ver}.bin
+    local BACKLIGHT_OFFSET=0xFEF48
+
+    case "$ver" in
+        0401|0402) ;;
+        *) echo "  ${FUNCNAME[0]}: skipped (unsupported version $ver)"; return ;;
+    esac
+
+    if [ ! -r "$BIN" ]; then
+        echo "  ${FUNCNAME[0]}: $BIN not found (run make backlight_adapt)"
+        return 1
+    fi
+
+    # signature: bl A1D0; mov r0,r4; bl A2A4; movs r5,#0
+    local off
+    off=$(find_bytes "00F0D5F8204600F03CF90025") || {
+        echo "  ${FUNCNAME[0]}: tick signature not found"
+        return 1
+    }
+
+    local hook_off=$(( off + 6 ))
+    local EXPECTED_BL='\x00\xF0\x3C\xF9'  # bl 0x0807A2A4, backlight state machine
+
+    if ! printf '%b' "$EXPECTED_BL" | check_patch "$hook_off"; then
+        echo "  ${FUNCNAME[0]}: unexpected bytes at hook site 0x$(printf '%X' $hook_off), already patched?"
+        return 1
+    fi
+
+    echo "Patching backlight adaptation ($ver)"
+    patch_direct "$BIN" $BACKLIGHT_OFFSET
+
+    # NOP the beq that skips ASR->ASF averaging while display is active
+    local gate_off=$(( off + 0x1C8 ))
+    if printf '\x4F\xD0' | check_patch $gate_off ; then
+        printf '\x00\xBF' | patch $gate_off
+    else
+        echo "  warning: ASF gate not found at expected offset"
+    fi
+
+    # redirect bl backlight_state_machine to our payload
+    local cave_addr=$(( BACKLIGHT_OFFSET + 0x08000000 ))
+    encode_thumb_bl "$hook_off" "$cave_addr" | patch "$hook_off"
+
+    # tune defaults
+    printf '\x20' | patch $(( $(find_g4_var 0x00FE) + 0x08 ))    # LBL = 32 (buttons low)
+    printf '\x50' | patch $(( $(find_g4_var 0x0100) + 0x08 ))    # LBH = 80 (buttons high)
+    printf '\x4e\x02\x00\x00' | patch $(( $(find_g4_var 0x00FD) + 0x08 ))  # ATH = 590 (threshold)
+
+    echo "  ${#BIN} at 0x$(printf '%X' $BACKLIGHT_OFFSET), hook at 0x$(printf '%X' $(( hook_off + 0x08000000 )))"
 }
 
 patch_edf_merge() {
@@ -787,6 +844,7 @@ if [[ $PATCH_S10_LCD == 1 ]] ; then
     patch_lcd_ili9325
 fi
 
+patch_backlight_adapt
 
 patch_crc # ALWAYS keep it as last patch applied
 
