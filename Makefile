@@ -16,16 +16,37 @@ S10_CODE_BINS = $(foreach v,$(S10_CODE_VERSIONS),\
 	$(BUILD)/wrapper_limit_max_pdiff_$(v).bin \
 	$(BUILD)/backlight_adapt_$(v).bin)
 
-all: $(BUILD)/stm32-patched.bin $(BUILD)/stm32-asv.bin
+BUILD_VARIANTS = \
+	$(BUILD)/stm32-patched.bin \
+	$(BUILD)/stm32-graph.bin \
+	$(BUILD)/stm32-asv-plus.bin \
+	$(BUILD)/stm32-asv-plus_no-squarewave.bin \
+	$(BUILD)/stm32-asv-plus_with-backup.bin
+
+all: $(BUILD_VARIANTS)
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
+# unlocked stock-ish
 $(BUILD)/stm32-patched.bin: patch-airsense $(S10_CODE_BINS) $(VID_SPOOF_BINS)
-	export PATCH_CODE=1 && ./patch-airsense stm32.bin $@
+	./patch-airsense stm32.bin $@
 
-$(BUILD)/stm32-asv.bin: patch-airsense $(S10_CODE_BINS) $(VID_SPOOF_BINS)
-	export PATCH_CODE=1 && export PATCH_S=1 && export PATCH_ASV_TASK_WRAPPER=1 && export PATCH_VAUTO_WRAPPER=1 && ./patch-airsense stm32.bin $@
+# graph overlay injected
+$(BUILD)/stm32-graph.bin: patch-airsense $(S10_CODE_BINS) $(VID_SPOOF_BINS)
+	PATCH_CODE=1 ./patch-airsense stm32.bin $@
+
+# Custom ASV algorithm in VAuto slot + ASV backup-rate suppression + squarewave mode
+$(BUILD)/stm32-asv-plus.bin: patch-airsense $(S10_CODE_BINS) $(VID_SPOOF_BINS)
+	PATCH_CODE=1 PATCH_ASV_TASK_WRAPPER=1 PATCH_VAUTO_WRAPPER=1 PATCH_S=1 ./patch-airsense stm32.bin $@
+
+# Custom ASV in VAuto slot + backup-rate suppression, no squarewave
+$(BUILD)/stm32-asv-plus_no-squarewave.bin: patch-airsense $(S10_CODE_BINS) $(VID_SPOOF_BINS)
+	PATCH_CODE=1 PATCH_ASV_TASK_WRAPPER=1 PATCH_VAUTO_WRAPPER=1 ./patch-airsense stm32.bin $@
+
+# Custom ASV in VAuto slot + squarewave, stock ASV backup-rate preserved
+$(BUILD)/stm32-asv-plus_with-backup.bin: patch-airsense $(S10_CODE_BINS) $(VID_SPOOF_BINS)
+	PATCH_CODE=1 PATCH_VAUTO_WRAPPER=1 PATCH_S=1 ./patch-airsense stm32.bin $@
 
 binaries: $(S10_CODE_BINS) $(VID_SPOOF_BINS)
 
