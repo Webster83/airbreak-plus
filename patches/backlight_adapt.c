@@ -26,15 +26,24 @@
  * at LCD_FULL_ASF.
  */
 
-#define STEP      2
-#define MIN_HYST  0x10
-#define LCD_FULL_ASF 0xD00
-#define LCD_LINEAR_ADAPT 1
+// STEP value doesnt change much, as code relies on filtered sensor value
+// that gets updated at roughly the same cadence as this hook, so each delta is near 0 anyway
+// but it may come in handy in the future
+#define LCD_STEP  10              // LCD fade step per tick
+#define BTN_STEP  2               // button fade step per tick
+                                  //
+#define MIN_HYST         0x10     // minimum ASF hysteresis around ATH
+#define LCD_FULL_ASF     0xC00    // ASF value where linear LCD mode reaches max
+#define LCD_LINEAR_ADAPT 1        // 1 = linear LCD ramp above ATH, 0 = legacy two-stage LCD mode
+#define BTN_LINEAR_ADAPT 1        // 1 = linear button ramp above ATH, 0 = legacy two-stage button mode
+#define BTN_FULL_ASF LCD_FULL_ASF // ASF value where linear button mode reaches max
+#define LCD_TARGET_DEADBAND 6     // ignore small LCD target changes caused by brief ASF spikes
+
 #define MODE_DARK 0x01
 #define MODE_DELAY_SHIFT 1
 #define MODE_DELAY_MASK  0x3E
 #define MODE_INIT 0x80
-#define RESUME_DELAY 12
+#define RESUME_DELAY 12           // ticks to wait after stock transitions before adaptation
 #define PENDING_LCD 0x01
 #define PENDING_BTN 0x02
 
@@ -75,7 +84,8 @@ static void __attribute__((noinline, section(".text.x.apply_step"))) apply_value
     __asm volatile ("" ::: "memory");
 }
 
-static void __attribute__((noinline, section(".text.x.apply_step"))) apply_step(void *channel, int target)
+static void __attribute__((noinline, section(".text.x.apply_step"))) apply_step(
+    void *channel, int target, int step_size)
 {
     if (!channel)
         return;
@@ -88,10 +98,10 @@ static void __attribute__((noinline, section(".text.x.apply_step"))) apply_step(
 
     int next;
     if (current > target) {
-        next = current - STEP;
+        next = current - step_size;
         if (next < target) next = target;
     } else {
-        next = current + STEP;
+        next = current + step_size;
         if (next > target) next = target;
     }
 
@@ -200,12 +210,83 @@ static unsigned char __attribute__((noinline, section(".text.x.apply_step"))) lc
 #endif
 }
 
+static unsigned char __attribute__((noinline, section(".text.x.apply_step"))) stabilize_lcd_target(
+    void *channel, unsigned char target)
+{
+#if LCD_LINEAR_ADAPT
+    int current;
+    int delta;
+    int adjusted;
+
+    if (!channel)
+        return target;
+
+    current = ((unsigned char *)channel)[5];
+    delta = current - target;
+    if (delta < 0)
+        delta = -delta;
+
+    if (delta <= LCD_TARGET_DEADBAND)
+        return (unsigned char)current;
+
+    if (current < target) {
+        adjusted = current + (delta - LCD_TARGET_DEADBAND);
+        if (adjusted > target)
+            adjusted = target;
+    } else {
+        adjusted = current - (delta - LCD_TARGET_DEADBAND);
+        if (adjusted < target)
+            adjusted = target;
+    }
+
+    return (unsigned char)adjusted;
+#else
+    (void)channel;
+#endif
+
+    return target;
+}
+
+static unsigned char __attribute__((noinline, section(".text.x.apply_step"))) btn_target_from_asf(
+    int asf, int ath, unsigned char low, unsigned char high, int dark_mode)
+{
+#if BTN_LINEAR_ADAPT
+    if (asf <= ath)
+        return low;
+
+    if (ath >= BTN_FULL_ASF || asf >= BTN_FULL_ASF)
+        return high;
+
+    {
+        int span = BTN_FULL_ASF - ath;
+        int level = low + ((asf - ath) * ((int)high - (int)low)) / span;
+
+        if (level < low)
+            level = low;
+        if (level > high)
+            level = high;
+
+        return (unsigned char)level;
+    }
+#else
+    (void)asf;
+    (void)ath;
+
+    if (dark_mode)
+        return low;
+    return high;
+#endif
+}
+
 void start(struct bl_ctx *ctx)
 {
     int asf = variable_get_g8(0xFC);
+    //int asf = variable_get_g8(0xFB); // ASR
     int ath = variable_get_g8(0xFD);
     unsigned char lcd_low = (unsigned char)variable_get_g8(0xFF);   // LLL
     unsigned char lcd_high = (unsigned char)variable_get_g8(0x101); // LLH
+    unsigned char btn_low = (unsigned char)variable_get_g8(0xFE);   // LBL
+    unsigned char btn_high = (unsigned char)variable_get_g8(0x100); // LBH
 
     // hysteresis deadband = max(ATH >> 5, MIN_HYST)
     int hyst = ath >> 5;
@@ -233,12 +314,9 @@ void start(struct bl_ctx *ctx)
 
     unsigned char lcd_target = lcd_target_from_asf(
         asf, ath, lcd_low, lcd_high, mode & MODE_DARK);
-    unsigned char btn_target;
-    if ((mode & MODE_DARK) == 0) {
-        btn_target = (unsigned char)variable_get_g8(0x100);  // LBH
-    } else {
-        btn_target = (unsigned char)variable_get_g8(0xFE);   // LBL
-    }
+    lcd_target = stabilize_lcd_target(ctx->ch_lcd, lcd_target);
+    unsigned char btn_target = btn_target_from_asf(
+        asf, ath, btn_low, btn_high, mode & MODE_DARK);
 
     // Let stock own nonzero transition states, then hold off briefly after it
     // returns to steady so we don't snap the levels back mid-transition.
@@ -266,9 +344,11 @@ void start(struct bl_ctx *ctx)
     }
 
     if (delay > 0) {
-        // During the post-transition cooldown, keep buttons pinned to the
-        // ambient-selected target. This avoids wake-from-idle cases where one
-        // button briefly lags behind while LCD transition settling finishes.
+        // During the post-transition cooldown, keep outputs pinned to their
+        // ambient-selected targets. For LCD this avoids wake overshoot where
+        // stock briefly lands at LLH before the steady-state hook pulls it
+        // back down.
+        apply_value(ctx->ch_lcd, lcd_target);
         apply_value(ctx->ch_btn0, btn_target);
         apply_value(ctx->ch_btn1, btn_target);
         apply_value(ctx->ch_btn2, btn_target);
@@ -281,11 +361,11 @@ void start(struct bl_ctx *ctx)
 
     ctx->mode = (unsigned char)(MODE_INIT | (mode & MODE_DARK));
 
-    apply_step(ctx->ch_lcd,  lcd_target);
-    apply_step(ctx->ch_btn0, btn_target);
-    apply_step(ctx->ch_btn1, btn_target);
-    apply_step(ctx->ch_btn2, btn_target);
-    apply_step(ctx->ch_btn3, btn_target);
+    apply_step(ctx->ch_lcd,  lcd_target, LCD_STEP);
+    apply_step(ctx->ch_btn0, btn_target, BTN_STEP);
+    apply_step(ctx->ch_btn1, btn_target, BTN_STEP);
+    apply_step(ctx->ch_btn2, btn_target, BTN_STEP);
+    apply_step(ctx->ch_btn3, btn_target, BTN_STEP);
 
     // prevent tail call
     __asm volatile ("" ::: "memory");
