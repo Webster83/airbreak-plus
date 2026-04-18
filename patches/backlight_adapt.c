@@ -20,10 +20,16 @@
  *   0x00FF LLL - LCD backlight low
  *   0x0100 LBH - button backlight high
  *   0x0101 LLH - LCD backlight high
+ *
+ * Buttons keep the existing binary low/high behavior around ATH.
+ * LCD stays at LLL up to ATH, then ramps smoothly toward LLH and clamps
+ * at LCD_FULL_ASF.
  */
 
 #define STEP      2
 #define MIN_HYST  0x10
+#define LCD_FULL_ASF 0xD00
+#define LCD_LINEAR_ADAPT 1
 #define MODE_DARK 0x01
 #define MODE_DELAY_SHIFT 1
 #define MODE_DELAY_MASK  0x3E
@@ -163,10 +169,43 @@ static int __attribute__((noinline, section(".text.x.apply_step"))) run_pending_
     return active;
 }
 
+static unsigned char __attribute__((noinline, section(".text.x.apply_step"))) lcd_target_from_asf(
+    int asf, int ath, unsigned char low, unsigned char high, int dark_mode)
+{
+#if LCD_LINEAR_ADAPT
+    if (asf <= ath)
+        return low;
+
+    if (ath >= LCD_FULL_ASF || asf >= LCD_FULL_ASF)
+        return high;
+
+    {
+        int span = LCD_FULL_ASF - ath;
+        int level = low + ((asf - ath) * ((int)high - (int)low)) / span;
+
+        if (level < low)
+            level = low;
+        if (level > high)
+            level = high;
+
+        return (unsigned char)level;
+    }
+#else
+    (void)asf;
+    (void)ath;
+
+    if (dark_mode)
+        return low;
+    return high;
+#endif
+}
+
 void start(struct bl_ctx *ctx)
 {
     int asf = variable_get_g8(0xFC);
     int ath = variable_get_g8(0xFD);
+    unsigned char lcd_low = (unsigned char)variable_get_g8(0xFF);   // LLL
+    unsigned char lcd_high = (unsigned char)variable_get_g8(0x101); // LLH
 
     // hysteresis deadband = max(ATH >> 5, MIN_HYST)
     int hyst = ath >> 5;
@@ -192,12 +231,12 @@ void start(struct bl_ctx *ctx)
 
     ctx->dark_latch = (unsigned char)(mode & MODE_DARK);
 
-    unsigned char lcd_target, btn_target;
+    unsigned char lcd_target = lcd_target_from_asf(
+        asf, ath, lcd_low, lcd_high, mode & MODE_DARK);
+    unsigned char btn_target;
     if ((mode & MODE_DARK) == 0) {
-        lcd_target = (unsigned char)variable_get_g8(0x101);  // LLH
         btn_target = (unsigned char)variable_get_g8(0x100);  // LBH
     } else {
-        lcd_target = (unsigned char)variable_get_g8(0xFF);   // LLL
         btn_target = (unsigned char)variable_get_g8(0xFE);   // LBL
     }
 
