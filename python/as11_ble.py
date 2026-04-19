@@ -645,12 +645,14 @@ async def cmd_pair(args):
         except Exception as e:
             print("GetVersion failed: %s" % e)
 
-        print("\nTesting encrypted Get(SetPressure)...")
+        # Verify the encrypted channel with a mode-independent read. SerialNumber
+        # is present on every AS11 and doesn't depend on therapy mode.
+        print("\nTesting encrypted Get(SerialNumber)...")
         try:
-            resp = await conn.send_rpc("Get", {"name": "SetPressure"}, encrypted=True)
-            print("SetPressure: %s" % json.dumps(resp.get("result", resp))[:200])
+            resp = await conn.send_rpc("Get", ["SerialNumber"], encrypted=True)
+            print("SerialNumber: %s" % json.dumps(resp.get("result", resp))[:200])
         except Exception as e:
-            print("Get(SetPressure) failed: %s" % e)
+            print("Get(SerialNumber) failed: %s" % e)
     finally:
         await conn.disconnect()
 
