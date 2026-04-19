@@ -805,11 +805,44 @@ async def cmd_subscribe(args):
 
 
 SPOOL_TYPES = [
-    "Summary", "TherapyEvents", "UsageEvents", "TherapyOneMinutePeriodic",
-    "DiagnosticTenMinutePeriodic", "SettingProfilesCollection",
-    "DiagnosticExceptionEvents", "SystemExceptionEvents", "SurveyEvents",
-    "MemoryMetrics", "MachineMetrics", "GUIActivityEvents",
-    "CellularActivityEvents", "SystemActivityEvents", "SoundcheckVector",
+    # session & usage
+    "Summary",
+    "UsageEvents-TherapyStatusEvents",
+    "TherapyEvents-RespiratoryEvents",
+    "TherapyOneMinutePeriodic",
+    "SettingProfilesCollection",
+    "ConfigurationProfilesCollection",
+    # system state / activity
+    "SystemActivityEvents-FrequentActivityEvents",
+    "SystemActivityEvents-SporadicActivityEvents",
+    "SystemExceptionEvents-SystemErrors",
+    "SystemExceptionEvents-RecoverableErrors",
+    "SystemExceptionEvents-HumidifierErrors",
+    "SystemExceptionEvents-HeatedTubeErrors",
+    "DiagnosticExceptionEvents-AppErrors",
+    "DiagnosticExceptionEvents-FatalErrors",
+    "DiagnosticExceptionEvents-ResettableErrors",
+    "DiagnosticExceptionEvents-AlarmAppErrors",
+    "DiagnosticTenMinutePeriodic",
+    # alarms
+    "alarmEvents",
+    "alarmDiagnosticEvents",
+    # ui / survey / checks
+    "GUIActivityEvents",
+    "SurveyEvents",
+    "SoundcheckVector",
+    "AcousticSignatureV2",
+    # metrics
+    "MachineMetrics",
+    "MemoryMetrics",
+    "CellularActivityEvents",
+    "CellularDataUsage",
+    # high-rate / ambient signals
+    "atmosphericPressure10min",
+    "RespiratoryFlow6p25Hz",
+    "MaskPressure6p25Hz",
+    "InspiratoryPressure0p5Hz",
+    "Leak0p5Hz",
 ]
 
 STREAM_DATA_IDS = [
@@ -1369,13 +1402,7 @@ def cmd_known(args):
     for item in sorted(items):
         if not key or key in item.lower():
             print(item)
-        return
 
-    items, _ = REGISTRIES[action]
-    key = pat.lower()
-    for item in sorted(items):
-        if not key or key in item.lower():
-            print(item)
 
 TYPE_COERCE = {
     "str":   lambda v: v,
@@ -1476,6 +1503,329 @@ async def cmd_set(args):
         await conn.disconnect()
 
 
+def _proto_read_varint(data, i):
+    v = 0; shift = 0
+    while True:
+        b = data[i]; i += 1
+        v |= (b & 0x7F) << shift
+        if (b & 0x80) == 0:
+            return v, i
+        shift += 7
+
+
+def _proto_decode(data):
+    """Walk protobuf wire format. Returns list of (field, wire, value)."""
+    out = []
+    i = 0
+    while i < len(data):
+        key, i = _proto_read_varint(data, i)
+        field = key >> 3
+        wire = key & 7
+        if wire == 0:
+            v, i = _proto_read_varint(data, i); out.append((field, wire, v))
+        elif wire == 1:
+            out.append((field, wire, int.from_bytes(data[i:i + 8], "little"))); i += 8
+        elif wire == 2:
+            ln, i = _proto_read_varint(data, i)
+            out.append((field, wire, bytes(data[i:i + ln]))); i += ln
+        elif wire == 5:
+            out.append((field, wire, int.from_bytes(data[i:i + 4], "little"))); i += 4
+        else:
+            raise ValueError(f"unsupported wire type {wire} at offset {i}")
+    return out
+
+
+_PROTO_WIRE = {0: "varint", 1: "64-bit", 2: "bytes", 5: "32-bit"}
+
+
+def _proto_pretty(data, indent=0, out=None):
+    """Pretty-print protobuf blob with nested-message heuristic."""
+    from datetime import datetime, timezone
+    if out is None:
+        out = sys.stdout
+    pad = "  " * indent
+    for field, wire, value in _proto_decode(data):
+        if wire == 2:
+            # try nested message
+            try:
+                sub = _proto_decode(value)
+                if sub and all(0 < f < 2**29 for f, _, _ in sub):
+                    print(f"{pad}{field} (msg, {len(value)}B):", file=out)
+                    _proto_pretty(value, indent + 1, out)
+                    continue
+            except (ValueError, IndexError):
+                pass
+            # string vs bytes
+            if value and all(32 <= b < 127 for b in value):
+                print(f"{pad}{field} (str): {value.decode()!r}", file=out)
+            else:
+                h = value.hex()
+                if len(h) > 80:
+                    h = h[:80] + "..."
+                print(f"{pad}{field} (bytes {len(value)}B): {h}", file=out)
+        elif wire == 0:
+            note = ""
+            if 10**12 < value < 2 * 10**12:
+                try:
+                    note = f" [~{datetime.fromtimestamp(value / 1000, timezone.utc).isoformat()}]"
+                except (OverflowError, OSError):
+                    pass
+            elif 10**9 < value < 2 * 10**9:
+                try:
+                    note = f" [~{datetime.fromtimestamp(value, timezone.utc).isoformat()}]"
+                except (OverflowError, OSError):
+                    pass
+            print(f"{pad}{field} (varint): {value}{note}", file=out)
+        else:
+            print(f"{pad}{field} ({_PROTO_WIRE.get(wire, wire)}): {value}", file=out)
+
+
+# Spool-type-specific enum legends
+_SPOOL_LEGENDS = {
+    "TherapyEvents-RespiratoryEvents": {
+        "event_types": {
+            2: "Hypopnea", 3: "CentralApnea", 4: "ObstructiveApnea",
+            5: "Apnea", 6: "Arousal",
+        },
+    },
+}
+
+
+# Summary protobuf field table.
+_SUMMARY_FIELDS = {
+    1:  "f1_init_marker",
+    2:  "f2_clockA_start",
+    3:  "f3_clockA_end",
+    4:  "f4_clockA_diff_over_60000",
+    5:  "f5_tag01",
+    6:  "f6_init_session_struct",
+    7:  "AHI (Summary-ApneaHypopneaIndex)",
+    8:  "ApneaIndex",
+    9:  "HypopneaIndex",
+    10: "ObstructiveApneaIndex",
+    11: "CentralApneaIndex",
+    12: "UnknownApneaIndex",
+    13: "ReraIndex",
+    14: "Leak",
+    15: "InspiratoryPressure",
+    16: "f16_CSD",
+    17: "f17_SAU",
+    18: "SpontTriggerPercentage",
+    19: "SpontCyclePercentage",
+    20: "ExpiratoryPressure",
+    21: "MeanMaskPressure",
+    22: "TidalVolume",
+    23: "MinuteVentilation",
+    24: "TargetMinuteVentilation",
+    25: "RespiratoryRate",
+    26: "InspiratoryDuration",
+    27: "IeRatio",
+    28: "SpO2",
+    29: "AmbientHumidity",
+    30: "HumidifierTemperature",
+    31: "HeatedTubeTemperature",
+    32: "HumidifierPower",
+    33: "HeatedTubePower",
+    34: "HumidifierConnected (enum)",
+    35: "TubeConnected (enum)",
+    36: "BlowerPressure",
+    37: "RespiratoryFlow",
+    38: "BlowerFlow",
+    39: "f39_unsourced",
+    40: "f40_clockB",
+    41: "HeartRate",
+    42: "f42_AV*",
+    43: "f43_unsourced",
+}
+
+# Percentile labels per (outer_field, inner_subfield).
+_SUMMARY_SUBFIELDS = {
+    # outer_f: { sub_f: (pct, multiplier) }
+    14: {2: (50, 2.0), 3: (70, 2.0), 4: (95, 2.0), 5: (100, 2.0)},  # Leak (6-slot msg)
+    15: {2: (50, 2.0), 3: (95, 2.0), 4: (100, 2.0)},                # InspiratoryPressure
+    20: {2: (50, 2.0), 3: (95, 2.0), 4: (100, 2.0)},                # ExpiratoryPressure
+    21: {2: (50, 2.0), 3: (95, 2.0), 4: (100, 2.0)},                # MeanMaskPressure
+    22: {2: (50, 2.0), 3: (95, 2.0), 4: (100, 2.0)},                # TidalVolume
+    23: {2: (50, 8.0), 3: (95, 8.0), 4: (100, 8.0)},                # MinuteVentilation
+    24: {2: (50, 1.0), 3: (95, 1.0), 4: (100, 1.0)},                # TargetMinuteVentilation
+    25: {2: (50, 5.0), 3: (95, 5.0), 4: (100, 5.0)},                # RespiratoryRate
+    26: {2: (50, 1.0), 3: (95, 1.0), 4: (100, 1.0)},                # InspiratoryDuration
+    27: {2: (50, 1.0), 3: (95, 1.0), 4: (100, 1.0)},                # IeRatio
+    28: {2: (50, 1.0), 3: (95, 1.0), 4: (100, 1.0)},                # SpO2
+    29: {2: (50, 10.0)},                                             # AmbientHumidity
+    30: {2: (50, 10.0)},                                             # HumidifierTemperature
+    31: {2: (50, 10.0)},                                             # HeatedTubeTemperature
+    32: {2: (50, 10.0)},                                             # HumidifierPower
+    33: {2: (50, 10.0)},                                             # HeatedTubePower
+    36: {1: (5, 2.0),  3: (95, 2.0)},                                # BlowerPressure
+    37: {1: (5, 0.2),  3: (95, 0.2)},                                # RespiratoryFlow
+    38: {2: (50, 0.2)},                                              # BlowerFlow
+    41: {2: (50, 1.0), 3: (95, 1.0), 4: (100, 1.0)},                # HeartRate
+    42: {2: (50, 1.0), 3: (95, 1.0), 4: (100, 1.0)},                # AV*
+}
+
+
+def _summary_pretty(data, out=None):
+    """Pretty-print the Summary protobuf using firmware-verified field names."""
+
+    if out is None:
+        out = sys.stdout
+    # Unwrap spool envelope if present: a single wire-2 field containing the
+    # actual Summary message.
+    while True:
+        try:
+            top = _proto_decode(data)
+        except (ValueError, IndexError):
+            break
+        if len(top) == 1 and top[0][1] == 2 and isinstance(top[0][2], (bytes, bytearray)):
+            data = top[0][2]
+            continue
+        break
+    for field, wire, value in _proto_decode(data):
+        label = _SUMMARY_FIELDS.get(field, f"field_{field}")
+        if wire == 2:
+            try:
+                subs = _proto_decode(value)
+            except (ValueError, IndexError):
+                subs = None
+            if subs:
+                print(f"{label} (msg, {len(value)}B):", file=out)
+                submap = _SUMMARY_SUBFIELDS.get(field, {})
+                for sf, sw, sv in subs:
+                    if sf in submap:
+                        pct, mult = submap[sf]
+                        tail = f"  # p{pct}, mult={mult}x (wire=raw*mult)"
+                    else:
+                        tail = ""
+                    print(f"  sub_f{sf} ({_PROTO_WIRE.get(sw, sw)}): {sv}{tail}", file=out)
+            else:
+                h = value.hex()
+                if len(h) > 80:
+                    h = h[:80] + "..."
+                print(f"{label} (bytes {len(value)}B): {h}", file=out)
+        elif wire == 0:
+            print(f"{label} (varint): {value}", file=out)
+        elif wire == 1:
+            print(f"{label} (u64): {value}", file=out)
+        elif wire == 5:
+            print(f"{label} (u32): {value}", file=out)
+        else:
+            print(f"{label} ({_PROTO_WIRE.get(wire, wire)}): {value}", file=out)
+
+
+def _print_spool_legend(spool_type):
+    legend = _SPOOL_LEGENDS.get(spool_type)
+    if not legend:
+        return
+    et = legend.get("event_types")
+    if et:
+        print("# event record layout: field 1 = type, field 2 = start_ms, field 3 = end_ms, field 4 = duration_ms")
+        parts = ", ".join(f"{k}={v}" for k, v in sorted(et.items()))
+        print(f"# event types: {parts}")
+        print()
+
+
+def _spool_walk_events(data, depth=0):
+    """Yield event records (field 1 innermost repeated) from a spool payload."""
+    try:
+        for field, wire, value in _proto_decode(data):
+            if wire == 2:
+                # the events are at depth 2 (wrapper -> collection -> event*)
+                if depth < 2:
+                    yield from _spool_walk_events(value, depth + 1)
+                elif depth == 2 and field == 1:
+                    yield value
+    except (ValueError, IndexError):
+        pass
+
+
+def _print_spool_summary(spool_type, data):
+    legend = _SPOOL_LEGENDS.get(spool_type)
+    if not legend:
+        return
+    et = legend.get("event_types")
+    if not et:
+        return
+    from collections import Counter
+    counts = Counter()
+    total = 0
+    for ev in _spool_walk_events(data):
+        total += 1
+        try:
+            for field, wire, value in _proto_decode(ev):
+                if field == 1 and wire == 0:
+                    counts[value] += 1
+                    break
+        except (ValueError, IndexError):
+            pass
+    if total:
+        print()
+        print(f"# summary: {total} events")
+        for k in sorted(counts):
+            print(f"#   {et.get(k, f'type={k}'):20s} {counts[k]:6d}")
+
+
+async def _spool_one_round(conn, spool_address, max_size):
+    """Run a single StartSpool -> PullSpoolFragments cycle.
+
+    Returns (data_bytes, status, next_spool_address, frag_count).
+    Verifies per-round SHA256 against spoolHash.
+    """
+    fragments = []
+    spool_done = asyncio.Event()
+    state = {"status": "", "hash": "", "next": None}
+
+    def on_notify(msg):
+        method = msg.get("method", "")
+        params = msg.get("params", {})
+        if method != "SpoolFragment":
+            return
+        seq = params.get("seq", -1)
+        data_b64 = params.get("data", "")
+        status = params.get("status", "")
+        if data_b64:
+            fragments.append((seq, base64.b64decode(data_b64)))
+        print(f"  fragment seq={seq} len={len(data_b64)} status={status}",
+              file=sys.stderr, flush=True)
+        state["status"] = status
+        state["hash"] = params.get("spoolHash", "")
+        state["next"] = params.get("nextSpoolAddress")
+        if status != "SPOOL_INCOMPLETE":
+            spool_done.set()
+
+    conn._notification_cb = on_notify
+
+    resp = await conn.send_rpc("StartSpool", {
+        "spoolAddress": spool_address,
+        "maxSpoolSize": max_size,
+    }, encrypted=True)
+    spool_id = resp.get("result", {}).get("spoolId", 0)
+    print(f"StartSpool: spoolId={spool_id}", file=sys.stderr)
+    if spool_id == 0:
+        return b"", "", None, 0
+
+    await conn.send_rpc("PullSpoolFragments", {
+        "spoolId": spool_id, "maxFragmentSize": 2808, "maxNotifications": 0,
+    }, encrypted=True, timeout=5.0)
+
+    try:
+        await asyncio.wait_for(spool_done.wait(), timeout=30.0)
+    except asyncio.TimeoutError:
+        print("  timeout waiting for fragments", file=sys.stderr)
+
+    fragments.sort(key=lambda x: x[0])
+    data = b"".join(f[1] for f in fragments)
+
+    expected = state["hash"]
+    if expected:
+        actual = hashlib.sha256(data).hexdigest().upper()
+        ok = "OK" if actual == expected.upper() else "MISMATCH"
+        print(f"  SHA256: {ok} ({len(data)} bytes, {len(fragments)} fragments)",
+              file=sys.stderr)
+
+    return data, state["status"], state["next"], len(fragments)
+
+
 async def cmd_spool(args):
     addr = resolve_addr(args.addr)
     conn = As11Connection(debug=args.debug)
@@ -1492,82 +1842,77 @@ async def cmd_spool(args):
         spool_type = args.spool_type
         from_dt = args.from_dt or "2000-01-01T00:00:00.000Z"
 
-        fragments = []
-        spool_done = asyncio.Event()
-        spool_result = {}
+        # initial spoolAddress; subsequent rounds use nextSpoolAddress
+        spool_address = {spool_type: {"fromDateTime": from_dt}}
 
-        def on_notify(msg):
-            method = msg.get("method", "")
-            params = msg.get("params", {})
-            if method == "SpoolFragment":
-                seq = params.get("seq", -1)
-                data_b64 = params.get("data", "")
-                status = params.get("status", "")
-                if data_b64:
-                    fragments.append((seq, base64.b64decode(data_b64)))
-                print(f"  fragment seq={seq} len={len(data_b64)} status={status}",
-                      file=sys.stderr, flush=True)
-                spool_result["status"] = status
-                spool_result["hash"] = params.get("spoolHash", "")
-                if params.get("nextSpoolAddress"):
-                    spool_result["nextSpoolAddress"] = params["nextSpoolAddress"]
-                if status != "SPOOL_INCOMPLETE":
-                    spool_done.set()
+        all_data = bytearray()
+        total_fragments = 0
+        round_num = 0
+        final_status = ""
+        last_next = None
+
+        while True:
+            round_num += 1
+            if round_num > 1:
+                print(f"--- round {round_num} (continuing from nextSpoolAddress) ---",
+                      file=sys.stderr)
+            data, status, nxt, n_frags = await _spool_one_round(
+                conn, spool_address, args.max_size)
+            all_data.extend(data)
+            total_fragments += n_frags
+            final_status = status
+            last_next = nxt
+
+            if args.no_follow:
+                break
+            if status != "SPOOL_COMPLETE_MORE_DATA_PENDING" or not nxt:
+                break
+            if round_num >= args.max_rounds:
+                print(f"  stopping: hit --max-rounds {args.max_rounds}", file=sys.stderr)
+                break
+            spool_address = nxt
+
+        data = bytes(all_data)
+
+        # raw bytes to file (always, when -o)
+        if args.output:
+            with open(args.output, "wb") as f:
+                f.write(data)
+            print(f"Saved {len(data)} bytes to {args.output} "
+                  f"({total_fragments} fragments, {round_num} rounds, "
+                  f"status={final_status})", file=sys.stderr)
+            if last_next and final_status == "SPOOL_COMPLETE_MORE_DATA_PENDING":
+                print(f"  nextSpoolAddress: {json.dumps(last_next)}", file=sys.stderr)
+
+        # decoded text to stdout
+        if args.decode:
+            _print_spool_legend(spool_type)
+            if spool_type == "Summary":
+                _summary_pretty(data)
             else:
-                print(f"  notify: {method}", file=sys.stderr, flush=True)
-
-        conn._notification_cb = on_notify
-
-        spool_addr = {spool_type: {"fromDateTime": from_dt}}
-        resp = await conn.send_rpc("StartSpool", {
-            "spoolAddress": spool_addr,
-            "maxSpoolSize": args.max_size,
-        }, encrypted=True)
-        result = resp.get("result", resp)
-        spool_id = result.get("spoolId", 0)
-        print(f"StartSpool: spoolId={spool_id}", file=sys.stderr)
-
-        if spool_id == 0:
-            print(json.dumps(result, indent=2))
+                _proto_pretty(data)
+            _print_spool_summary(spool_type, data)
+            if last_next and final_status == "SPOOL_COMPLETE_MORE_DATA_PENDING":
+                print(f"\n# status={final_status}", file=sys.stderr)
+                print(f"# nextSpoolAddress: {json.dumps(last_next)}", file=sys.stderr)
             return
 
-        resp2 = await conn.send_rpc("PullSpoolFragments", {
-            "spoolId": spool_id,
-            "maxFragmentSize": 2808,
-            "maxNotifications": 0,
-        }, encrypted=True, timeout=5.0)
-        print(f"PullSpoolFragments: {json.dumps(resp2.get('result', resp2))}",
-              file=sys.stderr)
-
-        try:
-            await asyncio.wait_for(spool_done.wait(), timeout=30.0)
-        except asyncio.TimeoutError:
-            print("Timeout waiting for spool fragments", file=sys.stderr)
-
-        fragments.sort(key=lambda x: x[0])
-        data = b''.join(f[1] for f in fragments)
-
-        expected_hash = spool_result.get("hash", "")
-        if expected_hash:
-            actual_hash = hashlib.sha256(data).hexdigest().upper()
-            ok = "OK" if actual_hash == expected_hash.upper() else "MISMATCH"
-            print(f"SHA256: {ok} ({len(data)} bytes, {len(fragments)} fragments)",
-                  file=sys.stderr)
-
+        # default JSON envelope (skip if we already saved to file)
         if args.output:
-            with open(args.output, 'wb') as f:
-                f.write(data)
-            print(f"Saved to {args.output}", file=sys.stderr)
-        else:
-            print(json.dumps({
-                "spoolType": spool_type,
-                "fromDateTime": from_dt,
-                "status": spool_result.get("status", ""),
-                "dataBase64": base64.b64encode(data).decode(),
-                "dataLength": len(data),
-                "fragments": len(fragments),
-                "sha256": expected_hash,
-            }, indent=2))
+            return
+        out = {
+            "spoolType": spool_type,
+            "fromDateTime": from_dt,
+            "status": final_status,
+            "rounds": round_num,
+            "dataBase64": base64.b64encode(data).decode(),
+            "dataLength": len(data),
+            "fragments": total_fragments,
+            "sha256": hashlib.sha256(data).hexdigest().upper(),
+        }
+        if last_next and final_status == "SPOOL_COMPLETE_MORE_DATA_PENDING":
+            out["nextSpoolAddress"] = last_next
+        print(json.dumps(out, indent=2))
 
     finally:
         await conn.disconnect()
@@ -1764,20 +2109,35 @@ stop with Ctrl-C; StartStream with empty dataIds is sent on exit.
         epilog="""types: """ + ", ".join(SPOOL_TYPES) + """
 
 examples:
-  download session summary (default: from epoch):
-      spool Summary
+  human-readable session summary (auto-continues on MORE_DATA_PENDING):
+      spool Summary --decode
 
   therapy events since a date:
-      spool TherapyEvents --from-dt 2025-01-01T00:00:00.000Z
+      spool TherapyEvents-RespiratoryEvents --from-dt 2025-01-01T00:00:00.000Z --decode
 
-  save raw payload to file (otherwise base64 JSON on stdout):
-      spool Summary -o summary.bin
+  save raw protobuf + print decoded to stdout:
+      spool Summary --decode -o summary.bin
+
+  base64 envelope for further processing (default):
+      spool Summary
+
+  only one round (stops early; output JSON/stderr prints nextSpoolAddress):
+      spool Summary --no-follow
+
+`nextSpoolAddress` (shown when stopped early) is a ready-to-use spoolAddress
+for a fresh StartSpool call to continue from where we left off.
 """,
         formatter_class=raw_fmt)
-    p_spool.add_argument("spool_type", help="spool type (e.g. Summary, TherapyEvents)")
+    p_spool.add_argument("spool_type", help="spool type (e.g. Summary, TherapyEvents-RespiratoryEvents)")
     p_spool.add_argument("--from-dt", default=None, help="from datetime (ISO 8601)")
-    p_spool.add_argument("--max-size", type=int, default=4096, help="max spool size")
-    p_spool.add_argument("-o", "--output", help="output file (binary), default: JSON to stdout")
+    p_spool.add_argument("--max-size", type=int, default=4096, help="max spool size per round")
+    p_spool.add_argument("--no-follow", action="store_true",
+        help="stop after one round even if status=SPOOL_COMPLETE_MORE_DATA_PENDING")
+    p_spool.add_argument("--max-rounds", type=int, default=100,
+        help="safety cap on auto-continuation rounds (default 100)")
+    p_spool.add_argument("--decode", action="store_true",
+        help="print human-readable protobuf tree to stdout (timestamps, nested fields)")
+    p_spool.add_argument("-o", "--output", help="output file (binary). Can combine with --decode.")
 
     p_known = sub.add_parser("known",
         help="show known var/stream/event/spool names (discovered from firmware)",
