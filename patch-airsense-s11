@@ -287,6 +287,27 @@ therapy_profiles() {
     echo "Patching TherapyProfiles visibility... $n nodes enabled"
 }
 
+
+# Enable disabled FeatureProfiles
+# Same permission table as therapy_profiles
+#   0x4F = ConfirmStopFeature
+#   0x53 = HeightFeature
+#   0x57 = RampDownFeature
+#   0x5F = TherapyLEDFeature
+feature_profiles() {
+    local nid off val n=0
+    for nid in 0x4F 0x53 0x57 0x5F; do
+        off=$(( PERM_TABLE + nid * 2 ))
+        val=$(read_u16 "$off")
+        if [[ $val -eq 0 ]]; then
+            write_u16 "$off" 1
+            (( n++ ))
+        fi
+    done
+    echo "Patching FeatureProfiles visibility... $n features enabled"
+}
+
+
 # Enable Level 3 commands on BLE encrypted channel (VCID 0x0396).
 # Permission table: 9-byte entries [cmd_id] [flag0..flag7], flag index 1 = BLE encrypted.
 #
@@ -365,6 +386,7 @@ extra_modes
 gui_config
 gui_visibility
 therapy_profiles
+feature_profiles # TOOD should merge those two into rpc_unlock or something...
 motor_nagscreen
 ble_permissions
 
