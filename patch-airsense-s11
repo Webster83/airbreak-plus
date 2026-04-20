@@ -394,9 +394,10 @@ unlock_features() {
 
         # g5 mode selectors that have exactly 11 options are therapy modes.
         if (( n_opts == 11 && mask != 0 && mask != 0x07FF && !(mask & ~0x07FF) )); then
-            write_u32 $(( off + 12 )) 0x07FF
+            # 0x07FF unlocks all, but some settings in iVAPS and PAC currently crashes device
+            write_u32 $(( off + 12 )) 0x01FF
             (( n_modes++ ))
-            mask=0x07FF
+            mask=0x01FF
         fi
 
         [[ -n "${editable_kind[$i]+x}" ]] || continue
