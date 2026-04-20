@@ -3,10 +3,10 @@
 AirSense 11 BLE client. Scan, pair (SRP), send JSON-RPC, stream, spool.
 
 Usage:
-    python3 as11_ble.py scan
-    python3 as11_ble.py pair --passkey 123456
-    python3 as11_ble.py rpc --method GetDateTime
-    python3 as11_ble.py rpc --method Get --params '{"name":"SetPressure"}'
+    python3 as11_ble.py devices scan
+    python3 as11_ble.py --addr <mac|alias> devices pair
+    python3 as11_ble.py --addr <mac|alias> rpc --method GetDateTime
+    python3 as11_ble.py --addr <mac|alias> get TherapyMode SetPressure
 """
 
 import argparse
@@ -206,6 +206,39 @@ class FigCodec:
         return packets
 
 
+def decode_ncp_packet(payload: bytes):
+    """Best-effort decoder for the binary NCP command envelope."""
+    if len(payload) < 4:
+        return None
+    ncp_len = struct.unpack_from('<H', payload, 0)[0]
+    if ncp_len + 2 > len(payload) or ncp_len < 2:
+        return None
+
+    code = payload[2]
+    seq = payload[3]
+    body = payload[4:4 + ncp_len - 2]
+    out = {
+        "length": ncp_len,
+        "code": f"0x{code:02x}",
+        "seq": seq,
+        "bodyHex": body.hex(),
+    }
+    if body:
+        try:
+            out["bodyText"] = body.rstrip(b"\x00").decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+    if code == 0xfd and len(body) >= 4:
+        err_code, msg_len = struct.unpack_from('<HH', body, 0)
+        msg = body[4:4 + msg_len].rstrip(b"\x00")
+        out["errorCode"] = f"0x{err_code:04x}"
+        try:
+            out["errorText"] = msg.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+    return out
+
+
 class As11Connection:
     def __init__(self, debug=False):
         self._client = None
@@ -216,6 +249,8 @@ class As11Connection:
         self._mtu = 244
         self._session_key = None
         self._notification_cb = None
+        self._raw_packet_cb = None
+        self._plain_vcids = set()
         self.debug = debug
 
     def set_session_key(self, key_hex):
@@ -333,7 +368,7 @@ class As11Connection:
                 log.debug("  raw payload hex: %s", raw_payload.hex())
 
             # 0x0396 = Level 2 patient, 0x0394/0x0380 = possible Level 3 service
-            if vcid in (FIG_VCID_RX_ENC, 0x0394, 0x0380) and self._session_key:
+            if vcid in (FIG_VCID_RX_ENC, 0x0394, 0x0380) and self._session_key and vcid not in self._plain_vcids:
                 try:
                     raw_payload = self._aes_decrypt(raw_payload)
                     if self.debug:
@@ -341,6 +376,12 @@ class As11Connection:
                 except Exception as e:
                     log.warning("decrypt failed on vcid %d: %s", vcid, e)
                     continue
+
+            if self._raw_packet_cb:
+                self._raw_packet_cb(vcid, raw_payload)
+                self._response_data = {"vcid": vcid, "payloadHex": raw_payload.hex()}
+                self._response_event.set()
+                continue
 
             payload = raw_payload
             try:
@@ -637,17 +678,12 @@ async def cmd_pair(args):
         print("  masterPairKey:  %s..." % creds['masterPairKey'][:16])
         print("  sessionKey:     %s..." % creds['sessionKey'][:16])
 
-        # smoke-test the encrypted channel
-        print("\nTesting encrypted GetVersion...")
         try:
             resp = await conn.send_rpc("GetVersion", encrypted=True)
             print("GetVersion: %s" % json.dumps(resp.get("result", resp))[:200])
         except Exception as e:
             print("GetVersion failed: %s" % e)
 
-        # Verify the encrypted channel with a mode-independent read. SerialNumber
-        # is present on every AS11 and doesn't depend on therapy mode.
-        print("\nTesting encrypted Get(SerialNumber)...")
         try:
             resp = await conn.send_rpc("Get", ["SerialNumber"], encrypted=True)
             print("SerialNumber: %s" % json.dumps(resp.get("result", resp))[:200])
@@ -675,13 +711,22 @@ async def cmd_rpc(args):
             print("No stored credentials. Run 'pair' first.", file=sys.stderr)
             return
 
-        # raw hex: encrypted binary payload, bypasses JSON-RPC
+        lp = not getattr(args, 'no_length_prefix', False)
+
+        # raw hex: binary payload, bypasses JSON-RPC
         if getattr(args, 'raw_hex', None):
             raw = bytes.fromhex(args.raw_hex)
-            payload = conn._aes_encrypt(raw)
-            vcid = args.vcid or 0x0395
+            encrypt_raw = not getattr(args, 'no_encrypt', False)
+            if encrypt_raw:
+                payload = conn._aes_encrypt(raw, length_prefix=lp)
+                vcid = args.vcid or 0x0395
+            else:
+                payload = raw
+                vcid = args.vcid or 0x0381
+                if vcid & 1:
+                    conn._plain_vcids.add(vcid - 1)
 
-            if getattr(args, 'hmac_auth', False):
+            if getattr(args, 'hmac', False):
                 K_bytes = bytes.fromhex(creds.get("masterPairKey", ""))
                 h = hmac.HMAC(K_bytes, hashes.SHA256())
                 h.update(payload)
@@ -691,23 +736,27 @@ async def cmd_rpc(args):
             conn._response_event.clear()
             conn._response_data = None
 
-            def on_raw(msg):
+            def on_raw(rx_vcid, rx_payload):
+                msg = {
+                    "vcid": f"0x{rx_vcid:04x}",
+                    "payloadHex": rx_payload.hex(),
+                }
+                ncp = decode_ncp_packet(rx_payload)
+                if ncp is not None:
+                    msg["ncp"] = ncp
                 print(json.dumps(msg, separators=(',', ':')), flush=True)
-            conn._notification_cb = on_raw
+            conn._raw_packet_cb = on_raw
 
             await conn._send_raw(packet)
             try:
                 await asyncio.wait_for(conn._response_event.wait(), timeout=10.0)
-                print(json.dumps(conn._response_data, indent=2))
             except asyncio.TimeoutError:
-                # non-JSON response may have arrived on a different VCID
                 await asyncio.sleep(2)
-                print("No JSON response (check stderr for non-JSON payloads)", file=sys.stderr)
+                print("No raw response", file=sys.stderr)
             return
 
         params = json.loads(args.params) if args.params else None
         encrypt = not getattr(args, 'no_encrypt', False)
-        lp = not getattr(args, 'no_length_prefix', False)
         hk = bytes.fromhex(creds.get("masterPairKey", "")) if getattr(args, 'hmac', False) else None
         try:
             resp = await conn.send_rpc(args.method, params, encrypted=encrypt,
@@ -904,6 +953,117 @@ EVENT_IDS = [
     # notifications observed on the wire
     "SpoolFragment",
 ]
+
+# What the device's `Get` RPC accepts.
+VAR_SUBTREE_ALIASES = {
+    "ActiveProfiles":                 "!65",
+    "AlarmProfiles":                  "!66",
+    "ASVAutoProfile":                 "!99",
+    "ASVProfile":                    "!100",
+    "AutoRampFeature":                "!74",
+    "AutoSetForHerProfile":          "!101",
+    "AutoSetProfile":                "!102",
+    "CellularConfigurationProfiles":   "!0",
+    "CellularDataUsage":              "!54",
+    "CellularIdentificationProfiles":  "!1",
+    "CellularModule":                "!142",
+    "CircuitFeature":                 "!76",
+    "ClimateFeature":                 "!77",
+    "ComfortFeature":                 "!78",
+    "ConfigurationProfiles":           "!5",
+    "CpapProfile":                   "!103",
+    "DataDeliveryControl":             "!7",
+    "DeviceConfigurationSettings":     "!8",
+    "DeviceRegistration":            "!110",
+    "EprFeature":                     "!82",
+    "FeatureProfiles":                "!73",
+    "IdentificationProfiles":         "!46",
+    "iVAPSProfile":                  "!109",
+    "MachineMetrics":                 "!56",
+    "PACProfile":                    "!104",
+    "RampDownFeature":                "!87",
+    "SettingProfiles":                "!64",
+    "SmartStartStopFeature":          "!93",
+    "SpontProfile":                  "!106",
+    "StoredDataDeliveryControl":       "!9",
+    "STProfile":                     "!105",
+    "TherapyProfiles":                "!98",
+    "TimedProfile":                  "!107",
+    "VAutoProfile":                  "!108",
+}
+
+# Reserved long `_NAME` specials - firmware strcmps these in FUN_081aea00
+# as a separate resolver step BEFORE leaf/subtree lookup.
+VAR_RESERVED = [
+    "_ActiveFeatureProfiles",
+    "_CurrentDateTime",
+]
+
+# Short->path name map found in firmware (table at 0x08144cbc).
+# NOT Get-able. Kept for documentation / future use.
+VAR_PATH_ALIASES = {
+    "alarmEvents":                                      "FlowGenerator.eventProfiles.alarmEvents",
+    "alarmDiagnosticEvents":                            "FlowGenerator.eventProfiles.alarmDiagnosticEvents",
+    "CellularBrokerURI":                                "CellularModule.ConfigurationProfiles.TherapySystemBrokerUniformResourceIdentifier",
+    "CellularInternalModule":                           "CellularModule.IdentificationProfiles.CellularProfile.InternalModule",
+    "CellularNetworkGeneration":                        "CellularModule.IdentificationProfiles.CellularProfile.Network.GenerationIdentifier",
+    "CellularNetworkPlan":                              "CellularModule.IdentificationProfiles.CellularProfile.Network.PlanIdentifier",
+    "CellularNetworkProvider":                          "CellularModule.IdentificationProfiles.CellularProfile.Network.ProviderIdentifier",
+    "CellularNetworkProvisionedDateTime":               "CellularModule.IdentificationProfiles.CellularProfile.Network.ProvisionedDateTime",
+    "CellularRegistrationURI":                          "CellularModule.ConfigurationProfiles.TherapySystemRegistrationUniformResourceIdentifier",
+    "Diagnostic25HzPeriodic-BlowerFlow":                "FlowGenerator.MeasurementProfiles.Diagnostic25HzPeriodic.BlowerFlow",
+    "Diagnostic25HzPeriodic-BlowerPressure":            "FlowGenerator.MeasurementProfiles.Diagnostic25HzPeriodic.BlowerPressure",
+    "DiagnosticExceptionEvents-AlarmAppError":          "FlowGenerator.MeasurementProfiles.DiagnosticExceptionEvents.AlarmAppErrors.AlarmAppError",
+    "DiagnosticExceptionEvents-AppError":               "FlowGenerator.MeasurementProfiles.DiagnosticExceptionEvents.AppErrors.AppError",
+    "DiagnosticExceptionEvents-ErrorLogInfo":           "FlowGenerator.MeasurementProfiles.DiagnosticExceptionEvents.ErrorLogInfos.ErrorLogInfo",
+    "DiagnosticExceptionEvents-FatalError":             "FlowGenerator.MeasurementProfiles.DiagnosticExceptionEvents.FatalErrors.FatalError",
+    "DiagnosticExceptionEvents-ResettableError":        "FlowGenerator.MeasurementProfiles.DiagnosticExceptionEvents.ResettableErrors.ResettableError",
+    "DiagnosticTenMinutePeriodic-CellularSignalQuality2G":   "FlowGenerator.MeasurementProfiles.DiagnosticTenMinutePeriodic.CellularSignalQuality2G",
+    "DiagnosticTenMinutePeriodic-CellularSignalQuality3G":   "FlowGenerator.MeasurementProfiles.DiagnosticTenMinutePeriodic.CellularSignalQuality3G",
+    "DiagnosticTenMinutePeriodic-CellularSignalQualityLTE":  "FlowGenerator.MeasurementProfiles.DiagnosticTenMinutePeriodic.CellularSignalQualityLTE",
+    "DiagnosticTenMinutePeriodic-CellularSignalStrength":    "FlowGenerator.MeasurementProfiles.DiagnosticTenMinutePeriodic.CellularSignalStrength",
+    "Summary":                                          "FlowGenerator.MeasurementProfiles.Summary",
+    "SystemActivityEvents-FrequentActivityEvent":       "FlowGenerator.MeasurementProfiles.SystemActivityEvents.FrequentActivityEvents.FrequentActivityEvent",
+    "SystemActivityEvents-SporadicActivityEvent":       "FlowGenerator.MeasurementProfiles.SystemActivityEvents.SporadicActivityEvents.SporadicActivityEvent",
+    "SystemExceptionEvents-HeatedTubeError":            "FlowGenerator.MeasurementProfiles.SystemExceptionEvents.HeatedTubeErrors.HeatedTubeError",
+    "SystemExceptionEvents-HumidifierError":            "FlowGenerator.MeasurementProfiles.SystemExceptionEvents.HumidifierErrors.HumidifierError",
+    "SystemExceptionEvents-RecoverableError":           "FlowGenerator.MeasurementProfiles.SystemExceptionEvents.RecoverableErrors.RecoverableError",
+    "SystemExceptionEvents-SystemError":                "FlowGenerator.MeasurementProfiles.SystemExceptionEvents.SystemErrors.SystemError",
+    "TherapyEvents-RespiratoryEvent":                   "FlowGenerator.MeasurementProfiles.TherapyEvents.RespiratoryEvents.RespiratoryEvent",
+    "TherapyOneHzPeriodic-HeartRate":                   "FlowGenerator.MeasurementProfiles.TherapyOneHzPeriodic.HeartRate",
+    "TherapyOneHzPeriodic-SpO2":                        "FlowGenerator.MeasurementProfiles.TherapyOneHzPeriodic.SpO2",
+    "TherapyOneMinutePeriodic-AlveolarMinuteVentilation": "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.AlveolarMinuteVentilation",
+    "TherapyOneMinutePeriodic-ExpiratoryPressure":      "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.ExpiratoryPressure",
+    "TherapyOneMinutePeriodic-HeartRate":               "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.HeartRate",
+    "TherapyOneMinutePeriodic-IeRatio":                 "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.IeRatio",
+    "TherapyOneMinutePeriodic-InspiratoryDuration":     "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.InspiratoryDuration",
+    "TherapyOneMinutePeriodic-InspiratoryPressure":     "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.InspiratoryPressure",
+    "TherapyOneMinutePeriodic-Leak":                    "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.Leak",
+    "TherapyOneMinutePeriodic-MinuteVentilation":       "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.MinuteVentilation",
+    "TherapyOneMinutePeriodic-RespiratoryRate":         "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.RespiratoryRate",
+    "TherapyOneMinutePeriodic-SpO2":                    "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.SpO2",
+    "TherapyOneMinutePeriodic-TidalVolume":             "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.TidalVolume",
+    "TherapyTwentyFiveHzPeriodic-MaskPressure":         "FlowGenerator.MeasurementProfiles.TherapyTwentyFiveHzPeriodic.MaskPressure",
+    "TherapyTwentyFiveHzPeriodic-RespiratoryFlow":      "FlowGenerator.MeasurementProfiles.TherapyTwentyFiveHzPeriodic.RespiratoryFlow",
+    "TherapyTwoSecondPeriodic-ExpiratoryPressure":      "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.ExpiratoryPressure",
+    "TherapyTwoSecondPeriodic-FlowLimitation":          "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.FlowLimitation",
+    "TherapyTwoSecondPeriodic-IeRatio":                 "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.IeRatio",
+    "TherapyTwoSecondPeriodic-InspiratoryDuration":     "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.InspiratoryDuration",
+    "TherapyTwoSecondPeriodic-InspiratoryPressure":     "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.InspiratoryPressure",
+    "TherapyTwoSecondPeriodic-Leak":                    "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.Leak",
+    "TherapyTwoSecondPeriodic-MaskPressure":            "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.MaskPressure",
+    "TherapyTwoSecondPeriodic-MinuteVentilation":       "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.MinuteVentilation",
+    "TherapyTwoSecondPeriodic-RespiratoryRate":         "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.RespiratoryRate",
+    "TherapyTwoSecondPeriodic-SnoreIndex":              "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.SnoreIndex",
+    "TherapyTwoSecondPeriodic-TargetMinuteVentilation": "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.TargetMinuteVentilation",
+    "TherapyTwoSecondPeriodic-TidalVolume":             "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.TidalVolume",
+    "UsageEvents-TherapyStatusEvent":                   "FlowGenerator.MeasurementProfiles.UsageEvents.TherapyStatusEvents.TherapyStatusEvent",
+}
+
+# Backwards-compatibility alias used elsewhere in this module.
+VAR_SUBTREES = sorted(set(VAR_SUBTREE_ALIASES) | set(VAR_RESERVED),
+                      key=str.lower)
+
 
 VAR_NAMES = [
     ("ASV-MaxPressureSupport", "XC2"),
@@ -1312,10 +1472,13 @@ VAR_NAMES = [
 
 
 REGISTRIES = {
-    "vars":    (VAR_NAMES,       "variable names (for `get` / `set`)"),
-    "streams": (STREAM_DATA_IDS, "stream data IDs (for `stream --data-ids`)"),
-    "events":  (EVENT_IDS,       "event IDs (for `subscribe --events`)"),
-    "spools":  (SPOOL_TYPES,     "spool types (for `spool`)"),
+    "vars":     (VAR_NAMES,                   "variable names (for `get` / `set`)"),
+    "subtrees": (sorted(VAR_SUBTREE_ALIASES, key=str.lower),
+                 "aggregate `get` targets (CDX subtree aliases, verified)"),
+    "reserved": (VAR_RESERVED,               "reserved `_NAME` specials"),
+    "streams":  (STREAM_DATA_IDS,            "stream data IDs (for `stream --data-ids`)"),
+    "events":   (EVENT_IDS,                  "event IDs (for `subscribe --events`)"),
+    "spools":   (SPOOL_TYPES,                "spool types (for `spool`)"),
 }
 
 # Therapy-mode prefixes: `known vars cpap` -> Cpap-* (exact prefix match).
@@ -1342,6 +1505,233 @@ VAR_TOPIC_KEYWORDS = {
 }
 
 
+# CDX extracted tree grouping
+#
+VAR_GROUPS = {
+    "ConfigurationProfiles": [
+        "DataMode",
+        "ServiceHost",
+        "ServicePort",
+        "PeriodicBrokerContactPeriod",
+        "UpgradeAbandonPeriod",
+        "UpgradeReportPeriod",
+        "OtaUpgradeStatus",
+        "DataCollectAndSend",
+        "DataCollectAndSendAsync",
+        "DownloadBytesDelta",
+        "UploadBytesDelta",
+        "LastDataPostDateTime",
+    ],
+    "Network": [
+        "AccessPointName",
+    ],
+    "DeviceConfiguration": [
+        "FlightMode", "VALOTriggerSeconds",
+        "RequestTestDriveState", "TestDrivePressure", "TestDriveType",
+        "ExpiratoryPressure", "LearnTargetsExpiratoryPressure",
+        "LearnTargetsPressureSupport", "LearnTargetsSetDuration",
+        "HardwareIdentifier", "UniversalIdentifier", "SerialNumber",
+        "ProductCode", "ProductName", "FdaUniqueDeviceIdentifier",
+        "ProductGeographicIdentifier", "BootloaderIdentifier",
+        "ApplicationIdentifier", "ConfigurationIdentifier",
+        "PlatformIdentifier", "VariantIdentifier", "RegionIdentifier",
+        "ProfileVariantIdentifier", "DataVersionIdentifier",
+        "DataModelVersionIdentifier",
+    ],
+    "ManufacturingSettings": [
+        # Test/control (hardware tests, motor/LCD/SD/sound checks)
+        "PhantomKey", "RequestLEDState", "CalibrationPressure",
+        "SetMotorSpeed", "BluetoothPassthrough", "HumidifierPower",
+        "HeatedTubePower", "RequestSDCardTest", "RequestLCDColour",
+        "MotorFlowDrive", "MicrophoneEnabled", "SoundDownloadAllowed",
+        "SoundcheckTestCount", "CALEnable",
+        # Raw sensor / monitoring
+        "MotorCurrent", "MotorSpeed", "AdcPressure",
+        "AdcPressureMonitoring", "RawFlow",
+        "RawAmbHumidity", "RawAmbTemperature", "RawAmbLight",
+        "ButtonRegMap", "CurrentLEDState", "EndCapDetection",
+        # State flags
+        "LCDTouchStatus", "LCDConnector", "SDCardTestStatus",
+        "SDCardSocketStatus", "IsReadyForShipping", "IsReadyForUpgrade",
+        "IsFileSystemReady", "MotorType", "EraseMediaSignature",
+        "SoundcheckStatus", "CALStatus", "SecurityStatus",
+        # Calibration
+        "PressureGain", "PressureOffset", "FlowGain", "FlowOffset",
+        "PressureMonitorGain", "PressureMonitorOffset",
+        # Run meters / history
+        "LastTherapyUseDateTime", "LastEraseDataDateTime",
+        "TherapyRunMeter", "MotorRunMeter",
+        "MotorRunSinceLastServiceMeter", "MachineRunMeter",
+        "LastMachineServiceDateTime",
+        # Ambient / environment
+        "AmbientHumidity-Estimated", "AmbientTemperature-Estimated",
+        "AmbientLight", "FGState", "TestDriveState",
+        # System error / alarm state
+        "SystemError", "RecoverableError", "ActiveAlarms",
+        # Power / connectivity
+        "PowerSupplyType", "PowerSupplyCapacity", "TxLink2Connected",
+        "HumidifierConnected", "TubeConnected",
+        # Humidifier / tube hardware telemetry
+        "BlowerFlow-100hz", "BlowerPressure-100hz",
+        "HumidifierPlateCurrent", "HeatedTubeCurrent", "HumidifierPWM",
+        "HumidifierPWMMinuteAverage", "HeatedTubePWM",
+        "HeatedTubePWMMinuteAverage", "BlowerPressureMonitoring",
+        "HumidifierPlateTemperature",
+        "HumidifierPlateTemperatureMinuteAverage",
+        "HeatedTubeOutletTemperature",
+        "HeatedTubeOutletTemperatureMinuteAverage",
+
+        "CalManufacturingMode", "DeviceIdStatus", "LearnMode",
+        "CepstrumAverageCount", "CepstrumStartDelay",
+        "CamlData", "ApplicationData", "PeripheralMsg",
+        "OobxOnStartup", "PhantomTouch",
+        "SettingsHistoryChangeCount", "StorageVersionId",
+        "TOTAL_USED_HOURS_NAME",
+    ],
+    "TherapyProfile": [
+        "ActiveTherapyProfile",
+    ],
+    "AlarmProfiles": [
+        "AlarmVolumeLevel",
+        "ApneaAlarmEnable", "ApneaAlarmThreshold",
+        "HighLeakAlarmEnable",
+        "LowMinuteVentAlarmEnable", "LowMinuteVentAlarmThreshold",
+        "NonVentedMaskAlarmEnable",
+    ],
+    "FeatureProfiles": [
+        # Ramp / AutoRamp / RampDown
+        "MaxRampTime", "RampTime", "RampEnable", "RampEnablePatientAccess",
+        "MaxRampDownTime", "RampDownTime", "RampDownEnable",
+        "RampDownEnablePatientAccess",
+        # Circuit
+        "MaskType", "TubeType", "AntiBacterialFilter",
+        # Climate / humidifier
+        "ClimateControl", "HumidifierSettingEnable", "HumidifierLevel",
+        "HeatedTubeSettingEnable", "HeatedTubeTemperature",
+        "ExternalHumidifier",
+        # Comfort
+        "AutoSetComfort",
+        # Confirm-stop
+        "ConfirmStopEnable",
+        # Care check
+        "CareCheckToggle", "CareCheckInAvailable",
+        # Device health / user solution
+        "SoundcheckFeatureToggle", "SoundcheckRunFrequency",
+        "ClinicalConfirmation", "MyAirScreens",
+        # Display
+        "TotalUsedHoursDisplayToggle", "SplashScreenDisplaySelection",
+        "CycleDisplayFormat", "DisplayAHI",
+        # EPR
+        "EprEnablePatientAccess", "EprEnable", "EprType", "EprPressure",
+        # Height
+        "HeightDisplayUnit",
+        # Language
+        "LanguageConfiguration", "Language", "LanguageSelection",
+        # Mask sense
+        "MaskSenseToggle",
+        # Patient view
+        "PatientView",
+        # Reminders
+        "ReminderFilterEnable", "ReminderFilterDate", "ReminderFilterPeriod",
+        "ReminderHumidifierEnable", "ReminderHumidifierDate",
+        "ReminderHumidifierPeriod", "ReminderMaskEnable",
+        "ReminderMaskDate", "ReminderMaskPeriod", "ReminderTubingEnable",
+        "ReminderTubingDate", "ReminderTubingPeriod",
+        # Smart start/stop
+        "SmartStart", "SmartStop",
+        # Temperature
+        "TemperatureUnit",
+        # Therapy LED
+        "TherapyLEDAlwaysOn",
+        # Time zone
+        "TimeZoneOffset",
+    ],
+    "TherapyMode": [
+        "ASVAuto-MinExpiratoryPressure", "ASVAuto-MaxExpiratoryPressure",
+        "ASVAuto-StartPressure", "ASVAuto-MinPressureSupport",
+        "ASVAuto-MaxPressureSupport", "ASV-TargetExpiratoryPressure",
+        "ASV-MinPressureSupport", "ASV-MaxPressureSupport",
+        "ASV-StartPressure", "HerAuto-MaxPressure", "HerAuto-MinPressure",
+        "HerAuto-StartPressure", "AutoSet-MaxPressure",
+        "AutoSet-MinPressure", "AutoSet-StartPressure", "Cpap-SetPressure",
+        "Cpap-StartPressure", "Cpap-TriggerSensitivity",
+        "PAC-TargetInspiratoryPressure", "PAC-TargetExpiratoryPressure",
+        "PAC-StartPressure", "PAC-SetRespiratoryRate",
+        "PAC-SetInspiratoryTime", "PAC-RiseTimeEnable", "PAC-RiseTime",
+        "PAC-FallTimeEnable", "PAC-FallTime", "PAC-TriggerSensitivity",
+        "ST-TargetInspiratoryPressure", "ST-TargetExpiratoryPressure",
+        "ST-StartPressure", "ST-IntelligentBackupRateEnable",
+        "ST-TargetRespiratoryRate", "ST-SetRespiratoryRate",
+        "ST-SetMaxInspiratoryTime", "ST-SetMinInspiratoryTime",
+        "ST-RiseTimeEnable", "ST-RiseTime", "ST-FallTimeEnable",
+        "ST-FallTime", "ST-TriggerSensitivity", "ST-CycleSensitivity",
+        "Spont-TargetInspiratoryPressure", "Spont-TargetExpiratoryPressure",
+        "Spont-StartPressure", "Spont-RespiratoryRateEnable",
+        "Spont-SetMaxInspiratoryTime", "Spont-SetMinInspiratoryTime",
+        "Spont-EasyBreatheEnable", "Spont-RiseTimeEnable", "Spont-RiseTime",
+        "Spont-FallTimeEnable", "Spont-FallTime",
+        "Spont-TriggerSensitivity", "Spont-CycleSensitivity",
+        "Timed-TargetInspiratoryPressure", "Timed-TargetExpiratoryPressure",
+        "Timed-StartPressure", "Timed-SetRespiratoryRate",
+        "Timed-SetInspiratoryTime", "Timed-RiseTimeEnable", "Timed-RiseTime",
+        "Timed-FallTimeEnable", "Timed-FallTime",
+        "VAuto-MaxInspiratoryPressure", "VAuto-MinExpiratoryPressure",
+        "VAuto-StartPressure", "VAuto-SetMaxInspiratoryTime",
+        "VAuto-SetMinInspiratoryTime", "VAuto-SetPressureSupport",
+        "VAuto-TriggerSensitivity", "VAuto-CycleSensitivity",
+        "iVAPS-PatientHeight", "iVAPS-AutoEPAPEnable",
+        "iVAPS-MaxExpiratoryPressure", "iVAPS-MinExpiratoryPressure",
+        "iVAPS-TargetExpiratoryPressure", "iVAPS-MinPressureSupport",
+        "iVAPS-MaxPressureSupport", "iVAPS-StartPressure",
+        "iVAPS-TargetAlveolarVentilation", "iVAPS-TargetRespiratoryRate",
+        "iVAPS-SetMaxInspiratoryTime", "iVAPS-SetMinInspiratoryTime",
+        "iVAPS-RiseTimeEnable", "iVAPS-RiseTime", "iVAPS-FallTimeEnable",
+        "iVAPS-FallTime", "iVAPS-TriggerSensitivity",
+        "iVAPS-CycleSensitivity",
+    ],
+    "CellularModule": [
+        "CellularApplicationIdentifier",
+        "CellularProductModel",
+        "CellularProductProvider",
+        "CellularDataPreamble",
+        "IMEI",
+        "IMSI",
+        "SIMID",
+    ],
+    "BluetoothModule": [
+        "BluetoothApplicationIdentifier",
+        "BluetoothBootloaderIdentifier",
+        "BluetoothName",
+        "BluetoothPassthrough",
+        "BluetoothProductModel",
+        "BluetoothProductProvider",
+    ],
+    # Real-time therapy measurements + transient state. Not settings; only
+    # populated while therapy is running, so most return InvalidObject at
+    # idle. Split out of ManufacturingSettings so that group isn't noisy.
+    "TherapyMeasurements": [
+        "RespiratoryEvent", "StatusEvent", "IsRamping", "TriggerCycleEvent",
+        "IsRampingDown",
+        "InspiratoryPressure", "ExpiratoryPressure", "RespiratoryRate",
+        "HeartRate", "SpO2", "IeRatio", "Leak", "RawLeak",
+        "MinuteVentilation", "TidalVolume", "AlveolarMinuteVentilation",
+        "InspiratoryDuration", "ExpiratoryDuration",
+        "TargetMinuteVentilation", "FlowLimitation", "SnoreIndex",
+        "RemainingRampTime", "RemainingRampDownTime",
+        "MaskPressure", "SetPressureWithoutCAD", "PatientFlow",
+        "ExpirationSetPressure", "InspirationSetPressure", "CpapSetPressure",
+    ],
+}
+
+def _resolve_group(name):
+    """Return group name if present in VAR_GROUPS, else None. Case-insensitive."""
+    if name in VAR_GROUPS:
+        return name
+    # case-insensitive fallback only - no human aliases
+    lower_map = {k.lower(): k for k in VAR_GROUPS}
+    return lower_map.get(name.lower())
+
+
 def _filter_vars(pat):
     """Group-aware filtering over (name, tag) pairs. Falls back to substring."""
     key = pat.lower()
@@ -1357,7 +1747,7 @@ def _filter_vars(pat):
 
 
 def _var_groups_summary():
-    """Print prefix/topic breakdown with counts."""
+    """Print all groupings: therapy-mode prefixes, topic keywords, CDX groups."""
     print("therapy modes (exact prefix):")
     for key, prefix in sorted(VAR_MODE_PREFIXES.items()):
         n = sum(1 for name, _ in VAR_NAMES if name.startswith(prefix))
@@ -1368,6 +1758,14 @@ def _var_groups_summary():
         n = sum(1 for name, _ in VAR_NAMES if any(k in name.lower() for k in keywords))
         hint = ", ".join(keywords)
         print(f"  {key:<10}  {n:3d}  ({hint})")
+    print()
+    print("CDX tree groups (firmware names, for `get --group`):")
+    non_empty = [(g, v) for g, v in VAR_GROUPS.items() if v]
+    for g, v in sorted(non_empty, key=lambda x: -len(x[1])):
+        print(f"  {g:<24s}  {len(v):3d}")
+    print()
+    print(f"aggregate Get (verified against firmware 04600.15.8.4.0):")
+    print(f"  subtrees   {len(VAR_SUBTREE_ALIASES):3d}  - `get NAME` returns whole subtree (see `known subtrees`)")
 
 
 def _print_var_pairs(pairs):
@@ -1385,7 +1783,10 @@ def cmd_known(args):
         for name, (_, desc) in REGISTRIES.items():
             print(f"  {name:<8}  {desc}")
         print()
-        print(f"  hint: `known vars groups` lists var subgroupings")
+        print(f"  hint: `known vars groups` lists subgroupings "
+              f"(therapy modes, topics, CDX tree groups)")
+        print(f"  hint: `known subtrees` aggregate-Get targets "
+              f"(SettingProfiles, CpapProfile, …)")
         return
 
     pat = args.pattern or ""
@@ -1395,8 +1796,35 @@ def cmd_known(args):
         if pat.lower() == "groups":
             _var_groups_summary()
             return
+        if pat.lower() == "subtrees":
+            for name in sorted(VAR_SUBTREES, key=str.lower):
+                print(name)
+            return
+        # If pat names a CDX group (case-insensitive), list its members.
+        canon = _resolve_group(pat) if pat else None
+        if canon is not None:
+            members = VAR_GROUPS.get(canon, [])
+            print(f"group {canon}: {len(members)} members")
+            print()
+            for m in members:
+                print(f"  {m}")
+            return
         pairs = _filter_vars(pat) if pat else list(VAR_NAMES)
         _print_var_pairs(pairs)
+
+        if pat:
+            key = pat.lower()
+            sub_hits = [s for s in VAR_SUBTREE_ALIASES if key in s.lower()]
+            res_hits = [s for s in VAR_RESERVED if key in s.lower()]
+            extra = sub_hits + res_hits
+            if extra:
+                if pairs:
+                    print()
+                width = max(len(n) for n in extra)
+                for name in sorted(sub_hits, key=str.lower):
+                    print(f"{name:<{width}}  ~subtree  {VAR_SUBTREE_ALIASES[name]}")
+                for name in sorted(res_hits, key=str.lower):
+                    print(f"{name:<{width}}  ~reserved")
         return
 
     items, _ = REGISTRIES[action]
@@ -1450,9 +1878,32 @@ def parse_set_items(items):
 
 
 async def cmd_get(args):
+    names = list(args.names or [])
+
+    # Expand --group arguments into their member var names.
+    for g in (args.groups or []):
+        canon = _resolve_group(g)
+        if canon is None:
+            raise SystemExit(
+                f"get: unknown group {g!r}. "
+                f"See `known groups` for the list."
+            )
+        members = VAR_GROUPS.get(canon, [])
+        if not members:
+            print(
+                f"get: group {g!r} resolves to {canon!r} which has no direct "
+                f"members. See `known groups` for the list of non-empty groups.",
+                file=sys.stderr,
+            )
+            continue
+        names.extend(members)
+
+    # de-dup, preserve order
+    names = list(dict.fromkeys(names))
+    if not names:
+        raise SystemExit("get: at least one name or --group required")
+
     addr = resolve_addr(args.addr)
-    if not args.names:
-        raise SystemExit("get: at least one name required")
     conn = As11Connection(debug=args.debug)
     try:
         await conn.connect(addr)
@@ -1462,10 +1913,56 @@ async def cmd_get(args):
         new_creds = await conn.reconnect(creds["clientId"], creds["masterPairKey"])
         creds.update(new_creds)
         save_credentials(addr, creds)
-        resp = await conn.send_rpc("Get", list(args.names), encrypted=True)
-        print(json.dumps(resp.get("result", resp), indent=2))
+
+        # When the user explicitly lists names, send as one batch and let any
+        # RPC error propagate. When expanding from --group, be tolerant: bisect
+        # on failure so one mode-gated var (returns InvalidObject in current
+        # mode) doesn't kill the whole query.
+        if args.groups:
+            result, errors = await _get_tolerant(conn, names)
+            if errors:
+                # emit errors to stderr so `result` JSON stays pipeable
+                for n, msg in errors.items():
+                    print(f"# {n}: {msg}", file=sys.stderr)
+            print(json.dumps(result, indent=2))
+        else:
+            resp = await conn.send_rpc("Get", names, encrypted=True)
+            print(json.dumps(resp.get("result", resp), indent=2))
     finally:
         await conn.disconnect()
+
+
+async def _get_tolerant(conn, names):
+    """Query a list of var names, tolerating per-var errors.
+
+    Strategy: try the full batch; on error, bisect and retry. Single-var
+    batches that fail are recorded in the errors dict. Returns
+    (results, errors) where results is {name: value} and errors is {name: msg}.
+    """
+    results = {}
+    errors = {}
+
+    async def _try_batch(batch):
+        try:
+            resp = await conn.send_rpc("Get", list(batch), encrypted=True)
+            return resp.get("result", {}), None
+        except Exception as e:
+            return None, str(e)
+
+    async def _recurse(batch):
+        got, err = await _try_batch(batch)
+        if got is not None:
+            results.update(got)
+            return
+        if len(batch) == 1:
+            errors[batch[0]] = err
+            return
+        mid = len(batch) // 2
+        await _recurse(batch[:mid])
+        await _recurse(batch[mid:])
+
+    await _recurse(names)
+    return results, errors
 
 
 async def cmd_set(args):
@@ -2030,9 +2527,24 @@ see `<subcommand> --help` for per-command examples.
         epilog="""examples:
   get TherapyMode
   get TherapyMode SetPressure SystemDateTime
+
+  get --group TherapyProfile            # user therapy settings
+  get --group TherapyMode               # per-mode pressure parameters
+  get --group ManufacturingSettings     # hardware/calibration/diagnostics
+  get --group DeviceConfiguration       # device identifiers + test-drive
+  get --group CellularModule            # cellular module identifiers
+  get --group Network                   # AccessPointName
+  get --group TherapyMeasurements       # live physiology (only during therapy)
+  get --group TherapyProfile --group DeviceConfiguration
+
+group names are the firmware CDX subtree names (case-insensitive).
+list them all with `known vars groups`.
 """,
         formatter_class=raw_fmt)
-    p_get.add_argument("names", nargs="+", help="setting names to read")
+    p_get.add_argument("names", nargs="*", help="setting names to read")
+    p_get.add_argument("--group", "-g", dest="groups", action="append",
+        default=[], metavar="NAME",
+        help="expand to all vars in a CDX group; repeat to query multiple groups")
 
     p_set = sub.add_parser("set", help="write one or more settings (Set RPC)",
         epilog="""values default to string unless --type follows the pair.
@@ -2069,6 +2581,8 @@ examples:
 """,
         formatter_class=raw_fmt)
     p_rpc.add_argument("--method", required=True, help="RPC method name")
+    p_rpc.add_argument("--debug", action="store_true", default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS)
     p_rpc.add_argument("--params", help="JSON params string")
     p_rpc.add_argument("--vcid", type=lambda x: int(x, 0), default=None,
         help="override TX VCID (hex, e.g. 0x0395)")
@@ -2077,7 +2591,7 @@ examples:
     p_rpc.add_argument("--no-length-prefix", action="store_true",
         help="encrypt without 2-byte length prefix")
     p_rpc.add_argument("--raw-hex", default=None,
-        help="send raw hex bytes (encrypted) instead of JSON-RPC")
+        help="send raw hex bytes instead of JSON-RPC (encrypted unless --no-encrypt)")
     p_rpc.add_argument("--hmac", action="store_true",
         help="append HMAC-SHA256(K, payload) to encrypted data")
 
@@ -2146,7 +2660,7 @@ for a fresh StartSpool call to continue from where we left off.
         epilog="""examples:
   known                     registry overview
   known vars                all 402 variable names
-  known vars groups         subgrouping breakdown (modes + topics)
+  known vars groups         subgrouping breakdown (modes, topics, CDX groups)
 
   known vars cpap           therapy-mode prefix filter (Cpap-*)
   known vars ivaps
@@ -2157,12 +2671,22 @@ for a fresh StartSpool call to continue from where we left off.
   known vars humidifier
   known vars reminder
 
-  known vars Pressure       fall-through substring match
+  known vars TherapyProfile         list members of the TherapyProfile CDX group
+  known vars ManufacturingSettings
+  known vars TherapyMode
+
+  known vars Pressure       fall-through substring match (also matches subtrees)
+
+  known vars subtrees       aggregate `get` targets (SettingProfiles, ...)
+  known subtrees Profile    filter subtree list
   known streams
   known events Alarm
   known spools
 
 note: these lists are advisory; get/set/stream/subscribe/spool accept any string.
+      `get SettingProfiles` returns the whole subtree as aggregated JSON in
+      ONE rpc - different from `get --group ConfigurationProfiles` which
+      expands client-side to many individual Gets.
 """,
         formatter_class=raw_fmt)
     p_known.add_argument("known_action", nargs="?", choices=list(REGISTRIES),
