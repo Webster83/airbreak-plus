@@ -438,7 +438,9 @@ class As11Connection:
 
     async def send_rpc(self, method: str, params=None, timeout: float = 60.0,
                        encrypted: bool = False, vcid_override: int = None,
-                       length_prefix: bool = True, hmac_key: bytes = None) -> dict:
+                       length_prefix: bool = True, hmac_key: bytes = None,
+                       post_send_delay: float = 0.1) -> dict:
+
         self._rpc_id += 1
         version = self.RPC_VERSIONS.get(method, "2.0")
         msg = {"id": self._rpc_id, "jsonrpc": version, "method": method}
@@ -470,7 +472,9 @@ class As11Connection:
         await self._send_raw(packet)
 
         # let the event loop process pending notifications
-        await asyncio.sleep(0.1)
+        # (high-volume callers like the OTA uploader pass post_send_delay=0)
+        if post_send_delay > 0:
+            await asyncio.sleep(post_send_delay)
 
         try:
             await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
