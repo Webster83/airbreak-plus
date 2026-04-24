@@ -155,9 +155,9 @@ LDFLAGS ?= \
 
 # $(BUILD)/shared_code.o: $(BUILD)/shared_code.c
 # 	$(CC) $(CFLAGS) -static -shared -c -o $@ $<
-$(BUILD)/%.o: $(SRC)/%.c
+$(BUILD)/%.o: $(SRC)/%.c| $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
-$(BUILD)/%.o: $(SRC)/%.S
+$(BUILD)/%.o: $(SRC)/%.S| $(BUILD)
 	$(AS) $(ASFLAGS) -c -o $@ $<
 $(BUILD)/%.elf: | $(BUILD)
 	$(LD) $(LDFLAGS) -o $@ $^
