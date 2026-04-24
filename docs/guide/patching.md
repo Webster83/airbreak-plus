@@ -21,12 +21,15 @@ brew install arm-none-eabi-gcc         # macOS
 make
 ```
 
-This builds compiled patches and produces two images:
+This builds compiled patches and produces following images:
 
 | Output | Content |
 |--------|---------|
-| `build/stm32-patched.bin` | All default patches |
-| `build/stm32-asv.bin` | Default patches + custom ASV algorithm (replaces VAuto) |
+| `build/stm32-patched.bin` | unlocked stock-ish |
+| `build/stm32-graph.bin` | graph overlay injected |
+| `build/stm32-asv-plus.bin` | Custom ASV algo in VAuto slot, backup-rate suppression, squarewave |
+| `build/stm32-asv-plus_no-squarewave.bin` | same as stm32-asv-plus minus squarewave |
+| `build/stm32-asv-plus_with-backup.bin` | same as stm32-asv-plus minus backup-rate suppression |
 
 ### Alternative patchers
 
