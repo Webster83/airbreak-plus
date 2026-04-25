@@ -1,2739 +1,899 @@
 #!/usr/bin/env python3
-"""
-AirSense 11 BLE client. Scan, pair (SRP), send JSON-RPC, stream, spool.
+"""AS11 Config Tool.
 
-Usage:
-    python3 as11_ble.py devices scan
-    python3 as11_ble.py --addr <mac|alias> devices pair
-    python3 as11_ble.py --addr <mac|alias> rpc --method GetDateTime
-    python3 as11_ble.py --addr <mac|alias> get TherapyMode SetPressure
+Get/Set settings, run JSON-RPC, stream/subscribe/spool data. Picks
+transport from -d/--device:
+
+    -d ble:<mac|alias>          BLE (via bleak + SRP pairing)
+    -d can:<port>               Waveshare USB-CAN-A
+    -d tcp:<host>:<port>        TCP airbridge (future)
+
+Compat aliases:
+    --addr <ble-target>         same as -d ble:<ble-target>
+    -p/--port <can-port>        same as -d can:<can-port>
+    $AS11_ADDR / $AS11_CAN_PORT env fallbacks
+
 """
+
+from __future__ import annotations
 
 import argparse
-import asyncio
 import base64
-import binascii
 import hashlib
 import json
 import logging
 import os
-import re
-import struct
 import sys
+import time
 from pathlib import Path
 
-try:
-    from bleak import BleakClient, BleakScanner
-except ImportError:
-    sys.exit("bleak not installed. Run: pip install bleak")
+
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE))
+sys.path.insert(0, str(_HERE / "lib"))
+
+from as11_rpc import (  # noqa: E402
+    Transport, TransportError, FramingError,
+    TYPE_COERCE, parse_set_items, load_json_blob,
+    set_params_from_args,
+    host_datetime_iso, parse_flex_datetime, format_datetime_iso,
+)
+from as11_rpc_vars import (  # noqa: E402
+    VAR_GROUPS, expand_groups, resolve_group, SPOOL_TYPES,
+    VAR_NAMES, VAR_SUBTREES,
+    REGISTRIES,
+    filter_vars, var_groups_summary, print_var_pairs,
+)
+from as11_spool import (  # noqa: E402
+    spool_one_round,
+    proto_pretty, summary_pretty,
+    print_spool_legend, print_spool_summary,
+)
 
 
-
-# BLE GATT UUIDs
-SERVICE_UUID = "0000fd56-0000-1000-8000-00805f9b34fb"
-TX_CHAR_UUID = "a6220002-35f1-4b20-afae-cb089d2044aa"   # app -> device
-RX_CHAR_UUID = "a6220003-35f1-4b20-afae-cb089d2044aa"   # device -> app
-
-DEVICE_NAME_PREFIX = "ResMed"
-
-# FIG protocol
-FIG_SYNC       = 0xCAFEBABE
-FIG_SYNC_BYTES = struct.pack('<I', FIG_SYNC)
-FIG_HEADER_LEN = 12
-FIG_VCID_RPC       = 0x0393  # plaintext, key exchange only
-FIG_VCID_RPC_ENC   = 0x0397  # encrypted TX
-FIG_VCID_RX_ENC    = 0x0396  # encrypted RX
-
-log = logging.getLogger("as11_ble")
-
-CRED_FILE = Path.home() / ".as11_ble.json"
+log = logging.getLogger("as11.config")
 
 
-
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives import hashes, hmac
-
-# ResMed SRP-6a (RFC 5054 2048-bit group, SHA-256, no identity).
-# x = H(salt || H(passkey))
-# M1 = H(H(N) xor H(g) || salt || pad(A) || pad(B) || K)  where K = H(S)
-# session_key = SHA256(K || nonce) on successful ConfirmKeyExchange.
-
-_SRP_N = int(
-    "AC6BDB41324A9A9BF166DE5E1389582FAF72B6651987EE07FC3192943DB56050"
-    "A37329CBB4A099ED8193E0757767A13DD52312AB4B03310DCD7F48A9DA04FD50"
-    "E8083969EDB767B0CF6095179A163AB3661A05FBD5FAAAE82918A9962F0B93B"
-    "855F97993EC975EEAA80D740ADBF4FF747359D041D5C33EA71D281E446B1477"
-    "3BCA97B43A23FB801676BD207A436C6481F1D2B9078717461A5B9D32E688F87"
-    "748544523B524B0D57D5EA77A2775D2ECFA032CFBDBF52FB3786160279004E5"
-    "7AE6AF874E7303CE53299CCC041C7BC308D82A5698F3A8D0C38271AE35F8E9D"
-    "BFBB694B5C803D89F7AE435DE236D525F54759B65E372FCD68EF20FA7111F9E"
-    "4AFF73", 16)
-_SRP_G = 2
-_SRP_PAD_LEN = 256
+def eprint(*a, **kw):
+    print(*a, file=sys.stderr, **kw)
 
 
-def _srp_pad(n):
-    return n.to_bytes(_SRP_PAD_LEN, "big")
+def resolve_device_spec(args: argparse.Namespace) -> str:
+    """Turn --device / --addr / --port / env into a canonical spec string.
 
-
-def H(*args):
-    """SHA-256 of concatenated byte arguments (ints are padded to 256 bytes BE)."""
-    h = hashlib.sha256()
-    for a in args:
-        if isinstance(a, int):
-            a = _srp_pad(a)
-        h.update(a)
-    return h.digest()
-
-
-class SRPClient:
-    def __init__(self, passkey):
-        self.passkey = passkey
-        self.a = int.from_bytes(os.urandom(32), "big")
-        self.A = pow(_SRP_G, self.a, _SRP_N)
-        self.S = None
-        self.K = None
-        self.M1 = None
-        self.M2 = None
-
-    @property
-    def public_key_hex(self):
-        return _srp_pad(self.A).hex().upper()
-
-    def process(self, server_pk_hex, salt_hex):
-        B = int(server_pk_hex, 16)
-        if B % _SRP_N == 0:
-            raise ValueError("invalid server public key (B mod N == 0)")
-
-        k = int.from_bytes(H(_srp_pad(_SRP_N), _srp_pad(_SRP_G)), "big")
-        salt = bytes.fromhex(salt_hex)
-        x = int.from_bytes(H(salt, H(self.passkey.encode('ascii'))), "big")
-        u = int.from_bytes(H(_srp_pad(self.A), _srp_pad(B)), "big")
-        if u == 0:
-            raise ValueError("invalid u (== 0)")
-
-        self.S = pow(B - k * pow(_SRP_G, x, _SRP_N), self.a + u * x, _SRP_N) % _SRP_N
-        self.K = H(_srp_pad(self.S))
-
-        h_N = H(_srp_pad(_SRP_N))
-        h_g = H(_srp_pad(_SRP_G))
-        h_xor = bytes(a ^ b for a, b in zip(h_N, h_g))
-        self.M1 = H(h_xor, salt, _srp_pad(self.A), _srp_pad(B), self.K)
-        self.M2 = H(self.M1, h_xor)
-
-    @property
-    def client_proof_hex(self):
-        return self.M1.hex().upper()
-
-    @property
-    def session_key_hex(self):
-        return self.K.hex().upper()
-
-    def derive_session_key(self, nonce_hex):
-        """SHA256(K || nonce) - matches figlib SrpKeyExchange::GenerateSessionKey."""
-        self.aes_key = H(self.K, bytes.fromhex(nonce_hex))
-        return self.aes_key.hex().upper()
-
-    def verify_server(self, server_proof_hex):
-        if server_proof_hex.upper() != self.M2.hex().upper():
-            raise ValueError("server proof mismatch")
-
-
-class FigCodec:
-    """FIG packet encoder/decoder.
-
-    Frame: [4 SYNC] [2 VCID] [2 LEN] [4 PAYLOAD_CRC] [4 HEADER_CRC] [N PAYLOAD]
-    All integers little-endian, CRC32 IEEE.
+    Returns one of:
+        "ble:<addr-or-alias>"
+        "can:<port>"
+        "tcp:<host>:<port>"
     """
-
-    def __init__(self):
-        self._rx_buf = bytearray()
-
-    @staticmethod
-    def crc32(data: bytes) -> int:
-        return binascii.crc32(data) & 0xFFFFFFFF
-
-    @staticmethod
-    def encode(vcid: int, payload: bytes) -> bytes:
-        payload_crc = FigCodec.crc32(payload)
-        header = struct.pack('<HH I', vcid, len(payload), payload_crc)
-        header_crc = FigCodec.crc32(header)
-        return FIG_SYNC_BYTES + header + struct.pack('<I', header_crc) + payload
-
-    def feed(self, data: bytes):
-        self._rx_buf.extend(data)
-
-    def decode(self) -> list:
-        """Pop complete packets from RX buffer. Returns [(vcid, payload), ...]."""
-        packets = []
-        while True:
-            idx = self._rx_buf.find(FIG_SYNC_BYTES)
-            if idx < 0:
-                # keep tail in case sync straddles a notification
-                if len(self._rx_buf) > 3:
-                    self._rx_buf = self._rx_buf[-3:]
-                break
-
-            if idx > 0:
-                log.debug("discarding %d bytes before sync", idx)
-                self._rx_buf = self._rx_buf[idx:]
-
-            if len(self._rx_buf) < 4 + FIG_HEADER_LEN:
-                break
-
-            hdr = bytes(self._rx_buf[4:16])
-            vcid, payload_len, payload_crc, header_crc = struct.unpack('<HH II', hdr)
-
-            if FigCodec.crc32(hdr[:8]) != header_crc:
-                log.warning("header CRC mismatch, skipping sync")
-                self._rx_buf = self._rx_buf[4:]
-                continue
-
-            total = 4 + FIG_HEADER_LEN + payload_len
-            if len(self._rx_buf) < total:
-                break
-
-            payload = bytes(self._rx_buf[16:16 + payload_len])
-
-            if FigCodec.crc32(payload) != payload_crc:
-                log.warning("payload CRC mismatch (vcid=%d len=%d)", vcid, payload_len)
-                self._rx_buf = self._rx_buf[4:]
-                continue
-
-            packets.append((vcid, payload))
-            self._rx_buf = self._rx_buf[total:]
-
-        return packets
+    if getattr(args, "device", None):
+        return args.device
+    if getattr(args, "addr", None):
+        return f"ble:{args.addr}"
+    if getattr(args, "port", None):
+        return f"can:{args.port}"
+    if os.environ.get("AS11_ADDR"):
+        return f"ble:{os.environ['AS11_ADDR']}"
+    if os.environ.get("AS11_CAN_PORT"):
+        return f"can:{os.environ['AS11_CAN_PORT']}"
+    raise SystemExit(
+        "no device: pass -d/--device ble:<mac|alias> or can:<port>, "
+        "or set AS11_ADDR / AS11_CAN_PORT"
+    )
 
 
-def decode_ncp_packet(payload: bytes):
-    """Best-effort decoder for the binary NCP command envelope."""
-    if len(payload) < 4:
-        return None
-    ncp_len = struct.unpack_from('<H', payload, 0)[0]
-    if ncp_len + 2 > len(payload) or ncp_len < 2:
-        return None
+def build_transport(args: argparse.Namespace) -> Transport:
+    """Factory: parse the device spec, return a configured but not-yet-
+    connected Transport. Caller is responsible for calling connect()."""
+    spec = resolve_device_spec(args)
 
-    code = payload[2]
-    seq = payload[3]
-    body = payload[4:4 + ncp_len - 2]
-    out = {
-        "length": ncp_len,
-        "code": f"0x{code:02x}",
-        "seq": seq,
-        "bodyHex": body.hex(),
-    }
-    if body:
+    if spec.startswith("ble:"):
+        target = spec[4:]
+        if not target:
+            raise SystemExit("ble: spec needs MAC / UUID / alias")
+        from as11_ble import BleTransport
+        return BleTransport.from_args(target, args)
+
+    if spec.startswith("can:"):
+        target = spec[4:]
+        if not target:
+            raise SystemExit("can: spec needs serial port path")
+        from as11_can_waveshare import CanWaveshareTransport
+        return CanWaveshareTransport.from_args(target, args)
+
+    if spec.startswith("tcp:"):
+        raise SystemExit("tcp: transport not implemented yet")
+
+    raise SystemExit(
+        f"unrecognised device spec {spec!r}; "
+        "expected ble:<addr>, can:<port>, or tcp:<host:port>"
+    )
+
+
+def connect_transport(args: argparse.Namespace) -> Transport:
+    t = build_transport(args)
+    t.connect()
+    return t
+
+
+
+def call_rpc(t: Transport, args: argparse.Namespace,
+             method: str, params) -> dict:
+    try:
+        return t.rpc(method, params, timeout=args.timeout)
+    except FramingError as exc:
+        eprint(f"\n{method}: framing/CRC error, device state is UNKNOWN. {exc}")
+        raise
+
+
+def print_response(resp: dict) -> None:
+    print(json.dumps(resp, indent=2))
+
+
+
+def cmd_get(args: argparse.Namespace) -> int:
+    if getattr(args, "list_groups", False):
+        for name, members in sorted(VAR_GROUPS.items(),
+                                    key=lambda kv: -len(kv[1])):
+            print(f"  {name:<24s}  {len(members):3d} vars")
+        return 0
+
+    names: list[str] = list(args.names or [])
+    groups = list(args.groups or [])
+    if groups:
         try:
-            out["bodyText"] = body.rstrip(b"\x00").decode("utf-8")
-        except UnicodeDecodeError:
-            pass
-    if code == 0xfd and len(body) >= 4:
-        err_code, msg_len = struct.unpack_from('<HH', body, 0)
-        msg = body[4:4 + msg_len].rstrip(b"\x00")
-        out["errorCode"] = f"0x{err_code:04x}"
-        try:
-            out["errorText"] = msg.decode("utf-8")
-        except UnicodeDecodeError:
-            pass
-    return out
-
-
-class As11Connection:
-    def __init__(self, debug=False):
-        self._client = None
-        self._codec = FigCodec()
-        self._rpc_id = 0
-        self._response_event = asyncio.Event()
-        self._response_data = None
-        self._mtu = 244
-        self._session_key = None
-        self._notification_cb = None
-        self._raw_packet_cb = None
-        self._plain_vcids = set()
-        self.debug = debug
-
-    def set_session_key(self, key_hex):
-        """AES-256 session key from SHA256 output."""
-        self._session_key = bytes.fromhex(key_hex[:64])
-        log.info("session key set (%d bytes): %s...", len(self._session_key), key_hex[:16])
-
-    def _aes_encrypt(self, plaintext, length_prefix=True):
-        """AES-CBC(key, random IV). Wire: [IV][cipher([u16 len][payload][zero pad])]."""
-        if length_prefix:
-            framed = struct.pack('<H', len(plaintext)) + plaintext
-        else:
-            framed = plaintext
-        pad_len = (16 - len(framed) % 16) % 16
-        padded = framed + b'\x00' * pad_len
-        iv = os.urandom(16)
-        cipher = Cipher(algorithms.AES(self._session_key), modes.CBC(iv))
-        enc = cipher.encryptor()
-        ct = enc.update(padded) + enc.finalize()
-        return iv + ct
-
-    def _aes_decrypt(self, data):
-        iv = data[:16]
-        ct = data[16:]
-        cipher = Cipher(algorithms.AES(self._session_key), modes.CBC(iv))
-        dec = cipher.decryptor()
-        plaintext = dec.update(ct) + dec.finalize()
-        # strip u16 LE length prefix
-        if len(plaintext) >= 2:
-            payload_len = struct.unpack_from('<H', plaintext, 0)[0]
-            return plaintext[2:2 + payload_len]
-        return plaintext.rstrip(b'\x00')
-
-    @staticmethod
-    async def scan(timeout=10.0):
-        """Returns [(address, name, rssi), ...]."""
-        devices = await BleakScanner.discover(
-            timeout=timeout,
-            service_uuids=[SERVICE_UUID],
-            return_adv=True,
+            names.extend(expand_groups(groups))
+        except ValueError as exc:
+            raise SystemExit(f"get: {exc}")
+    if not names:
+        raise SystemExit(
+            "get: at least one name or --group required "
+            "(use --list-groups to see known groups)"
         )
-        results = []
-        for addr, (dev, adv) in devices.items():
-            name = dev.name or adv.local_name or ""
-            if name.startswith(DEVICE_NAME_PREFIX):
-                results.append((dev.address, name, adv.rssi))
-        return results
+    seen: set[str] = set()
+    unique = [n for n in names if not (n in seen or seen.add(n))]
+    with connect_transport(args) as t:
+        resp = call_rpc(t, args, "Get", unique)
+    print_response(resp)
+    return 0
 
-    async def connect(self, address: str):
-        self._client = BleakClient(address, timeout=20.0)
-        await self._client.connect()
-        log.info("connected to %s", address)
 
-        # device supports MTU 247, pull negotiated chunk size from the write char
+def cmd_rpc(args: argparse.Namespace) -> int:
+    params = None
+    if args.params is not None:
+        params = load_json_blob(args.params, what="--params")
+    with connect_transport(args) as t:
+        resp = call_rpc(t, args, args.method, params)
+    print_response(resp)
+    return 0
+
+
+def cmd_set(args: argparse.Namespace) -> int:
+    params = set_params_from_args(args)
+    with connect_transport(args) as t:
+        resp = call_rpc(t, args, "Set", params)
+    print_response(resp)
+    return 0
+
+
+def cmd_settime(args: argparse.Namespace) -> int:
+    if args.time:
         try:
-            svcs = self._client.services
-            for svc in svcs:
-                for char in svc.characteristics:
-                    if char.uuid == TX_CHAR_UUID:
-                        self._mtu = char.max_write_without_response_size
-                        break
-        except Exception:
-            pass
-        if self._mtu < 244:
-            self._mtu = 244
-        log.info("write chunk size: %d", self._mtu)
+            dt_obj = parse_flex_datetime(args.time)
+        except ValueError as exc:
+            raise SystemExit(f"settime: {exc}")
+        stamp = format_datetime_iso(dt_obj)
+    else:
+        stamp = host_datetime_iso()
+    params = {"dateTime": stamp}
+    if args.dry_run:
+        print(json.dumps(
+            {"method": "SetDateTime", "params": params}, indent=2
+        ))
+        return 0
+    with connect_transport(args) as t:
+        resp = call_rpc(t, args, "SetDateTime", params)
+    print_response(resp)
+    return 0
 
-        # Steehl chars - possible handshake requirement
-        STEEHL_CHARS = [
-            "3d5085ac-d8a2-4a56-8d2e-1dc7508e67bc",
-            "1681c44f-2798-4bfa-b11a-65e9f55c2082",
-            "e5e33ba4-c823-4a86-9b15-1bf2acb27a1c",
-        ]
-        for uuid in STEEHL_CHARS:
-            try:
-                val = await self._client.read_gatt_char(uuid)
-                log.info("Steehl %s: %s", uuid[:8], val.hex())
-            except Exception as e:
-                log.debug("Steehl %s: %s", uuid[:8], e)
 
-        # Service Changed indication must be enabled before FIG works
-        SVC_CHANGED_UUID = "00002a05-0000-1000-8000-00805f9b34fb"
-        try:
-            await self._client.start_notify(SVC_CHANGED_UUID, lambda s, d:
-                log.debug("Service Changed indication: %s", d.hex()))
-            log.info("Service Changed indication enabled")
-        except Exception as e:
-            log.debug("Service Changed: %s", e)
+def cmd_session(args: argparse.Namespace) -> int:
+    """Interactive REPL. Keeps the transport open across commands."""
+    with connect_transport(args) as t:
+        first_call = [True]
 
-        await self._client.start_notify(RX_CHAR_UUID, self._on_notify)
-        log.info("RX notifications enabled")
+        def do_rpc(method, params):
+            if first_call[0]:
+                first_call[0] = False
+                return call_rpc(t, args, method, params)
+            return t.rpc(method, params, timeout=args.timeout)
 
-        if self.debug:
-            for svc in self._client.services:
-                log.debug("Service: %s", svc.uuid)
-                for char in svc.characteristics:
-                    props = ",".join(char.properties)
-                    log.debug("  Char: %s [%s]", char.uuid, props)
-                    for desc in char.descriptors:
-                        log.debug("    Desc: %s", desc.uuid)
-
-    async def disconnect(self):
-        if self._client and self._client.is_connected:
-            await self._client.disconnect()
-            log.info("disconnected")
-
-    def _on_notify(self, sender, data: bytearray):
-        if self.debug:
-            log.debug("RX notify (%d bytes): %s", len(data), data.hex())
-        self._codec.feed(bytes(data))
-
-        for vcid, raw_payload in self._codec.decode():
-            log.debug("FIG packet: vcid=%d len=%d", vcid, len(raw_payload))
-            if self.debug:
-                log.debug("  raw payload hex: %s", raw_payload.hex())
-
-            # 0x0396 = Level 2 patient, 0x0394/0x0380 = possible Level 3 service
-            if vcid in (FIG_VCID_RX_ENC, 0x0394, 0x0380) and self._session_key and vcid not in self._plain_vcids:
+        if sys.stdin.isatty():
+            print(f"AS11 session on {t.name}. Commands:")
+            print("  get NAME [NAME...]              -> Get RPC")
+            print("  set NAME VALUE [--type T] ...   -> Set RPC")
+            print("  settime [ISO]                   -> SetDateTime")
+            print("  rpc METHOD [JSON_PARAMS]        -> arbitrary RPC")
+            print("  quit / exit                      -> leave")
+        while True:
+            if sys.stdin.isatty():
                 try:
-                    raw_payload = self._aes_decrypt(raw_payload)
-                    if self.debug:
-                        log.debug("  decrypted: %s", raw_payload[:100])
-                except Exception as e:
-                    log.warning("decrypt failed on vcid %d: %s", vcid, e)
-                    continue
-
-            if self._raw_packet_cb:
-                self._raw_packet_cb(vcid, raw_payload)
-                self._response_data = {"vcid": vcid, "payloadHex": raw_payload.hex()}
-                self._response_event.set()
+                    line = input("as11> ")
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    break
+            else:
+                line = sys.stdin.readline()
+                if not line:
+                    break
+            line = line.strip()
+            if not line or line.startswith("#"):
                 continue
-
-            payload = raw_payload
+            if line.lower() in {"quit", "exit", "q"}:
+                break
             try:
-                text = payload.decode('utf-8')
-                msg = json.loads(text)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                # retry stripping u16 LE length prefix
-                if len(raw_payload) >= 2:
-                    dg_len = struct.unpack_from('<H', raw_payload, 0)[0]
-                    payload = raw_payload[2:2 + dg_len]
-                try:
-                    text = payload.decode('utf-8')
-                    msg = json.loads(text)
-                except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                    log.warning("non-JSON payload on vcid %d: %r", vcid, raw_payload)
+                verb, _, rest = line.partition(" ")
+                verb = verb.lower()
+                if verb == "get":
+                    names = rest.split()
+                    if not names:
+                        eprint("get: at least one variable name required")
+                        continue
+                    resp = do_rpc("Get", names)
+                elif verb == "set":
+                    toks = rest.split()
+                    if not toks:
+                        eprint("set: NAME VALUE [--type T] ... or --json '{...}'")
+                        continue
+                    if toks[0] == "--json":
+                        if len(toks) < 2:
+                            eprint("set --json: missing JSON")
+                            continue
+                        raw = rest.partition("--json")[2].strip()
+                        params = load_json_blob(raw, what="set --json")
+                        if not isinstance(params, dict):
+                            eprint("set --json: must be a JSON object")
+                            continue
+                    else:
+                        pairs = parse_set_items(toks)
+                        params = {}
+                        aborted = False
+                        for name, value, typ in pairs:
+                            try:
+                                params[name] = TYPE_COERCE[typ](value)
+                            except (ValueError, KeyError) as exc:
+                                eprint(f"{name}: cannot coerce "
+                                       f"{value!r} as {typ} ({exc})")
+                                aborted = True
+                                break
+                        if aborted:
+                            continue
+                    resp = do_rpc("Set", params)
+                elif verb == "settime":
+                    spec = rest.strip()
+                    if spec:
+                        try:
+                            stamp = format_datetime_iso(parse_flex_datetime(spec))
+                        except ValueError as exc:
+                            eprint(f"settime: {exc}")
+                            continue
+                    else:
+                        stamp = host_datetime_iso()
+                    resp = do_rpc("SetDateTime", {"dateTime": stamp})
+                elif verb == "rpc":
+                    method, _, params_str = rest.partition(" ")
+                    if not method:
+                        eprint("rpc: method required")
+                        continue
+                    if params_str.strip():
+                        params = load_json_blob(
+                            params_str.strip(), what="rpc params"
+                        )
+                    else:
+                        params = None
+                    resp = do_rpc(method, params)
+                else:
+                    eprint(f"unknown command: {verb}")
                     continue
+                print_response(resp)
+            except TimeoutError as exc:
+                eprint(f"timeout: {exc}")
+            except SystemExit as exc:
+                eprint(str(exc))
+            except Exception as exc:
+                eprint(f"error: {exc}")
+    return 0
 
-            # notifications carry "method" but no "id"
-            if "method" in msg and "id" not in msg:
-                log.info("RX notification: %s(%s)",
-                         msg["method"], json.dumps(msg.get("params", {}))[:100])
-                if self._notification_cb:
-                    self._notification_cb(msg)
-                continue
 
-            if self.debug:
-                log.debug("  JSON response: %s", json.dumps(msg)[:300])
-            self._response_data = msg
-            self._response_event.set()
-
-    async def _send_raw(self, data: bytes):
-        chunk_size = max(self._mtu, 20)
-        for offset in range(0, len(data), chunk_size):
-            chunk = data[offset:offset + chunk_size]
-            if self.debug:
-                log.debug("TX chunk (%d/%d bytes): %s",
-                          len(chunk), len(data), chunk.hex())
-            await self._client.write_gatt_char(TX_CHAR_UUID, chunk, response=True)
-
-    # RPC method -> version string carried in the "jsonrpc" field
-    RPC_VERSIONS = {
-        "GetDateTime": "1.0", "SetDateTime": "1.1", "GetVersion": "2.0",
-        "StartStream": "1.0", "InitiateUpgrade": "1.0", "UpgradeDataBlock": "1.0",
-        "CheckUpgradeFile": "1.0", "ApplyUpgrade": "1.1", "GetLedStatus": "1.0",
-        "EnterStandby": "1.0", "EnterTherapy": "1.0", "SetNextPowerUpDateTime": "1.0",
-        "SubscribeEvent": "1.0", "EraseData": "1.0", "ResetDevice": "1.0",
-        "StoreSecurityData": "1.0", "EnterMaskFit": "2.0",
-        "ApplyAuthenticatedUpgrade": "1.0", "Get": "1.0", "Set": "1.0",
-        "VerifySecurityData": "1.0", "GenerateAuthCode": "1.1",
-        "ClearAutoConnectList": "1.0", "DiscardPairKey": "1.0",
-        "StartSpool": "1.0", "PullSpoolFragments": "1.0",
-        "EnterTestDrive": "1.0", "EnableSecurity": "1.0",
+def cmd_stream(args: argparse.Namespace) -> int:
+    """Start a real-time data stream; emit NDJSON, one notification per line.
+       On exit, calls `StartStream` with dataIds=[] to disarm.
+    """
+    default_ids = [
+        "InspiratoryPressure-50hz", "Leak-TwoSecond", "RemainingRampTime",
+    ]
+    data_ids = args.data_ids.split(",") if args.data_ids else default_ids
+    params = {
+        "dataIds": data_ids,
+        "sampleIntervalMs": args.sample_ms,
+        "reportIntervalMs": args.report_ms,
     }
 
-    async def send_rpc(self, method: str, params=None, timeout: float = 60.0,
-                       encrypted: bool = False, vcid_override: int = None,
-                       length_prefix: bool = True, hmac_key: bytes = None,
-                       post_send_delay: float = 0.1) -> dict:
+    def handler(msg: dict):
+        print(json.dumps(msg, separators=(",", ":")), flush=True)
+        return None
 
-        self._rpc_id += 1
-        version = self.RPC_VERSIONS.get(method, "2.0")
-        msg = {"id": self._rpc_id, "jsonrpc": version, "method": method}
-        if params:
-            msg["params"] = params
-
-        json_bytes = json.dumps(msg, separators=(',', ':')).encode('utf-8')
-
-        if encrypted and self._session_key:
-            payload = self._aes_encrypt(json_bytes, length_prefix=length_prefix)
-            if hmac_key:
-                h = hmac.HMAC(hmac_key, hashes.SHA256())
-                h.update(payload)
-                payload = payload + h.finalize()
-            vcid = vcid_override or FIG_VCID_RPC_ENC
-        else:
-            payload = json_bytes
-            vcid = vcid_override or FIG_VCID_RPC
-
-        packet = FigCodec.encode(vcid, payload)
-
-        log.info("RPC >>> %s(%s)", method, json.dumps(params or {}))
-        if self.debug:
-            log.debug("TX packet (%d bytes): %s", len(packet), packet.hex())
-
-        self._response_event.clear()
-        self._response_data = None
-
-        await self._send_raw(packet)
-
-        # let the event loop process pending notifications
-        # (high-volume callers like the OTA uploader pass post_send_delay=0)
-        if post_send_delay > 0:
-            await asyncio.sleep(post_send_delay)
-
+    with connect_transport(args) as t:
+        t.set_notification_handler(handler)
         try:
-            await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            raise TimeoutError(f"no response to {method} within {timeout}s")
-
-        resp = self._response_data
-        if "error" in resp:
-            err = resp["error"]
-            raise RuntimeError(f"RPC error {err.get('code', '?')}: {err.get('message', '?')}")
-
-        log.info("RPC <<< %s", json.dumps(resp.get("result", resp))[:200])
-        return resp
-
-    async def reconnect(self, client_id: str, master_pair_key: str) -> dict:
-        """Re-establish encrypted session from stored credentials.
-
-        RequestSession(clientId) -> {challenge, nonce}
-        response = HMAC-SHA256(K, challenge)
-        CheckSessionIntegrity(response)
-        session_key = SHA256(K || nonce)
-
-        K = masterPairKey = H(pad(S)) from the original SRP exchange.
-        """
-        log.info("reconnect: RequestSession clientId=%s...", client_id[:8])
-        resp = await self.send_rpc_raw("RequestSession", {"clientId": client_id}, timeout=10.0)
-
-        if not resp or "error" in resp:
-            err = (resp or {}).get("error", {"message": "no response"})
-            raise RuntimeError(f"RequestSession failed: {err}")
-
-        result = resp.get("result", {})
-        challenge_hex = result.get("challenge", "")
-        nonce_hex = result.get("nonce", "")
-        if not challenge_hex or not nonce_hex:
-            raise RuntimeError("RequestSession: missing challenge/nonce")
-
-        log.info("reconnect: challenge=%s... nonce=%s...", challenge_hex[:16], nonce_hex[:16])
-
-        K_bytes = bytes.fromhex(master_pair_key)
-        challenge_bytes = bytes.fromhex(challenge_hex)
-        h = hmac.HMAC(K_bytes, hashes.SHA256())
-        h.update(challenge_bytes)
-        response_hex = h.finalize().hex().upper()
-        log.info("reconnect: response=%s...", response_hex[:16])
-
-        resp2 = await self.send_rpc_raw("CheckSessionIntegrity", {"response": response_hex}, timeout=10.0)
-        if not resp2 or "error" in resp2:
-            err = (resp2 or {}).get("error", {"message": "no response"})
-            raise RuntimeError(f"CheckSessionIntegrity failed: {err}")
-
-        log.info("reconnect: session verified")
-
-        nonce_bytes = bytes.fromhex(nonce_hex)
-        aes_key = H(K_bytes, nonce_bytes)
-        aes_key_hex = aes_key.hex().upper()
-        self.set_session_key(aes_key_hex)
-        log.info("reconnect: AES key=%s...", aes_key_hex[:16])
-
-        return {"clientId": client_id, "sessionKey": aes_key_hex[:32], "nonce": nonce_hex}
-
-    async def send_rpc_raw(self, method: str, params: dict = None, timeout: float = 10.0) -> dict:
-        """send_rpc without error-raising, returns raw response dict or None on timeout."""
-        self._rpc_id += 1
-        # "id" field first, matches myAir app packet layout
-        msg = {"id": self._rpc_id, "jsonrpc": "2.0", "method": method}
-        if params:
-            msg["params"] = params
-
-        payload = json.dumps(msg, separators=(',', ':')).encode('utf-8')
-        packet = FigCodec.encode(FIG_VCID_RPC, payload)
-
-        log.info("RPC >>> %s(%s)", method, json.dumps(params or {}))
-        if self.debug:
-            log.debug("TX packet (%d bytes): %s", len(packet), packet.hex())
-
-        self._response_event.clear()
-        self._response_data = None
-        await self._send_raw(packet)
-
-        try:
-            await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            return None
-
-        return self._response_data
-
-    async def pair(self, passkey: str = None) -> dict:
-        """SRP key exchange using the 4-digit passkey shown on the device screen.
-
-        StartKeyExchange(A) -> {B, salt}
-        ConfirmKeyExchange(M1) -> {M2, clientId, nonce}
-        session_key = SHA256(K || nonce)
-        """
-        if passkey is None:
-            passkey = input("Enter passkey shown on device screen: ").strip()
-            if not passkey:
-                raise RuntimeError("no passkey entered")
-
-        log.info("SRP: generating keypair with passkey '%s'", passkey)
-        srp = SRPClient(passkey)
-        log.info("SRP: A = %s...", srp.public_key_hex[:32])
-
-        resp = await self.send_rpc("StartKeyExchange", {"clientPk": srp.public_key_hex})
-        if resp is None:
-            raise RuntimeError("no response to StartKeyExchange")
-        if "error" in resp:
-            raise RuntimeError("StartKeyExchange error: %s" % resp["error"])
-
-        result = resp.get("result", {})
-        server_pk = result.get("serverPk", "")
-        salt = result.get("salt", "")
-        log.info("SRP: B = %s...", server_pk[:32])
-        log.info("SRP: salt = %s", salt)
-
-        srp.process(server_pk, salt)
-        log.info("SRP: K = %s...", srp.session_key_hex[:32])
-        log.info("SRP: M1 = %s...", srp.client_proof_hex[:32])
-
-        resp2 = await self.send_rpc("ConfirmKeyExchange", {"clientConfirmation": srp.client_proof_hex})
-        if resp2 is None:
-            raise RuntimeError("no response to ConfirmKeyExchange")
-        if "error" in resp2:
-            raise RuntimeError("ConfirmKeyExchange error: %s" % resp2["error"])
-
-        result2 = resp2.get("result", {})
-        log.info("SRP: paired! result: %s", json.dumps(result2)[:200])
-
-        nonce = result2.get("nonce", "")
-        aes_key_hex = srp.derive_session_key(nonce)
-        self.set_session_key(aes_key_hex)
-        log.info("AES key: %s...", aes_key_hex[:32])
-
-        return {
-            "clientId": result2.get("clientId", ""),
-            "masterPairKey": srp.session_key_hex,
-            "sessionKey": aes_key_hex[:32],
-            "serverPk": server_pk,
-            "nonce": result2.get("nonce", ""),
-            "serverConfirmation": result2.get("serverConfirmation", ""),
-        }
-
-
-MAC_RE  = re.compile(r'^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$')
-UUID_RE = re.compile(r'^[0-9A-Fa-f]{8}-([0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}$')
-
-
-def load_all_credentials() -> dict:
-    if not CRED_FILE.exists():
-        return {}
-    return json.loads(CRED_FILE.read_text())
-
-def save_all_credentials(all_creds: dict):
-    CRED_FILE.write_text(json.dumps(all_creds, indent=2))
-
-def save_credentials(address: str, creds: dict):
-    all_creds = load_all_credentials()
-    existing = all_creds.get(address, {})
-    existing.update(creds)
-    all_creds[address] = existing
-    save_all_credentials(all_creds)
-    log.info("credentials saved to %s", CRED_FILE)
-
-def load_credentials(address: str) -> dict:
-    return load_all_credentials().get(address, {})
-
-def resolve_addr(arg: str = None) -> str:
-    """MAC/UUID -> as-is (MAC uppercased). Alias -> looked up from credentials.
-    None falls back to $AS11_ADDR."""
-    if arg is None:
-        arg = os.environ.get("AS11_ADDR")
-    if not arg:
-        raise SystemExit("no address: pass --addr or set AS11_ADDR")
-
-    if MAC_RE.match(arg):
-        return arg.upper()
-    if UUID_RE.match(arg):
-        return arg
-
-    # alias lookup
-    for addr, data in load_all_credentials().items():
-        if data.get("alias") == arg:
-            return addr
-    raise SystemExit(f"no MAC/UUID/alias matched: {arg!r}")
-
-
-async def cmd_scan(args):
-    print("Scanning for AS11 devices...")
-    devices = await As11Connection.scan(timeout=args.timeout)
-    if not devices:
-        print("No devices found.")
-        return
-    for addr, name, rssi in sorted(devices, key=lambda x: -x[2]):
-        print(f"  {addr}  {name:<20s}  RSSI {rssi}")
-
-async def cmd_pair(args):
-    addr = resolve_addr(args.addr)
-    conn = As11Connection(debug=args.debug)
-    try:
-        await conn.connect(addr)
-        creds = await conn.pair()
-        save_credentials(addr, creds)
-        print("Paired successfully. Credentials saved.")
-        print("  clientId:       %s" % creds['clientId'])
-        print("  masterPairKey:  %s..." % creds['masterPairKey'][:16])
-        print("  sessionKey:     %s..." % creds['sessionKey'][:16])
-
-        try:
-            resp = await conn.send_rpc("GetVersion", encrypted=True)
-            print("GetVersion: %s" % json.dumps(resp.get("result", resp))[:200])
-        except Exception as e:
-            print("GetVersion failed: %s" % e)
-
-        try:
-            resp = await conn.send_rpc("Get", ["SerialNumber"], encrypted=True)
-            print("SerialNumber: %s" % json.dumps(resp.get("result", resp))[:200])
-        except Exception as e:
-            print("Get(SerialNumber) failed: %s" % e)
-    finally:
-        await conn.disconnect()
-
-async def cmd_rpc(args):
-    addr = resolve_addr(args.addr)
-    conn = As11Connection(debug=args.debug)
-    try:
-        await conn.connect(addr)
-
-        creds = load_credentials(addr)
-        if creds.get("clientId") and creds.get("masterPairKey"):
+            resp = call_rpc(t, args, "StartStream", params)
+            eprint(json.dumps(resp.get("result", resp)))
+            t.listen_for_notifications(duration=args.duration)
+        except KeyboardInterrupt:
+            pass
+        finally:
             try:
-                new_creds = await conn.reconnect(creds["clientId"], creds["masterPairKey"])
-                creds.update(new_creds)
-                save_credentials(addr, creds)
-            except Exception as e:
-                print(f"Reconnect failed ({e}), need to re-pair.", file=sys.stderr)
-                return
+                stop_params = dict(params, dataIds=[])
+                t.rpc("StartStream", stop_params, timeout=args.timeout)
+            except Exception as exc:
+                eprint(f"stream stop failed (non-fatal): {exc}")
+            t.set_notification_handler(None)
+    return 0
+
+
+def cmd_subscribe(args: argparse.Namespace) -> int:
+    """Subscribe to device events; emit NDJSON, one notification per line."""
+    event_ids = args.events.split(",") if args.events else []
+    params = {"dataIds": event_ids}
+
+    def handler(msg: dict):
+        print(json.dumps(msg, separators=(",", ":")), flush=True)
+        return None
+
+    with connect_transport(args) as t:
+        t.set_notification_handler(handler)
+        try:
+            resp = call_rpc(t, args, "SubscribeEvent", params)
+            eprint(json.dumps(resp.get("result", resp)))
+            t.listen_for_notifications(duration=args.duration)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            t.set_notification_handler(None)
+    return 0
+
+
+def cmd_spool(args: argparse.Namespace) -> int:
+    """Download spool data from the device.
+
+    Calls StartSpool -> PullSpoolFragments, optionally iterating rounds
+    to follow `SPOOL_COMPLETE_MORE_DATA_PENDING` continuation tokens.
+    Writes raw binary to --output (if given) and/or a decoded or
+    base64-envelope to stdout.
+    """
+    if getattr(args, "list_types", False):
+        for name in SPOOL_TYPES:
+            print(name)
+        return 0
+    if not getattr(args, "spool_type", None):
+        raise SystemExit(
+            "spool: spool_type required (or use --list-types)"
+        )
+    spool_type = args.spool_type
+    from_dt = args.from_dt or "2000-01-01T00:00:00.000Z"
+    spool_address = {spool_type: {"fromDateTime": from_dt}}
+
+    all_data = bytearray()
+    total_fragments = 0
+    round_num = 0
+    final_status = ""
+    last_next = None
+
+    with connect_transport(args) as t:
+        while True:
+            round_num += 1
+            if round_num > 1:
+                eprint(f"--- round {round_num} (continuing from nextSpoolAddress) ---")
+            data, status, nxt, n_frags = spool_one_round(
+                t, spool_address, args.max_size,
+                fragment_timeout=args.fragment_timeout,
+            )
+            all_data.extend(data)
+            total_fragments += n_frags
+            final_status = status
+            last_next = nxt
+            if args.no_follow:
+                break
+            if status != "SPOOL_COMPLETE_MORE_DATA_PENDING" or not nxt:
+                break
+            if round_num >= args.max_rounds:
+                eprint(f"  stopping: hit --max-rounds {args.max_rounds}")
+                break
+            spool_address = nxt
+
+    data = bytes(all_data)
+
+    if args.output:
+        with open(args.output, "wb") as f:
+            f.write(data)
+        eprint(f"Saved {len(data)} bytes to {args.output} "
+               f"({total_fragments} fragments, {round_num} rounds, "
+               f"status={final_status})")
+        if last_next and final_status == "SPOOL_COMPLETE_MORE_DATA_PENDING":
+            eprint(f"  nextSpoolAddress: {json.dumps(last_next)}")
+
+    if args.decode:
+        print_spool_legend(spool_type)
+        if spool_type == "Summary":
+            summary_pretty(data)
         else:
-            print("No stored credentials. Run 'pair' first.", file=sys.stderr)
-            return
+            proto_pretty(data)
+        print_spool_summary(spool_type, data)
+        if last_next and final_status == "SPOOL_COMPLETE_MORE_DATA_PENDING":
+            eprint(f"\n# status={final_status}")
+            eprint(f"# nextSpoolAddress: {json.dumps(last_next)}")
+        return 0
 
-        lp = not getattr(args, 'no_length_prefix', False)
+    if args.output:
+        return 0
 
-        # raw hex: binary payload, bypasses JSON-RPC
-        if getattr(args, 'raw_hex', None):
-            raw = bytes.fromhex(args.raw_hex)
-            encrypt_raw = not getattr(args, 'no_encrypt', False)
-            if encrypt_raw:
-                payload = conn._aes_encrypt(raw, length_prefix=lp)
-                vcid = args.vcid or 0x0395
-            else:
-                payload = raw
-                vcid = args.vcid or 0x0381
-                if vcid & 1:
-                    conn._plain_vcids.add(vcid - 1)
-
-            if getattr(args, 'hmac', False):
-                K_bytes = bytes.fromhex(creds.get("masterPairKey", ""))
-                h = hmac.HMAC(K_bytes, hashes.SHA256())
-                h.update(payload)
-                payload = payload + h.finalize()
-            packet = FigCodec.encode(vcid, payload)
-            log.info("TX raw %d bytes on vcid 0x%04x", len(raw), vcid)
-            conn._response_event.clear()
-            conn._response_data = None
-
-            def on_raw(rx_vcid, rx_payload):
-                msg = {
-                    "vcid": f"0x{rx_vcid:04x}",
-                    "payloadHex": rx_payload.hex(),
-                }
-                ncp = decode_ncp_packet(rx_payload)
-                if ncp is not None:
-                    msg["ncp"] = ncp
-                print(json.dumps(msg, separators=(',', ':')), flush=True)
-            conn._raw_packet_cb = on_raw
-
-            await conn._send_raw(packet)
-            try:
-                await asyncio.wait_for(conn._response_event.wait(), timeout=10.0)
-            except asyncio.TimeoutError:
-                await asyncio.sleep(2)
-                print("No raw response", file=sys.stderr)
-            return
-
-        params = json.loads(args.params) if args.params else None
-        encrypt = not getattr(args, 'no_encrypt', False)
-        hk = bytes.fromhex(creds.get("masterPairKey", "")) if getattr(args, 'hmac', False) else None
-        try:
-            resp = await conn.send_rpc(args.method, params, encrypted=encrypt,
-                                        vcid_override=args.vcid, length_prefix=lp, hmac_key=hk)
-            print(json.dumps(resp.get("result", resp), indent=2))
-        except RuntimeError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-        except TimeoutError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-    finally:
-        await conn.disconnect()
+    out = {
+        "spoolType": spool_type,
+        "fromDateTime": from_dt,
+        "status": final_status,
+        "rounds": round_num,
+        "dataBase64": base64.b64encode(data).decode(),
+        "dataLength": len(data),
+        "fragments": total_fragments,
+        "sha256": hashlib.sha256(data).hexdigest().upper(),
+    }
+    if last_next and final_status == "SPOOL_COMPLETE_MORE_DATA_PENDING":
+        out["nextSpoolAddress"] = last_next
+    print(json.dumps(out, indent=2))
+    return 0
 
 
-async def cmd_stream(args):
-    addr = resolve_addr(args.addr)
-    conn = As11Connection(debug=args.debug)
-    try:
-        await conn.connect(addr)
-        creds = load_credentials(addr)
-        if not (creds.get("clientId") and creds.get("masterPairKey")):
-            print("No stored credentials. Run 'pair' first.", file=sys.stderr)
-            return
-        new_creds = await conn.reconnect(creds["clientId"], creds["masterPairKey"])
-        creds.update(new_creds)
-        save_credentials(addr, creds)
 
-        # NDJSON to stdout, one notification per line
-        def on_notify(msg):
-            print(json.dumps(msg, separators=(',', ':')), flush=True)
-        conn._notification_cb = on_notify
+def cmd_known(args: argparse.Namespace) -> int:
+    """List names the firmware RPC surface accepts. Pure offline, no device.
 
-        data_ids = args.data_ids.split(",") if args.data_ids else [
-            "InspiratoryPressure-50hz", "Leak-TwoSecond", "RemainingRampTime"
-        ]
-
-        resp = await conn.send_rpc("StartStream", {
-            "dataIds": data_ids,
-            "sampleIntervalMs": args.sample_ms,
-            "reportIntervalMs": args.report_ms,
-        }, encrypted=True)
-        print(json.dumps(resp.get("result", resp)), file=sys.stderr)
-
-        try:
-            while conn._client and conn._client.is_connected:
-                await asyncio.sleep(0.1)
-        except asyncio.CancelledError:
-            pass
-    except KeyboardInterrupt:
-        pass
-    finally:
-        # stop stream on exit
-        try:
-            await conn.send_rpc("StartStream", {
-                "dataIds": [],
-                "sampleIntervalMs": args.sample_ms,
-                "reportIntervalMs": args.report_ms,
-            }, encrypted=True, timeout=5.0)
-        except Exception:
-            pass
-        await conn.disconnect()
-
-
-async def cmd_subscribe(args):
-    addr = resolve_addr(args.addr)
-    conn = As11Connection(debug=args.debug)
-    try:
-        await conn.connect(addr)
-        creds = load_credentials(addr)
-        if not (creds.get("clientId") and creds.get("masterPairKey")):
-            print("No stored credentials. Run 'pair' first.", file=sys.stderr)
-            return
-        new_creds = await conn.reconnect(creds["clientId"], creds["masterPairKey"])
-        creds.update(new_creds)
-        save_credentials(addr, creds)
-
-        def on_notify(msg):
-            print(json.dumps(msg, separators=(',', ':')), flush=True)
-        conn._notification_cb = on_notify
-
-        data_ids = args.events.split(",") if args.events else []
-        resp = await conn.send_rpc("SubscribeEvent", {
-            "dataIds": data_ids,
-        }, encrypted=True)
-        print(json.dumps(resp.get("result", resp)), file=sys.stderr)
-
-        try:
-            while conn._client and conn._client.is_connected:
-                await asyncio.sleep(0.1)
-        except asyncio.CancelledError:
-            pass
-    except KeyboardInterrupt:
-        pass
-    finally:
-        await conn.disconnect()
-
-
-SPOOL_TYPES = [
-    # session & usage
-    "Summary",
-    "UsageEvents-TherapyStatusEvents",
-    "TherapyEvents-RespiratoryEvents",
-    "TherapyOneMinutePeriodic",
-    "SettingProfilesCollection",
-    "ConfigurationProfilesCollection",
-    # system state / activity
-    "SystemActivityEvents-FrequentActivityEvents",
-    "SystemActivityEvents-SporadicActivityEvents",
-    "SystemExceptionEvents-SystemErrors",
-    "SystemExceptionEvents-RecoverableErrors",
-    "SystemExceptionEvents-HumidifierErrors",
-    "SystemExceptionEvents-HeatedTubeErrors",
-    "DiagnosticExceptionEvents-AppErrors",
-    "DiagnosticExceptionEvents-FatalErrors",
-    "DiagnosticExceptionEvents-ResettableErrors",
-    "DiagnosticExceptionEvents-AlarmAppErrors",
-    "DiagnosticTenMinutePeriodic",
-    # alarms
-    "alarmEvents",
-    "alarmDiagnosticEvents",
-    # ui / survey / checks
-    "GUIActivityEvents",
-    "SurveyEvents",
-    "SoundcheckVector",
-    "AcousticSignatureV2",
-    # metrics
-    "MachineMetrics",
-    "MemoryMetrics",
-    "CellularActivityEvents",
-    "CellularDataUsage",
-    # high-rate / ambient signals
-    "atmosphericPressure10min",
-    "RespiratoryFlow6p25Hz",
-    "MaskPressure6p25Hz",
-    "InspiratoryPressure0p5Hz",
-    "Leak0p5Hz",
-]
-
-STREAM_DATA_IDS = [
-    "AmbientHumidity-Estimated", "AmbientTemperature-Estimated",
-    "ApneaTreatmentPressure-50hz", "AutoSetTreatmentPressure-50hz",
-    "BlowerFlow-100hz", "BlowerPressure-100hz", "BlowerPressure-OneMinute",
-    "ExpiratoryPressure-50hz", "ExpiratoryPressure-TwoSecond",
-    "FlowLimitation-50hz", "FlowLimitationTreatmentPressure-50hz",
-    "InspiratoryPressure-50hz", "InspiratoryPressure-OneMinute",
-    "InspiratoryPressure-TwoSecond",
-    "Leak-50hz",
-    "MaskPressure-100hz", "MaskPressure-OneMinute", "MaskPressure-TwoSecond",
-    "MinuteVentilation-50hz", "PatientFlow-100hz",
-    "RawLeak-50hz", "RemainingRampTime-50hz",
-    "RespiratoryRate-50hz", "SetPressure-100hz",
-    "SnoreIndex-50hz", "SnoreTreatmentPressure-50hz", "TidalVolume-50hz",
-]
-
-EVENT_IDS = [
-    # mask / therapy lifecycle
-    "MaskFitStart", "MaskFitStop", "MaskOn", "MaskOff",
-    "MaskReminderAcknowledged",
-    "PressureStart", "PressureStop",
-    "RampDownStarted", "RampDownCompleted",
-    # sensor / hardware anomalies
-    "PressureStuckHigh", "PressureStuckLow", "PressureStuckMid",
-    "PressureSensorDrift", "PressureSensorsPlausibility",
-    "SensorFail",
-    # alarm subsystem
-    "AlarmImageRestored", "AlarmMuteState",
-    "AlarmModuleCommunicationError", "AlarmSelfTestFailure",
-    # upgrade lifecycle
-    "AlarmUpgradeInitiated", "AlarmUpgradeSuccessful", "AlarmUpgradeFailed",
-    "AlarmUpgradeFileTransferRequested",
-    "AlarmUpgradeFileTransferCompleted", "AlarmUpgradeFileTransferFailed",
-    "AlarmUpgradeFileSignatureMismatch",
-    "UpgradePrepStarted",
-    # device check
-    "DeviceCheckInitiated", "DeviceCheckPassed", "DeviceCheckSystemError",
-    "DeviceCheckNotificationDisplayed",
-    # system errors
-    "SystemErrorStarted",
-    "SystemErrorCalibrationReset", "SystemErrorSettingsReset",
-    "SystemErrorFastOverPressure", "SystemErrorSlowOverPressure",
-    "SystemErrorOverTemperature", "SystemErrorOverVoltage",
-    "SystemErrorImplausibleSupplyVoltage",
-    "SystemErrorFaultyHWFaultDetectionCircuitry",
-    "SystemErrorFlowSensorStuckHigh", "SystemErrorFlowSensorStuckLow",
-    "SystemErrorNoFlowData",
-    "SystemErrorPressureSensorDrift", "SystemErrorPressureSensorsPlausibility",
-    "SystemErrorPressureStuckHigh", "SystemErrorPressureStuckLow",
-    "SystemErrorPressureStuckMid",
-    "SystemErrorMotorESD", "SystemErrorMotorFETs",
-    "SystemErrorMotorHwFault", "SystemErrorMotorHwMitigationIC",
-    "SystemErrorMotorStallHW", "SystemErrorMotorStallSW",
-    "SystemErrorMotorSticky",
-    # notifications observed on the wire
-    "SpoolFragment",
-]
-
-# What the device's `Get` RPC accepts.
-VAR_SUBTREE_ALIASES = {
-    "ActiveProfiles":                 "!65",
-    "AlarmProfiles":                  "!66",
-    "ASVAutoProfile":                 "!99",
-    "ASVProfile":                    "!100",
-    "AutoRampFeature":                "!74",
-    "AutoSetForHerProfile":          "!101",
-    "AutoSetProfile":                "!102",
-    "CellularConfigurationProfiles":   "!0",
-    "CellularDataUsage":              "!54",
-    "CellularIdentificationProfiles":  "!1",
-    "CellularModule":                "!142",
-    "CircuitFeature":                 "!76",
-    "ClimateFeature":                 "!77",
-    "ComfortFeature":                 "!78",
-    "ConfigurationProfiles":           "!5",
-    "CpapProfile":                   "!103",
-    "DataDeliveryControl":             "!7",
-    "DeviceConfigurationSettings":     "!8",
-    "DeviceRegistration":            "!110",
-    "EprFeature":                     "!82",
-    "FeatureProfiles":                "!73",
-    "IdentificationProfiles":         "!46",
-    "iVAPSProfile":                  "!109",
-    "MachineMetrics":                 "!56",
-    "PACProfile":                    "!104",
-    "RampDownFeature":                "!87",
-    "SettingProfiles":                "!64",
-    "SmartStartStopFeature":          "!93",
-    "SpontProfile":                  "!106",
-    "StoredDataDeliveryControl":       "!9",
-    "STProfile":                     "!105",
-    "TherapyProfiles":                "!98",
-    "TimedProfile":                  "!107",
-    "VAutoProfile":                  "!108",
-}
-
-# Reserved long `_NAME` specials - firmware strcmps these in FUN_081aea00
-# as a separate resolver step BEFORE leaf/subtree lookup.
-VAR_RESERVED = [
-    "_ActiveFeatureProfiles",
-    "_CurrentDateTime",
-]
-
-# Short->path name map found in firmware (table at 0x08144cbc).
-# NOT Get-able. Kept for documentation / future use.
-VAR_PATH_ALIASES = {
-    "alarmEvents":                                      "FlowGenerator.eventProfiles.alarmEvents",
-    "alarmDiagnosticEvents":                            "FlowGenerator.eventProfiles.alarmDiagnosticEvents",
-    "CellularBrokerURI":                                "CellularModule.ConfigurationProfiles.TherapySystemBrokerUniformResourceIdentifier",
-    "CellularInternalModule":                           "CellularModule.IdentificationProfiles.CellularProfile.InternalModule",
-    "CellularNetworkGeneration":                        "CellularModule.IdentificationProfiles.CellularProfile.Network.GenerationIdentifier",
-    "CellularNetworkPlan":                              "CellularModule.IdentificationProfiles.CellularProfile.Network.PlanIdentifier",
-    "CellularNetworkProvider":                          "CellularModule.IdentificationProfiles.CellularProfile.Network.ProviderIdentifier",
-    "CellularNetworkProvisionedDateTime":               "CellularModule.IdentificationProfiles.CellularProfile.Network.ProvisionedDateTime",
-    "CellularRegistrationURI":                          "CellularModule.ConfigurationProfiles.TherapySystemRegistrationUniformResourceIdentifier",
-    "Diagnostic25HzPeriodic-BlowerFlow":                "FlowGenerator.MeasurementProfiles.Diagnostic25HzPeriodic.BlowerFlow",
-    "Diagnostic25HzPeriodic-BlowerPressure":            "FlowGenerator.MeasurementProfiles.Diagnostic25HzPeriodic.BlowerPressure",
-    "DiagnosticExceptionEvents-AlarmAppError":          "FlowGenerator.MeasurementProfiles.DiagnosticExceptionEvents.AlarmAppErrors.AlarmAppError",
-    "DiagnosticExceptionEvents-AppError":               "FlowGenerator.MeasurementProfiles.DiagnosticExceptionEvents.AppErrors.AppError",
-    "DiagnosticExceptionEvents-ErrorLogInfo":           "FlowGenerator.MeasurementProfiles.DiagnosticExceptionEvents.ErrorLogInfos.ErrorLogInfo",
-    "DiagnosticExceptionEvents-FatalError":             "FlowGenerator.MeasurementProfiles.DiagnosticExceptionEvents.FatalErrors.FatalError",
-    "DiagnosticExceptionEvents-ResettableError":        "FlowGenerator.MeasurementProfiles.DiagnosticExceptionEvents.ResettableErrors.ResettableError",
-    "DiagnosticTenMinutePeriodic-CellularSignalQuality2G":   "FlowGenerator.MeasurementProfiles.DiagnosticTenMinutePeriodic.CellularSignalQuality2G",
-    "DiagnosticTenMinutePeriodic-CellularSignalQuality3G":   "FlowGenerator.MeasurementProfiles.DiagnosticTenMinutePeriodic.CellularSignalQuality3G",
-    "DiagnosticTenMinutePeriodic-CellularSignalQualityLTE":  "FlowGenerator.MeasurementProfiles.DiagnosticTenMinutePeriodic.CellularSignalQualityLTE",
-    "DiagnosticTenMinutePeriodic-CellularSignalStrength":    "FlowGenerator.MeasurementProfiles.DiagnosticTenMinutePeriodic.CellularSignalStrength",
-    "Summary":                                          "FlowGenerator.MeasurementProfiles.Summary",
-    "SystemActivityEvents-FrequentActivityEvent":       "FlowGenerator.MeasurementProfiles.SystemActivityEvents.FrequentActivityEvents.FrequentActivityEvent",
-    "SystemActivityEvents-SporadicActivityEvent":       "FlowGenerator.MeasurementProfiles.SystemActivityEvents.SporadicActivityEvents.SporadicActivityEvent",
-    "SystemExceptionEvents-HeatedTubeError":            "FlowGenerator.MeasurementProfiles.SystemExceptionEvents.HeatedTubeErrors.HeatedTubeError",
-    "SystemExceptionEvents-HumidifierError":            "FlowGenerator.MeasurementProfiles.SystemExceptionEvents.HumidifierErrors.HumidifierError",
-    "SystemExceptionEvents-RecoverableError":           "FlowGenerator.MeasurementProfiles.SystemExceptionEvents.RecoverableErrors.RecoverableError",
-    "SystemExceptionEvents-SystemError":                "FlowGenerator.MeasurementProfiles.SystemExceptionEvents.SystemErrors.SystemError",
-    "TherapyEvents-RespiratoryEvent":                   "FlowGenerator.MeasurementProfiles.TherapyEvents.RespiratoryEvents.RespiratoryEvent",
-    "TherapyOneHzPeriodic-HeartRate":                   "FlowGenerator.MeasurementProfiles.TherapyOneHzPeriodic.HeartRate",
-    "TherapyOneHzPeriodic-SpO2":                        "FlowGenerator.MeasurementProfiles.TherapyOneHzPeriodic.SpO2",
-    "TherapyOneMinutePeriodic-AlveolarMinuteVentilation": "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.AlveolarMinuteVentilation",
-    "TherapyOneMinutePeriodic-ExpiratoryPressure":      "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.ExpiratoryPressure",
-    "TherapyOneMinutePeriodic-HeartRate":               "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.HeartRate",
-    "TherapyOneMinutePeriodic-IeRatio":                 "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.IeRatio",
-    "TherapyOneMinutePeriodic-InspiratoryDuration":     "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.InspiratoryDuration",
-    "TherapyOneMinutePeriodic-InspiratoryPressure":     "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.InspiratoryPressure",
-    "TherapyOneMinutePeriodic-Leak":                    "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.Leak",
-    "TherapyOneMinutePeriodic-MinuteVentilation":       "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.MinuteVentilation",
-    "TherapyOneMinutePeriodic-RespiratoryRate":         "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.RespiratoryRate",
-    "TherapyOneMinutePeriodic-SpO2":                    "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.SpO2",
-    "TherapyOneMinutePeriodic-TidalVolume":             "FlowGenerator.MeasurementProfiles.TherapyOneMinutePeriodic.TidalVolume",
-    "TherapyTwentyFiveHzPeriodic-MaskPressure":         "FlowGenerator.MeasurementProfiles.TherapyTwentyFiveHzPeriodic.MaskPressure",
-    "TherapyTwentyFiveHzPeriodic-RespiratoryFlow":      "FlowGenerator.MeasurementProfiles.TherapyTwentyFiveHzPeriodic.RespiratoryFlow",
-    "TherapyTwoSecondPeriodic-ExpiratoryPressure":      "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.ExpiratoryPressure",
-    "TherapyTwoSecondPeriodic-FlowLimitation":          "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.FlowLimitation",
-    "TherapyTwoSecondPeriodic-IeRatio":                 "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.IeRatio",
-    "TherapyTwoSecondPeriodic-InspiratoryDuration":     "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.InspiratoryDuration",
-    "TherapyTwoSecondPeriodic-InspiratoryPressure":     "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.InspiratoryPressure",
-    "TherapyTwoSecondPeriodic-Leak":                    "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.Leak",
-    "TherapyTwoSecondPeriodic-MaskPressure":            "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.MaskPressure",
-    "TherapyTwoSecondPeriodic-MinuteVentilation":       "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.MinuteVentilation",
-    "TherapyTwoSecondPeriodic-RespiratoryRate":         "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.RespiratoryRate",
-    "TherapyTwoSecondPeriodic-SnoreIndex":              "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.SnoreIndex",
-    "TherapyTwoSecondPeriodic-TargetMinuteVentilation": "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.TargetMinuteVentilation",
-    "TherapyTwoSecondPeriodic-TidalVolume":             "FlowGenerator.MeasurementProfiles.TherapyTwoSecondPeriodic.TidalVolume",
-    "UsageEvents-TherapyStatusEvent":                   "FlowGenerator.MeasurementProfiles.UsageEvents.TherapyStatusEvents.TherapyStatusEvent",
-}
-
-# Backwards-compatibility alias used elsewhere in this module.
-VAR_SUBTREES = sorted(set(VAR_SUBTREE_ALIASES) | set(VAR_RESERVED),
-                      key=str.lower)
-
-
-VAR_NAMES = [
-    ("ASV-MaxPressureSupport", "XC2"),
-    ("ASV-MinPressureSupport", "XC3"),
-    ("ASV-StartPressure", "XC0"),
-    ("ASV-TargetExpiratoryPressure", "XC1"),
-    ("ASVAuto-MaxExpiratoryPressure", "XD1"),
-    ("ASVAuto-MaxPressureSupport", "XD3"),
-    ("ASVAuto-MinExpiratoryPressure", "XD2"),
-    ("ASVAuto-MinPressureSupport", "XD4"),
-    ("ASVAuto-StartPressure", "XD0"),
-    ("AccessPointName", "CLA"),
-    ("ActiveAlarms", "AER"),
-    ("ActiveTherapyProfile", "MOP"),
-    ("AdcPressure", "PRS"),
-    ("AdcPressureMonitoring", "PR2"),
-    ("AlarmVolumeLevel", "AVQ"),
-    ("AlveolarMinuteVentilation", "AAV"),
-    ("AmbientHumidity-Estimated", "ABH"),
-    ("AmbientLight", "ALS"),
-    ("AmbientTemperature-Estimated", "HAT"),
-    ("AntiBacterialFilter", "ABF"),
-    ("ApneaAlarmEnable", "ANC"),
-    ("ApneaAlarmThreshold", "APV"),
-    ("ApneaTreatmentPressure-50hz", "AP5"),
-    ("ApplicationData", "MAD"),
-    ("ApplicationIdentifier", "SID"),
-    ("AutoSet-MaxPressure", "MPA"),
-    ("AutoSet-MinPressure", "MPI"),
-    ("AutoSet-StartPressure", "STU"),
-    ("AutoSetComfort", "AFC"),
-    ("AutoSetTreatmentPressure-50hz", "AT5"),
-    ("BlowerFlow-100hz", "BFT"),
-    ("BlowerPressure-100hz", "BPT"),
-    ("BlowerPressure-OneMinute", "BPA"),
-    ("BlowerPressureMonitoring", "BPS"),
-    ("BluetoothApplicationIdentifier", "BTV"),
-    ("BluetoothBootloaderIdentifier", "BBV"),
-    ("BluetoothName", "BTN"),
-    ("BluetoothPassthrough", "BNP"),
-    ("BluetoothProductModel", "BPM"),
-    ("BluetoothProductProvider", "BPP"),
-    ("BootloaderIdentifier", "BID"),
-    ("ButtonRegMap", "KPT"),
-    ("CALEnable", "MEN"),
-    ("CALStatus", "CST"),
-    ("CalManufacturingMode", "CMM"),
-    ("CalibrationPressure", "CPR"),
-    ("CamlData", "CMD"),
-    ("CareCheckInAvailable", "CCA"),
-    ("CareCheckToggle", "MAI"),
-    ("CellularApplicationIdentifier", "CSI"),
-    ("CellularDataPreamble", "CDP"),
-    ("CellularProductModel", "CPM"),
-    ("CellularProductProvider", "CPP"),
-    ("CepstrumAverageCount", "EIC"),
-    ("CepstrumStartDelay", "EST"),
-    ("ClimateControl", "CCO"),
-    ("ClinicalConfirmation", "CFC"),
-    ("ConfigurationIdentifier", "CID"),
-    ("ConfirmStopEnable", "SCF"),
-    ("Cpap-SetPressure", "IPC"),
-    ("Cpap-StartPressure", "STP"),
-    ("Cpap-TriggerSensitivity", "C11"),
-    ("CpapSetPressure", "CSP"),
-    ("CurrentLEDState", "CLS"),
-    ("CycleDisplayFormat", "SSY"),
-    ("DataCollectAndSend", "DSS"),
-    ("DataCollectAndSendAsync", "ADS"),
-    ("DataMode", "CDM"),
-    ("DataModelVersionIdentifier", "DMV"),
-    ("DataVersionIdentifier", "PVD"),
-    ("DeviceIdStatus", "DIS"),
-    ("DisplayAHI", "DAH"),
-    ("DownloadBytesDelta", "DDD"),
-    ("EndCapDetection", "ECD"),
-    ("EprEnable", "EPX"),
-    ("EprEnablePatientAccess", "EPA"),
-    ("EprPressure", "EPR"),
-    ("EprType", "EPT"),
-    ("EraseMediaSignature", "EMS"),
-    ("ExpirationSetPressure", "ESP"),
-    ("ExpiratoryDuration", "EXT"),
-    ("ExpiratoryPressure", "EXP"),
-    ("ExpiratoryPressure-50hz", "EP5"),
-    ("ExpiratoryPressure-TwoSecond", "MKE"),
-    ("ExternalHumidifier", "EXH"),
-    ("FGState", "ZRM"),
-    ("FdaUniqueDeviceIdentifier", "UDI"),
-    ("FlightMode", "QFC"),
-    ("FlowGain", "FLG"),
-    ("FlowLimitation", "FFL"),
-    ("FlowLimitation-50hz", "FF5"),
-    ("FlowLimitationTreatmentPressure-50hz", "FL5"),
-    ("FlowOffset", "FLZ"),
-    ("HardwareIdentifier", "PCB"),
-    ("HeartRate", "HRT"),
-    ("HeatedTubeCurrent", "HTL"),
-    ("HeatedTubeOutletTemperature", "HTT"),
-    ("HeatedTubeOutletTemperatureMinuteAverage", "HTA"),
-    ("HeatedTubePWM", "HBP"),
-    ("HeatedTubePWMMinuteAverage", "ABP"),
-    ("HeatedTubePower", "HTP"),
-    ("HeatedTubeSettingEnable", "HTX"),
-    ("HeatedTubeTemperature", "HTS"),
-    ("HeightDisplayUnit", "IHU"),
-    ("HerAuto-MaxPressure", "HMA"),
-    ("HerAuto-MinPressure", "HMI"),
-    ("HerAuto-StartPressure", "HSP"),
-    ("HighLeakAlarmEnable", "HLA"),
-    ("HumidifierConnected", "HCR"),
-    ("HumidifierLevel", "HMS"),
-    ("HumidifierPWM", "HUP"),
-    ("HumidifierPWMMinuteAverage", "AHP"),
-    ("HumidifierPlateCurrent", "HCL"),
-    ("HumidifierPlateTemperature", "HPT"),
-    ("HumidifierPlateTemperatureMinuteAverage", "HHT"),
-    ("HumidifierPower", "HPW"),
-    ("HumidifierSettingEnable", "HMX"),
-    ("IMEI", "CIE"),
-    ("IMSI", "CIM"),
-    ("IeRatio", "IET"),
-    ("InspirationSetPressure", "ISP"),
-    ("InspiratoryDuration", "INT"),
-    ("InspiratoryPressure", "INP"),
-    ("InspiratoryPressure-50hz", "INH"),
-    ("InspiratoryPressure-OneMinute", "AIP"),
-    ("InspiratoryPressure-TwoSecond", "MKI"),
-    ("IsFileSystemReady", "IRF"),
-    ("IsRamping", "ZRP"),
-    ("IsRampingDown", "RPD"),
-    ("IsReadyForShipping", "IRS"),
-    ("IsReadyForUpgrade", "IRU"),
-    ("LCDConnector", "LCS"),
-    ("LCDTouchStatus", "LTS"),
-    ("Language", "LAN"),
-    ("LanguageConfiguration", "LNC"),
-    ("LanguageSelection", "SLS"),
-    ("LastDataPostDateTime", "LDT"),
-    ("LastEraseDataDateTime", "CED"),
-    ("LastMachineServiceDateTime", "LMS"),
-    ("LastTherapyUseDateTime", "CUD"),
-    ("Leak", "LKF"),
-    ("Leak-50hz", "LK5"),
-    ("LearnMode", "TLM"),
-    ("LearnTargetsExpiratoryPressure", "ZIE"),
-    ("LearnTargetsPressureSupport", "ZLP"),
-    ("LearnTargetsSetDuration", "ZIC"),
-    ("LowMinuteVentAlarmEnable", "LMC"),
-    ("LowMinuteVentAlarmThreshold", "LMT"),
-    ("MachineRunMeter", "MHU"),
-    ("MaskPressure", "MKP"),
-    ("MaskPressure-100hz", "MK1"),
-    ("MaskPressure-OneMinute", "MAP"),
-    ("MaskPressure-TwoSecond", "MKF"),
-    ("MaskSenseToggle", "MKD"),
-    ("MaskType", "MSK"),
-    ("MaxRampDownTime", "MRD"),
-    ("MaxRampTime", "MRT"),
-    ("MicrophoneEnabled", "MIC"),
-    ("MinuteVentilation", "MV6"),
-    ("MinuteVentilation-50hz", "MVH"),
-    ("MotorCurrent", "CUR"),
-    ("MotorFlowDrive", "CFL"),
-    ("MotorRunMeter", "MHR"),
-    ("MotorRunSinceLastServiceMeter", "MHS"),
-    ("MotorSpeed", "SPD"),
-    ("MotorType", "BMT"),
-    ("MyAirScreens", "MAS"),
-    ("NonVentedMaskAlarmEnable", "NMA"),
-    ("OobxOnStartup", "SOS"),
-    ("OtaUpgradeStatus", "OUS"),
-    ("PAC-FallTime", "P12"),
-    ("PAC-FallTimeEnable", "P11"),
-    ("PAC-RiseTime", "PA4"),
-    ("PAC-RiseTimeEnable", "PA3"),
-    ("PAC-SetInspiratoryTime", "PA5"),
-    ("PAC-SetRespiratoryRate", "PA6"),
-    ("PAC-StartPressure", "PA0"),
-    ("PAC-TargetExpiratoryPressure", "PA2"),
-    ("PAC-TargetInspiratoryPressure", "PA1"),
-    ("PAC-TriggerSensitivity", "PA7"),
-    ("PatientFlow", "RFL"),
-    ("PatientFlow-100hz", "RF5"),
-    ("PatientView", "ACC"),
-    ("PeriodicBrokerContactPeriod", "BCP"),
-    ("PeripheralMsg", "PMS"),
-    ("PhantomKey", "KEY"),
-    ("PhantomTouch", "TCH"),
-    ("PlatformIdentifier", "MID"),
-    ("PowerSupplyCapacity", "PSC"),
-    ("PowerSupplyType", "PSU"),
-    ("PressureGain", "PSH"),
-    ("PressureMonitorGain", "PS1"),
-    ("PressureMonitorOffset", "PZ1"),
-    ("PressureOffset", "PZH"),
-    ("ProductCode", "PCD"),
-    ("ProductGeographicIdentifier", "PGI"),
-    ("ProductName", "PNA"),
-    ("ProfileVariantIdentifier", "PVI"),
-    ("RampDownEnable", "RDE"),
-    ("RampDownEnablePatientAccess", "DPE"),
-    ("RampDownTime", "SRT"),
-    ("RampEnable", "RMA"),
-    ("RampEnablePatientAccess", "RPE"),
-    ("RampTime", "RMT"),
-    ("RawAmbHumidity", "AHR"),
-    ("RawAmbLight", "RAL"),
-    ("RawAmbTemperature", "ATR"),
-    ("RawFlow", "FLW"),
-    ("RawLeak", "SFK"),
-    ("RawLeak-50hz", "SF5"),
-    ("RecoverableError", "RYS"),
-    ("RegionIdentifier", "RID"),
-    ("RemainingRampDownTime", "RDD"),
-    ("RemainingRampTime", "ZRC"),
-    ("RemainingRampTime-50hz", "ZR5"),
-    ("ReminderFilterDate", "RTF"),
-    ("ReminderFilterEnable", "RIF"),
-    ("ReminderFilterPeriod", "RDF"),
-    ("ReminderHumidifierDate", "RTH"),
-    ("ReminderHumidifierEnable", "RIC"),
-    ("ReminderHumidifierPeriod", "RDH"),
-    ("ReminderMaskDate", "RTM"),
-    ("ReminderMaskEnable", "RIM"),
-    ("ReminderMaskPeriod", "RDM"),
-    ("ReminderTubingDate", "RTT"),
-    ("ReminderTubingEnable", "RIT"),
-    ("ReminderTubingPeriod", "RDT"),
-    ("RequestLCDColour", "RLC"),
-    ("RequestLEDState", "RLS"),
-    ("RequestSDCardTest", "RST"),
-    ("RequestTestDriveState", "RTS"),
-    ("RespiratoryEvent", "AET"),
-    ("RespiratoryRate", "RR6"),
-    ("RespiratoryRate-50hz", "RR5"),
-    ("SDCardSocketStatus", "SSS"),
-    ("SDCardTestStatus", "STS"),
-    ("SIMID", "CCD"),
-    ("ST-CycleSensitivity", "XAB"),
-    ("ST-FallTime", "XAP"),
-    ("ST-FallTimeEnable", "XAM"),
-    ("ST-IntelligentBackupRateEnable", "XAC"),
-    ("ST-RiseTime", "XAA"),
-    ("ST-RiseTimeEnable", "XA9"),
-    ("ST-SetMaxInspiratoryTime", "XA7"),
-    ("ST-SetMinInspiratoryTime", "XA8"),
-    ("ST-SetRespiratoryRate", "XA6"),
-    ("ST-StartPressure", "XA3"),
-    ("ST-TargetExpiratoryPressure", "XA2"),
-    ("ST-TargetInspiratoryPressure", "XA1"),
-    ("ST-TargetRespiratoryRate", "XAD"),
-    ("ST-TriggerSensitivity", "ZU1"),
-    ("SecurityStatus", "SBE"),
-    ("SerialNumber", "SRN"),
-    ("ServiceHost", "CLU"),
-    ("ServicePort", "CLP"),
-    ("SetMotorSpeed", "SSD"),
-    ("SetPressure-100hz", "SPH"),
-    ("SetPressureWithoutCAD", "OPP"),
-    ("SettingsHistoryChangeCount", "SHC"),
-    ("SmartStart", "SST"),
-    ("SmartStop", "SSP"),
-    ("SnoreIndex", "SNI"),
-    ("SnoreIndex-50hz", "SN5"),
-    ("SnoreTreatmentPressure-50hz", "SR5"),
-    ("SoundDownloadAllowed", "DSA"),
-    ("SoundcheckFeatureToggle", "SCO"),
-    ("SoundcheckRunFrequency", "SCK"),
-    ("SoundcheckStatus", "STT"),
-    ("SoundcheckTestCount", "SSC"),
-    ("SpO2", "SAO"),
-    ("SplashScreenDisplaySelection", "SSE"),
-    ("Spont-CycleSensitivity", "Z12"),
-    ("Spont-EasyBreatheEnable", "ZZ4"),
-    ("Spont-FallTime", "Z17"),
-    ("Spont-FallTimeEnable", "Z16"),
-    ("Spont-RespiratoryRateEnable", "ZZ5"),
-    ("Spont-RiseTime", "Z10"),
-    ("Spont-RiseTimeEnable", "ZZ9"),
-    ("Spont-SetMaxInspiratoryTime", "ZZ7"),
-    ("Spont-SetMinInspiratoryTime", "ZZ8"),
-    ("Spont-StartPressure", "ZZ3"),
-    ("Spont-TargetExpiratoryPressure", "ZZ2"),
-    ("Spont-TargetInspiratoryPressure", "ZZ1"),
-    ("Spont-TriggerSensitivity", "Z11"),
-    ("StatusEvent", "THS"),
-    ("StorageVersionId", "SVD"),
-    ("Summary-AmbientHumidity-50", "AUM"),
-    ("Summary-ApneaHypopneaIndex", "AHI"),
-    ("Summary-ApneaIndex", "ASC"),
-    ("Summary-BlowerFlow-50", "BFM"),
-    ("Summary-BlowerPressure-5", "BP5"),
-    ("Summary-BlowerPressure-95", "BP9"),
-    ("Summary-CentralApneaIndex", "OSC"),
-    ("Summary-ExpiratoryPressure-100", "PEA"),
-    ("Summary-ExpiratoryPressure-50", "PEM"),
-    ("Summary-ExpiratoryPressure-95", "PE9"),
-    ("Summary-HeartRate-100", "HRX"),
-    ("Summary-HeartRate-50", "HRM"),
-    ("Summary-HeartRate-95", "HR9"),
-    ("Summary-HeatedTubePower-50", "AHM"),
-    ("Summary-HeatedTubeTemperature-50", "HTE"),
-    ("Summary-HumidifierConnected", "HUC"),
-    ("Summary-HumidifierPower-50", "APM"),
-    ("Summary-HumidifierTemperature-50", "HHE"),
-    ("Summary-HypopneaIndex", "HSC"),
-    ("Summary-IeRatio-100", "IEA"),
-    ("Summary-IeRatio-50", "IEM"),
-    ("Summary-IeRatio-95", "IE9"),
-    ("Summary-InspiratoryDuration-100", "ISA"),
-    ("Summary-InspiratoryDuration-50", "ISM"),
-    ("Summary-InspiratoryDuration-95", "IS9"),
-    ("Summary-InspiratoryPressure-100", "PIA"),
-    ("Summary-InspiratoryPressure-50", "PIM"),
-    ("Summary-InspiratoryPressure-95", "PI9"),
-    ("Summary-Leak-100", "LMX"),
-    ("Summary-Leak-50", "LKM"),
-    ("Summary-Leak-75", "LK7"),
-    ("Summary-Leak-95", "LK9"),
-    ("Summary-MeanMaskPressure-100", "PMA"),
-    ("Summary-MeanMaskPressure-50", "MSP"),
-    ("Summary-MeanMaskPressure-95", "PM9"),
-    ("Summary-MinuteVentilation-100", "VTA"),
-    ("Summary-MinuteVentilation-50", "VTM"),
-    ("Summary-MinuteVentilation-95", "VT9"),
-    ("Summary-ObstructiveApneaIndex", "CSC"),
-    ("Summary-ReraIndex", "RCC"),
-    ("Summary-RespiratoryFlow-5", "RFM"),
-    ("Summary-RespiratoryFlow-95", "R95"),
-    ("Summary-RespiratoryRate-100", "RRA"),
-    ("Summary-RespiratoryRate-50", "RRM"),
-    ("Summary-RespiratoryRate-95", "RR9"),
-    ("Summary-SpO2-100", "SOX"),
-    ("Summary-SpO2-50", "SOM"),
-    ("Summary-SpO2-95", "SO9"),
-    ("Summary-SpontCyclePercentage", "VCR"),
-    ("Summary-SpontTriggerPercentage", "VSR"),
-    ("Summary-TargetMinuteVentilation-100", "VAA"),
-    ("Summary-TargetMinuteVentilation-50", "VAM"),
-    ("Summary-TargetMinuteVentilation-95", "VA9"),
-    ("Summary-TidalVolume-100", "TVA"),
-    ("Summary-TidalVolume-50", "TVM"),
-    ("Summary-TidalVolume-95", "TV9"),
-    ("Summary-TubeConnected", "ZHT"),
-    ("Summary-UnknownApneaIndex", "USC"),
-    ("SystemError", "FSE"),
-    ("TOTAL_USED_HOURS_NAME", "PHR"),
-    ("TargetMinuteVentilation", "TVP"),
-    ("TemperatureUnit", "TMU"),
-    ("TestDrivePressure", "TDP"),
-    ("TestDriveState", "TDS"),
-    ("TestDriveType", "TDT"),
-    ("TherapyLEDAlwaysOn", "TLF"),
-    ("TherapyRunMeter", "PHM"),
-    ("TidalVolume", "TID"),
-    ("TidalVolume-50hz", "TI5"),
-    ("TimeZoneOffset", "TZO"),
-    ("Timed-FallTime", "XBA"),
-    ("Timed-FallTimeEnable", "XB9"),
-    ("Timed-RiseTime", "XB7"),
-    ("Timed-RiseTimeEnable", "XB6"),
-    ("Timed-SetInspiratoryTime", "XB5"),
-    ("Timed-SetRespiratoryRate", "XB4"),
-    ("Timed-StartPressure", "XB0"),
-    ("Timed-TargetExpiratoryPressure", "XB2"),
-    ("Timed-TargetInspiratoryPressure", "XB1"),
-    ("TotalUsedHoursDisplayToggle", "TUD"),
-    ("TriggerCycleEvent", "BTE"),
-    ("TubeConnected", "ZHR"),
-    ("TubeType", "TBT"),
-    ("TxLink2Connected", "TXC"),
-    ("UniversalIdentifier", "GUD"),
-    ("UpgradeAbandonPeriod", "OAP"),
-    ("UpgradeReportPeriod", "ORP"),
-    ("UploadBytesDelta", "DUD"),
-    ("VALOTriggerSeconds", "VTD"),
-    ("VAuto-CycleSensitivity", "XE7"),
-    ("VAuto-MaxInspiratoryPressure", "XE1"),
-    ("VAuto-MinExpiratoryPressure", "XE2"),
-    ("VAuto-SetMaxInspiratoryTime", "XE4"),
-    ("VAuto-SetMinInspiratoryTime", "XE5"),
-    ("VAuto-SetPressureSupport", "XE3"),
-    ("VAuto-StartPressure", "XE0"),
-    ("VAuto-TriggerSensitivity", "XE6"),
-    ("VariantIdentifier", "VID"),
-    ("iVAPS-AutoEPAPEnable", "IEU"),
-    ("iVAPS-CycleSensitivity", "VCS"),
-    ("iVAPS-FallTime", "IRL"),
-    ("iVAPS-FallTimeEnable", "IRZ"),
-    ("iVAPS-MaxExpiratoryPressure", "IMX"),
-    ("iVAPS-MaxPressureSupport", "WPA"),
-    ("iVAPS-MinExpiratoryPressure", "IMN"),
-    ("iVAPS-MinPressureSupport", "WPM"),
-    ("iVAPS-PatientHeight", "PHT"),
-    ("iVAPS-RiseTime", "IRT"),
-    ("iVAPS-RiseTimeEnable", "IRC"),
-    ("iVAPS-SetMaxInspiratoryTime", "IVX"),
-    ("iVAPS-SetMinInspiratoryTime", "IVN"),
-    ("iVAPS-StartPressure", "IVS"),
-    ("iVAPS-TargetAlveolarVentilation", "ITV"),
-    ("iVAPS-TargetExpiratoryPressure", "EPI"),
-    ("iVAPS-TargetRespiratoryRate", "IBR"),
-    ("iVAPS-TriggerSensitivity", "VTS"),
-]
-
-
-REGISTRIES = {
-    "vars":     (VAR_NAMES,                   "variable names (for `get` / `set`)"),
-    "subtrees": (sorted(VAR_SUBTREE_ALIASES, key=str.lower),
-                 "aggregate `get` targets (CDX subtree aliases, verified)"),
-    "reserved": (VAR_RESERVED,               "reserved `_NAME` specials"),
-    "streams":  (STREAM_DATA_IDS,            "stream data IDs (for `stream --data-ids`)"),
-    "events":   (EVENT_IDS,                  "event IDs (for `subscribe --events`)"),
-    "spools":   (SPOOL_TYPES,                "spool types (for `spool`)"),
-}
-
-# Therapy-mode prefixes: `known vars cpap` -> Cpap-* (exact prefix match).
-VAR_MODE_PREFIXES = {
-    "cpap": "Cpap-", "autoset": "AutoSet-", "herauto": "HerAuto-",
-    "asv": "ASV-", "asvauto": "ASVAuto-", "vauto": "VAuto-",
-    "ivaps": "iVAPS-", "st": "ST-", "spont": "Spont-",
-    "timed": "Timed-", "pac": "PAC-",
-}
-
-# Topic groups: `known vars summary` -> case-insensitive substring match.
-VAR_TOPIC_KEYWORDS = {
-    "summary":    ("summary",),
-    "alarm":      ("alarm",),
-    "ramp":       ("ramp",),
-    "humidifier": ("humidifier",),
-    "tube":       ("tube",),
-    "reminder":   ("reminder",),
-    "cellular":   ("cellular", "imei", "imsi", "sim", "accesspoint"),
-    "bluetooth":  ("bluetooth",),
-    "identifier": ("identifier", "serialnumber", "productcode", "productname"),
-    "learn":      ("learn",),
-    "streaming":  ("-50hz", "-100hz", "-twosecond", "-oneminute", "-estimated"),
-}
-
-
-# CDX extracted tree grouping
-#
-VAR_GROUPS = {
-    "ConfigurationProfiles": [
-        "DataMode",
-        "ServiceHost",
-        "ServicePort",
-        "PeriodicBrokerContactPeriod",
-        "UpgradeAbandonPeriod",
-        "UpgradeReportPeriod",
-        "OtaUpgradeStatus",
-        "DataCollectAndSend",
-        "DataCollectAndSendAsync",
-        "DownloadBytesDelta",
-        "UploadBytesDelta",
-        "LastDataPostDateTime",
-    ],
-    "Network": [
-        "AccessPointName",
-    ],
-    "DeviceConfiguration": [
-        "FlightMode", "VALOTriggerSeconds",
-        "RequestTestDriveState", "TestDrivePressure", "TestDriveType",
-        "ExpiratoryPressure", "LearnTargetsExpiratoryPressure",
-        "LearnTargetsPressureSupport", "LearnTargetsSetDuration",
-        "HardwareIdentifier", "UniversalIdentifier", "SerialNumber",
-        "ProductCode", "ProductName", "FdaUniqueDeviceIdentifier",
-        "ProductGeographicIdentifier", "BootloaderIdentifier",
-        "ApplicationIdentifier", "ConfigurationIdentifier",
-        "PlatformIdentifier", "VariantIdentifier", "RegionIdentifier",
-        "ProfileVariantIdentifier", "DataVersionIdentifier",
-        "DataModelVersionIdentifier",
-    ],
-    "ManufacturingSettings": [
-        # Test/control (hardware tests, motor/LCD/SD/sound checks)
-        "PhantomKey", "RequestLEDState", "CalibrationPressure",
-        "SetMotorSpeed", "BluetoothPassthrough", "HumidifierPower",
-        "HeatedTubePower", "RequestSDCardTest", "RequestLCDColour",
-        "MotorFlowDrive", "MicrophoneEnabled", "SoundDownloadAllowed",
-        "SoundcheckTestCount", "CALEnable",
-        # Raw sensor / monitoring
-        "MotorCurrent", "MotorSpeed", "AdcPressure",
-        "AdcPressureMonitoring", "RawFlow",
-        "RawAmbHumidity", "RawAmbTemperature", "RawAmbLight",
-        "ButtonRegMap", "CurrentLEDState", "EndCapDetection",
-        # State flags
-        "LCDTouchStatus", "LCDConnector", "SDCardTestStatus",
-        "SDCardSocketStatus", "IsReadyForShipping", "IsReadyForUpgrade",
-        "IsFileSystemReady", "MotorType", "EraseMediaSignature",
-        "SoundcheckStatus", "CALStatus", "SecurityStatus",
-        # Calibration
-        "PressureGain", "PressureOffset", "FlowGain", "FlowOffset",
-        "PressureMonitorGain", "PressureMonitorOffset",
-        # Run meters / history
-        "LastTherapyUseDateTime", "LastEraseDataDateTime",
-        "TherapyRunMeter", "MotorRunMeter",
-        "MotorRunSinceLastServiceMeter", "MachineRunMeter",
-        "LastMachineServiceDateTime",
-        # Ambient / environment
-        "AmbientHumidity-Estimated", "AmbientTemperature-Estimated",
-        "AmbientLight", "FGState", "TestDriveState",
-        # System error / alarm state
-        "SystemError", "RecoverableError", "ActiveAlarms",
-        # Power / connectivity
-        "PowerSupplyType", "PowerSupplyCapacity", "TxLink2Connected",
-        "HumidifierConnected", "TubeConnected",
-        # Humidifier / tube hardware telemetry
-        "BlowerFlow-100hz", "BlowerPressure-100hz",
-        "HumidifierPlateCurrent", "HeatedTubeCurrent", "HumidifierPWM",
-        "HumidifierPWMMinuteAverage", "HeatedTubePWM",
-        "HeatedTubePWMMinuteAverage", "BlowerPressureMonitoring",
-        "HumidifierPlateTemperature",
-        "HumidifierPlateTemperatureMinuteAverage",
-        "HeatedTubeOutletTemperature",
-        "HeatedTubeOutletTemperatureMinuteAverage",
-
-        "CalManufacturingMode", "DeviceIdStatus", "LearnMode",
-        "CepstrumAverageCount", "CepstrumStartDelay",
-        "CamlData", "ApplicationData", "PeripheralMsg",
-        "OobxOnStartup", "PhantomTouch",
-        "SettingsHistoryChangeCount", "StorageVersionId",
-        "TOTAL_USED_HOURS_NAME",
-    ],
-    "TherapyProfile": [
-        "ActiveTherapyProfile",
-    ],
-    "AlarmProfiles": [
-        "AlarmVolumeLevel",
-        "ApneaAlarmEnable", "ApneaAlarmThreshold",
-        "HighLeakAlarmEnable",
-        "LowMinuteVentAlarmEnable", "LowMinuteVentAlarmThreshold",
-        "NonVentedMaskAlarmEnable",
-    ],
-    "FeatureProfiles": [
-        # Ramp / AutoRamp / RampDown
-        "MaxRampTime", "RampTime", "RampEnable", "RampEnablePatientAccess",
-        "MaxRampDownTime", "RampDownTime", "RampDownEnable",
-        "RampDownEnablePatientAccess",
-        # Circuit
-        "MaskType", "TubeType", "AntiBacterialFilter",
-        # Climate / humidifier
-        "ClimateControl", "HumidifierSettingEnable", "HumidifierLevel",
-        "HeatedTubeSettingEnable", "HeatedTubeTemperature",
-        "ExternalHumidifier",
-        # Comfort
-        "AutoSetComfort",
-        # Confirm-stop
-        "ConfirmStopEnable",
-        # Care check
-        "CareCheckToggle", "CareCheckInAvailable",
-        # Device health / user solution
-        "SoundcheckFeatureToggle", "SoundcheckRunFrequency",
-        "ClinicalConfirmation", "MyAirScreens",
-        # Display
-        "TotalUsedHoursDisplayToggle", "SplashScreenDisplaySelection",
-        "CycleDisplayFormat", "DisplayAHI",
-        # EPR
-        "EprEnablePatientAccess", "EprEnable", "EprType", "EprPressure",
-        # Height
-        "HeightDisplayUnit",
-        # Language
-        "LanguageConfiguration", "Language", "LanguageSelection",
-        # Mask sense
-        "MaskSenseToggle",
-        # Patient view
-        "PatientView",
-        # Reminders
-        "ReminderFilterEnable", "ReminderFilterDate", "ReminderFilterPeriod",
-        "ReminderHumidifierEnable", "ReminderHumidifierDate",
-        "ReminderHumidifierPeriod", "ReminderMaskEnable",
-        "ReminderMaskDate", "ReminderMaskPeriod", "ReminderTubingEnable",
-        "ReminderTubingDate", "ReminderTubingPeriod",
-        # Smart start/stop
-        "SmartStart", "SmartStop",
-        # Temperature
-        "TemperatureUnit",
-        # Therapy LED
-        "TherapyLEDAlwaysOn",
-        # Time zone
-        "TimeZoneOffset",
-    ],
-    "TherapyMode": [
-        "ASVAuto-MinExpiratoryPressure", "ASVAuto-MaxExpiratoryPressure",
-        "ASVAuto-StartPressure", "ASVAuto-MinPressureSupport",
-        "ASVAuto-MaxPressureSupport", "ASV-TargetExpiratoryPressure",
-        "ASV-MinPressureSupport", "ASV-MaxPressureSupport",
-        "ASV-StartPressure", "HerAuto-MaxPressure", "HerAuto-MinPressure",
-        "HerAuto-StartPressure", "AutoSet-MaxPressure",
-        "AutoSet-MinPressure", "AutoSet-StartPressure", "Cpap-SetPressure",
-        "Cpap-StartPressure", "Cpap-TriggerSensitivity",
-        "PAC-TargetInspiratoryPressure", "PAC-TargetExpiratoryPressure",
-        "PAC-StartPressure", "PAC-SetRespiratoryRate",
-        "PAC-SetInspiratoryTime", "PAC-RiseTimeEnable", "PAC-RiseTime",
-        "PAC-FallTimeEnable", "PAC-FallTime", "PAC-TriggerSensitivity",
-        "ST-TargetInspiratoryPressure", "ST-TargetExpiratoryPressure",
-        "ST-StartPressure", "ST-IntelligentBackupRateEnable",
-        "ST-TargetRespiratoryRate", "ST-SetRespiratoryRate",
-        "ST-SetMaxInspiratoryTime", "ST-SetMinInspiratoryTime",
-        "ST-RiseTimeEnable", "ST-RiseTime", "ST-FallTimeEnable",
-        "ST-FallTime", "ST-TriggerSensitivity", "ST-CycleSensitivity",
-        "Spont-TargetInspiratoryPressure", "Spont-TargetExpiratoryPressure",
-        "Spont-StartPressure", "Spont-RespiratoryRateEnable",
-        "Spont-SetMaxInspiratoryTime", "Spont-SetMinInspiratoryTime",
-        "Spont-EasyBreatheEnable", "Spont-RiseTimeEnable", "Spont-RiseTime",
-        "Spont-FallTimeEnable", "Spont-FallTime",
-        "Spont-TriggerSensitivity", "Spont-CycleSensitivity",
-        "Timed-TargetInspiratoryPressure", "Timed-TargetExpiratoryPressure",
-        "Timed-StartPressure", "Timed-SetRespiratoryRate",
-        "Timed-SetInspiratoryTime", "Timed-RiseTimeEnable", "Timed-RiseTime",
-        "Timed-FallTimeEnable", "Timed-FallTime",
-        "VAuto-MaxInspiratoryPressure", "VAuto-MinExpiratoryPressure",
-        "VAuto-StartPressure", "VAuto-SetMaxInspiratoryTime",
-        "VAuto-SetMinInspiratoryTime", "VAuto-SetPressureSupport",
-        "VAuto-TriggerSensitivity", "VAuto-CycleSensitivity",
-        "iVAPS-PatientHeight", "iVAPS-AutoEPAPEnable",
-        "iVAPS-MaxExpiratoryPressure", "iVAPS-MinExpiratoryPressure",
-        "iVAPS-TargetExpiratoryPressure", "iVAPS-MinPressureSupport",
-        "iVAPS-MaxPressureSupport", "iVAPS-StartPressure",
-        "iVAPS-TargetAlveolarVentilation", "iVAPS-TargetRespiratoryRate",
-        "iVAPS-SetMaxInspiratoryTime", "iVAPS-SetMinInspiratoryTime",
-        "iVAPS-RiseTimeEnable", "iVAPS-RiseTime", "iVAPS-FallTimeEnable",
-        "iVAPS-FallTime", "iVAPS-TriggerSensitivity",
-        "iVAPS-CycleSensitivity",
-    ],
-    "CellularModule": [
-        "CellularApplicationIdentifier",
-        "CellularProductModel",
-        "CellularProductProvider",
-        "CellularDataPreamble",
-        "IMEI",
-        "IMSI",
-        "SIMID",
-    ],
-    "BluetoothModule": [
-        "BluetoothApplicationIdentifier",
-        "BluetoothBootloaderIdentifier",
-        "BluetoothName",
-        "BluetoothPassthrough",
-        "BluetoothProductModel",
-        "BluetoothProductProvider",
-    ],
-    # Real-time therapy measurements + transient state. Not settings; only
-    # populated while therapy is running, so most return InvalidObject at
-    # idle. Split out of ManufacturingSettings so that group isn't noisy.
-    "TherapyMeasurements": [
-        "RespiratoryEvent", "StatusEvent", "IsRamping", "TriggerCycleEvent",
-        "IsRampingDown",
-        "InspiratoryPressure", "ExpiratoryPressure", "RespiratoryRate",
-        "HeartRate", "SpO2", "IeRatio", "Leak", "RawLeak",
-        "MinuteVentilation", "TidalVolume", "AlveolarMinuteVentilation",
-        "InspiratoryDuration", "ExpiratoryDuration",
-        "TargetMinuteVentilation", "FlowLimitation", "SnoreIndex",
-        "RemainingRampTime", "RemainingRampDownTime",
-        "MaskPressure", "SetPressureWithoutCAD", "PatientFlow",
-        "ExpirationSetPressure", "InspirationSetPressure", "CpapSetPressure",
-    ],
-}
-
-def _resolve_group(name):
-    """Return group name if present in VAR_GROUPS, else None. Case-insensitive."""
-    if name in VAR_GROUPS:
-        return name
-    # case-insensitive fallback only - no human aliases
-    lower_map = {k.lower(): k for k in VAR_GROUPS}
-    return lower_map.get(name.lower())
-
-
-def _filter_vars(pat):
-    """Group-aware filtering over (name, tag) pairs. Falls back to substring."""
-    key = pat.lower()
-    if key in VAR_MODE_PREFIXES:
-        prefix = VAR_MODE_PREFIXES[key]
-        return [(n, t) for n, t in VAR_NAMES if n.startswith(prefix)]
-    if key in VAR_TOPIC_KEYWORDS:
-        keywords = VAR_TOPIC_KEYWORDS[key]
-        return [(n, t) for n, t in VAR_NAMES if any(k in n.lower() for k in keywords)]
-    # substring match against either the long name or the _TAG short form
-    return [(n, t) for n, t in VAR_NAMES
-            if key in n.lower() or key in f"_{t}".lower()]
-
-
-def _var_groups_summary():
-    """Print all groupings: therapy-mode prefixes, topic keywords, CDX groups."""
-    print("therapy modes (exact prefix):")
-    for key, prefix in sorted(VAR_MODE_PREFIXES.items()):
-        n = sum(1 for name, _ in VAR_NAMES if name.startswith(prefix))
-        print(f"  {key:<10}  {prefix:<10}  {n:3d}")
-    print()
-    print("topics (substring):")
-    for key, keywords in sorted(VAR_TOPIC_KEYWORDS.items()):
-        n = sum(1 for name, _ in VAR_NAMES if any(k in name.lower() for k in keywords))
-        hint = ", ".join(keywords)
-        print(f"  {key:<10}  {n:3d}  ({hint})")
-    print()
-    print("CDX tree groups (firmware names, for `get --group`):")
-    non_empty = [(g, v) for g, v in VAR_GROUPS.items() if v]
-    for g, v in sorted(non_empty, key=lambda x: -len(x[1])):
-        print(f"  {g:<24s}  {len(v):3d}")
-    print()
-    print(f"aggregate Get (verified against firmware 04600.15.8.4.0):")
-    print(f"  subtrees   {len(VAR_SUBTREE_ALIASES):3d}  - `get NAME` returns whole subtree (see `known subtrees`)")
-
-
-def _print_var_pairs(pairs):
-    """Two-column output: long name left, _TAG right."""
-    if not pairs:
-        return
-    width = max(len(n) for n, _ in pairs)
-    for name, tag in sorted(pairs):
-        print(f"{name:<{width}}  _{tag}")
-
-
-def cmd_known(args):
+    `known`               list registries (vars, streams, events, spools, ...)
+    `known <reg> [pat]`   list one registry, optionally filtered
+    `known vars groups`   summary of var groupings
+    `known vars subtrees` aggregate-Get target list
+    `known vars <group>`  members of a CDX subtree group
+    `known vars <pat>`    filter VAR_NAMES by mode/topic/substring
+    """
     action = args.known_action
     if not action:
         for name, (_, desc) in REGISTRIES.items():
             print(f"  {name:<8}  {desc}")
         print()
-        print(f"  hint: `known vars groups` lists subgroupings "
-              f"(therapy modes, topics, CDX tree groups)")
-        print(f"  hint: `known subtrees` aggregate-Get targets "
-              f"(SettingProfiles, CpapProfile, …)")
-        return
+        print("  hint: `known vars groups` lists subgroupings "
+              "(therapy modes, topics, subtree groups)")
+        print("  hint: `known subtrees` aggregate-Get targets "
+              "(SettingProfiles, CpapProfile, ...)")
+        return 0
 
     pat = args.pattern or ""
 
     # vars has rich filtering and tabular output
     if action == "vars":
         if pat.lower() == "groups":
-            _var_groups_summary()
-            return
+            var_groups_summary()
+            return 0
         if pat.lower() == "subtrees":
             for name in sorted(VAR_SUBTREES, key=str.lower):
                 print(name)
-            return
-        # If pat names a CDX group (case-insensitive), list its members.
-        canon = _resolve_group(pat) if pat else None
+            return 0
+        # If pat names a known group (case-insensitive), list its members.
+        canon = resolve_group(pat) if pat else None
         if canon is not None:
             members = VAR_GROUPS.get(canon, [])
             print(f"group {canon}: {len(members)} members")
             print()
             for m in members:
                 print(f"  {m}")
-            return
-        pairs = _filter_vars(pat) if pat else list(VAR_NAMES)
-        _print_var_pairs(pairs)
+            return 0
+        pairs = filter_vars(pat) if pat else list(VAR_NAMES)
+        print_var_pairs(pairs)
 
         if pat:
             key = pat.lower()
-            sub_hits = [s for s in VAR_SUBTREE_ALIASES if key in s.lower()]
-            res_hits = [s for s in VAR_RESERVED if key in s.lower()]
-            extra = sub_hits + res_hits
-            if extra:
+            sub_hits = [s for s in VAR_SUBTREES if key in s.lower()]
+            if sub_hits:
                 if pairs:
                     print()
-                width = max(len(n) for n in extra)
+                width = max(len(n) for n in sub_hits)
                 for name in sorted(sub_hits, key=str.lower):
-                    print(f"{name:<{width}}  ~subtree  {VAR_SUBTREE_ALIASES[name]}")
-                for name in sorted(res_hits, key=str.lower):
-                    print(f"{name:<{width}}  ~reserved")
-        return
+                    print(f"{name:<{width}}  ~subtree")
+        return 0
 
+    if action not in REGISTRIES:
+        raise SystemExit(f"known: unknown registry {action!r}; "
+                         f"choose from {list(REGISTRIES)}")
     items, _ = REGISTRIES[action]
     key = pat.lower()
     for item in sorted(items):
         if not key or key in item.lower():
             print(item)
-
-
-TYPE_COERCE = {
-    "str":   lambda v: v,
-    "int":   int,
-    "float": float,
-    "bool":  lambda v: {"true": True, "1": True, "yes": True,
-                        "false": False, "0": False, "no": False}[v.lower()],
-    "json":  json.loads,
-}
-
-def parse_set_items(items):
-    """Walk positional [Name Value (--type T)?]* into [(name, value_str, type)]."""
-    pairs = []
-    pending = None  # (name, value) awaiting optional --type
-    i = 0
-    while i < len(items):
-        tok = items[i]
-        if tok == "--type" or tok.startswith("--type="):
-            if pending is None:
-                raise SystemExit("--type must follow a name/value pair")
-            if tok == "--type":
-                if i + 1 >= len(items):
-                    raise SystemExit("--type requires a type name")
-                t = items[i + 1]
-                i += 2
-            else:
-                t = tok.split("=", 1)[1]
-                i += 1
-            if t not in TYPE_COERCE:
-                raise SystemExit(f"unknown type {t!r}, expected one of {list(TYPE_COERCE)}")
-            pairs.append((*pending, t))
-            pending = None
-        else:
-            if pending is not None:
-                pairs.append((*pending, "str"))
-            if i + 1 >= len(items):
-                raise SystemExit(f"value missing for {tok!r}")
-            pending = (tok, items[i + 1])
-            i += 2
-    if pending is not None:
-        pairs.append((*pending, "str"))
-    return pairs
-
-
-async def cmd_get(args):
-    names = list(args.names or [])
-
-    # Expand --group arguments into their member var names.
-    for g in (args.groups or []):
-        canon = _resolve_group(g)
-        if canon is None:
-            raise SystemExit(
-                f"get: unknown group {g!r}. "
-                f"See `known groups` for the list."
-            )
-        members = VAR_GROUPS.get(canon, [])
-        if not members:
-            print(
-                f"get: group {g!r} resolves to {canon!r} which has no direct "
-                f"members. See `known groups` for the list of non-empty groups.",
-                file=sys.stderr,
-            )
-            continue
-        names.extend(members)
-
-    # de-dup, preserve order
-    names = list(dict.fromkeys(names))
-    if not names:
-        raise SystemExit("get: at least one name or --group required")
-
-    addr = resolve_addr(args.addr)
-    conn = As11Connection(debug=args.debug)
-    try:
-        await conn.connect(addr)
-        creds = load_credentials(addr)
-        if not (creds.get("clientId") and creds.get("masterPairKey")):
-            raise SystemExit("No stored credentials. Run 'devices pair' first.")
-        new_creds = await conn.reconnect(creds["clientId"], creds["masterPairKey"])
-        creds.update(new_creds)
-        save_credentials(addr, creds)
-
-        # When the user explicitly lists names, send as one batch and let any
-        # RPC error propagate. When expanding from --group, be tolerant: bisect
-        # on failure so one mode-gated var (returns InvalidObject in current
-        # mode) doesn't kill the whole query.
-        if args.groups:
-            result, errors = await _get_tolerant(conn, names)
-            if errors:
-                # emit errors to stderr so `result` JSON stays pipeable
-                for n, msg in errors.items():
-                    print(f"# {n}: {msg}", file=sys.stderr)
-            print(json.dumps(result, indent=2))
-        else:
-            resp = await conn.send_rpc("Get", names, encrypted=True)
-            print(json.dumps(resp.get("result", resp), indent=2))
-    finally:
-        await conn.disconnect()
-
-
-async def _get_tolerant(conn, names):
-    """Query a list of var names, tolerating per-var errors.
-
-    Strategy: try the full batch; on error, bisect and retry. Single-var
-    batches that fail are recorded in the errors dict. Returns
-    (results, errors) where results is {name: value} and errors is {name: msg}.
-    """
-    results = {}
-    errors = {}
-
-    async def _try_batch(batch):
-        try:
-            resp = await conn.send_rpc("Get", list(batch), encrypted=True)
-            return resp.get("result", {}), None
-        except Exception as e:
-            return None, str(e)
-
-    async def _recurse(batch):
-        got, err = await _try_batch(batch)
-        if got is not None:
-            results.update(got)
-            return
-        if len(batch) == 1:
-            errors[batch[0]] = err
-            return
-        mid = len(batch) // 2
-        await _recurse(batch[:mid])
-        await _recurse(batch[mid:])
-
-    await _recurse(names)
-    return results, errors
-
-
-async def cmd_set(args):
-    # validate args before touching BLE
-    if args.json_payload:
-        raw = sys.stdin.read() if args.json_payload == "-" else args.json_payload
-        try:
-            params = json.loads(raw)
-        except json.JSONDecodeError as e:
-            raise SystemExit(f"--json: invalid JSON ({e})")
-        if not isinstance(params, dict):
-            raise SystemExit("--json: must be a JSON object")
-    else:
-        pairs = parse_set_items(args.rest)
-        if not pairs:
-            raise SystemExit("set: at least one name/value pair required")
-        params = {}
-        for name, value, t in pairs:
-            try:
-                params[name] = TYPE_COERCE[t](value)
-            except (ValueError, KeyError) as e:
-                raise SystemExit(f"{name}: cannot coerce {value!r} as {t} ({e})")
-
-    addr = resolve_addr(args.addr)
-    conn = As11Connection(debug=args.debug)
-    try:
-        await conn.connect(addr)
-        creds = load_credentials(addr)
-        if not (creds.get("clientId") and creds.get("masterPairKey")):
-            raise SystemExit("No stored credentials. Run 'devices pair' first.")
-        new_creds = await conn.reconnect(creds["clientId"], creds["masterPairKey"])
-        creds.update(new_creds)
-        save_credentials(addr, creds)
-        resp = await conn.send_rpc("Set", params, encrypted=True)
-        print(json.dumps(resp.get("result", resp), indent=2))
-    finally:
-        await conn.disconnect()
-
-
-def _proto_read_varint(data, i):
-    v = 0; shift = 0
-    while True:
-        b = data[i]; i += 1
-        v |= (b & 0x7F) << shift
-        if (b & 0x80) == 0:
-            return v, i
-        shift += 7
-
-
-def _proto_decode(data):
-    """Walk protobuf wire format. Returns list of (field, wire, value)."""
-    out = []
-    i = 0
-    while i < len(data):
-        key, i = _proto_read_varint(data, i)
-        field = key >> 3
-        wire = key & 7
-        if wire == 0:
-            v, i = _proto_read_varint(data, i); out.append((field, wire, v))
-        elif wire == 1:
-            out.append((field, wire, int.from_bytes(data[i:i + 8], "little"))); i += 8
-        elif wire == 2:
-            ln, i = _proto_read_varint(data, i)
-            out.append((field, wire, bytes(data[i:i + ln]))); i += ln
-        elif wire == 5:
-            out.append((field, wire, int.from_bytes(data[i:i + 4], "little"))); i += 4
-        else:
-            raise ValueError(f"unsupported wire type {wire} at offset {i}")
-    return out
-
-
-_PROTO_WIRE = {0: "varint", 1: "64-bit", 2: "bytes", 5: "32-bit"}
-
-
-def _proto_pretty(data, indent=0, out=None):
-    """Pretty-print protobuf blob with nested-message heuristic."""
-    from datetime import datetime, timezone
-    if out is None:
-        out = sys.stdout
-    pad = "  " * indent
-    for field, wire, value in _proto_decode(data):
-        if wire == 2:
-            # try nested message
-            try:
-                sub = _proto_decode(value)
-                if sub and all(0 < f < 2**29 for f, _, _ in sub):
-                    print(f"{pad}{field} (msg, {len(value)}B):", file=out)
-                    _proto_pretty(value, indent + 1, out)
-                    continue
-            except (ValueError, IndexError):
-                pass
-            # string vs bytes
-            if value and all(32 <= b < 127 for b in value):
-                print(f"{pad}{field} (str): {value.decode()!r}", file=out)
-            else:
-                h = value.hex()
-                if len(h) > 80:
-                    h = h[:80] + "..."
-                print(f"{pad}{field} (bytes {len(value)}B): {h}", file=out)
-        elif wire == 0:
-            note = ""
-            if 10**12 < value < 2 * 10**12:
-                try:
-                    note = f" [~{datetime.fromtimestamp(value / 1000, timezone.utc).isoformat()}]"
-                except (OverflowError, OSError):
-                    pass
-            elif 10**9 < value < 2 * 10**9:
-                try:
-                    note = f" [~{datetime.fromtimestamp(value, timezone.utc).isoformat()}]"
-                except (OverflowError, OSError):
-                    pass
-            print(f"{pad}{field} (varint): {value}{note}", file=out)
-        else:
-            print(f"{pad}{field} ({_PROTO_WIRE.get(wire, wire)}): {value}", file=out)
-
-
-# Spool-type-specific enum legends
-_SPOOL_LEGENDS = {
-    "TherapyEvents-RespiratoryEvents": {
-        "event_types": {
-            2: "Hypopnea", 3: "CentralApnea", 4: "ObstructiveApnea",
-            5: "Apnea", 6: "Arousal",
-        },
-    },
-}
-
-
-# Summary protobuf field table.
-_SUMMARY_FIELDS = {
-    1:  "f1_init_marker",
-    2:  "f2_clockA_start",
-    3:  "f3_clockA_end",
-    4:  "f4_clockA_diff_over_60000",
-    5:  "f5_tag01",
-    6:  "f6_init_session_struct",
-    7:  "AHI (Summary-ApneaHypopneaIndex)",
-    8:  "ApneaIndex",
-    9:  "HypopneaIndex",
-    10: "ObstructiveApneaIndex",
-    11: "CentralApneaIndex",
-    12: "UnknownApneaIndex",
-    13: "ReraIndex",
-    14: "Leak",
-    15: "InspiratoryPressure",
-    16: "f16_CSD",
-    17: "f17_SAU",
-    18: "SpontTriggerPercentage",
-    19: "SpontCyclePercentage",
-    20: "ExpiratoryPressure",
-    21: "MeanMaskPressure",
-    22: "TidalVolume",
-    23: "MinuteVentilation",
-    24: "TargetMinuteVentilation",
-    25: "RespiratoryRate",
-    26: "InspiratoryDuration",
-    27: "IeRatio",
-    28: "SpO2",
-    29: "AmbientHumidity",
-    30: "HumidifierTemperature",
-    31: "HeatedTubeTemperature",
-    32: "HumidifierPower",
-    33: "HeatedTubePower",
-    34: "HumidifierConnected (enum)",
-    35: "TubeConnected (enum)",
-    36: "BlowerPressure",
-    37: "RespiratoryFlow",
-    38: "BlowerFlow",
-    39: "f39_unsourced",
-    40: "f40_clockB",
-    41: "HeartRate",
-    42: "f42_AV*",
-    43: "f43_unsourced",
-}
-
-# Percentile labels per (outer_field, inner_subfield).
-_SUMMARY_SUBFIELDS = {
-    # outer_f: { sub_f: (pct, multiplier) }
-    14: {2: (50, 2.0), 3: (70, 2.0), 4: (95, 2.0), 5: (100, 2.0)},  # Leak (6-slot msg)
-    15: {2: (50, 2.0), 3: (95, 2.0), 4: (100, 2.0)},                # InspiratoryPressure
-    20: {2: (50, 2.0), 3: (95, 2.0), 4: (100, 2.0)},                # ExpiratoryPressure
-    21: {2: (50, 2.0), 3: (95, 2.0), 4: (100, 2.0)},                # MeanMaskPressure
-    22: {2: (50, 2.0), 3: (95, 2.0), 4: (100, 2.0)},                # TidalVolume
-    23: {2: (50, 8.0), 3: (95, 8.0), 4: (100, 8.0)},                # MinuteVentilation
-    24: {2: (50, 1.0), 3: (95, 1.0), 4: (100, 1.0)},                # TargetMinuteVentilation
-    25: {2: (50, 5.0), 3: (95, 5.0), 4: (100, 5.0)},                # RespiratoryRate
-    26: {2: (50, 1.0), 3: (95, 1.0), 4: (100, 1.0)},                # InspiratoryDuration
-    27: {2: (50, 1.0), 3: (95, 1.0), 4: (100, 1.0)},                # IeRatio
-    28: {2: (50, 1.0), 3: (95, 1.0), 4: (100, 1.0)},                # SpO2
-    29: {2: (50, 10.0)},                                             # AmbientHumidity
-    30: {2: (50, 10.0)},                                             # HumidifierTemperature
-    31: {2: (50, 10.0)},                                             # HeatedTubeTemperature
-    32: {2: (50, 10.0)},                                             # HumidifierPower
-    33: {2: (50, 10.0)},                                             # HeatedTubePower
-    36: {1: (5, 2.0),  3: (95, 2.0)},                                # BlowerPressure
-    37: {1: (5, 0.2),  3: (95, 0.2)},                                # RespiratoryFlow
-    38: {2: (50, 0.2)},                                              # BlowerFlow
-    41: {2: (50, 1.0), 3: (95, 1.0), 4: (100, 1.0)},                # HeartRate
-    42: {2: (50, 1.0), 3: (95, 1.0), 4: (100, 1.0)},                # AV*
-}
-
-
-def _summary_pretty(data, out=None):
-    """Pretty-print the Summary protobuf using firmware-verified field names."""
-
-    if out is None:
-        out = sys.stdout
-    # Unwrap spool envelope if present: a single wire-2 field containing the
-    # actual Summary message.
-    while True:
-        try:
-            top = _proto_decode(data)
-        except (ValueError, IndexError):
-            break
-        if len(top) == 1 and top[0][1] == 2 and isinstance(top[0][2], (bytes, bytearray)):
-            data = top[0][2]
-            continue
-        break
-    for field, wire, value in _proto_decode(data):
-        label = _SUMMARY_FIELDS.get(field, f"field_{field}")
-        if wire == 2:
-            try:
-                subs = _proto_decode(value)
-            except (ValueError, IndexError):
-                subs = None
-            if subs:
-                print(f"{label} (msg, {len(value)}B):", file=out)
-                submap = _SUMMARY_SUBFIELDS.get(field, {})
-                for sf, sw, sv in subs:
-                    if sf in submap:
-                        pct, mult = submap[sf]
-                        tail = f"  # p{pct}, mult={mult}x (wire=raw*mult)"
-                    else:
-                        tail = ""
-                    print(f"  sub_f{sf} ({_PROTO_WIRE.get(sw, sw)}): {sv}{tail}", file=out)
-            else:
-                h = value.hex()
-                if len(h) > 80:
-                    h = h[:80] + "..."
-                print(f"{label} (bytes {len(value)}B): {h}", file=out)
-        elif wire == 0:
-            print(f"{label} (varint): {value}", file=out)
-        elif wire == 1:
-            print(f"{label} (u64): {value}", file=out)
-        elif wire == 5:
-            print(f"{label} (u32): {value}", file=out)
-        else:
-            print(f"{label} ({_PROTO_WIRE.get(wire, wire)}): {value}", file=out)
-
-
-def _print_spool_legend(spool_type):
-    legend = _SPOOL_LEGENDS.get(spool_type)
-    if not legend:
-        return
-    et = legend.get("event_types")
-    if et:
-        print("# event record layout: field 1 = type, field 2 = start_ms, field 3 = end_ms, field 4 = duration_ms")
-        parts = ", ".join(f"{k}={v}" for k, v in sorted(et.items()))
-        print(f"# event types: {parts}")
-        print()
-
-
-def _spool_walk_events(data, depth=0):
-    """Yield event records (field 1 innermost repeated) from a spool payload."""
-    try:
-        for field, wire, value in _proto_decode(data):
-            if wire == 2:
-                # the events are at depth 2 (wrapper -> collection -> event*)
-                if depth < 2:
-                    yield from _spool_walk_events(value, depth + 1)
-                elif depth == 2 and field == 1:
-                    yield value
-    except (ValueError, IndexError):
-        pass
-
-
-def _print_spool_summary(spool_type, data):
-    legend = _SPOOL_LEGENDS.get(spool_type)
-    if not legend:
-        return
-    et = legend.get("event_types")
-    if not et:
-        return
-    from collections import Counter
-    counts = Counter()
-    total = 0
-    for ev in _spool_walk_events(data):
-        total += 1
-        try:
-            for field, wire, value in _proto_decode(ev):
-                if field == 1 and wire == 0:
-                    counts[value] += 1
-                    break
-        except (ValueError, IndexError):
-            pass
-    if total:
-        print()
-        print(f"# summary: {total} events")
-        for k in sorted(counts):
-            print(f"#   {et.get(k, f'type={k}'):20s} {counts[k]:6d}")
-
-
-async def _spool_one_round(conn, spool_address, max_size):
-    """Run a single StartSpool -> PullSpoolFragments cycle.
-
-    Returns (data_bytes, status, next_spool_address, frag_count).
-    Verifies per-round SHA256 against spoolHash.
-    """
-    fragments = []
-    spool_done = asyncio.Event()
-    state = {"status": "", "hash": "", "next": None}
-
-    def on_notify(msg):
-        method = msg.get("method", "")
-        params = msg.get("params", {})
-        if method != "SpoolFragment":
-            return
-        seq = params.get("seq", -1)
-        data_b64 = params.get("data", "")
-        status = params.get("status", "")
-        if data_b64:
-            fragments.append((seq, base64.b64decode(data_b64)))
-        print(f"  fragment seq={seq} len={len(data_b64)} status={status}",
-              file=sys.stderr, flush=True)
-        state["status"] = status
-        state["hash"] = params.get("spoolHash", "")
-        state["next"] = params.get("nextSpoolAddress")
-        if status != "SPOOL_INCOMPLETE":
-            spool_done.set()
-
-    conn._notification_cb = on_notify
-
-    resp = await conn.send_rpc("StartSpool", {
-        "spoolAddress": spool_address,
-        "maxSpoolSize": max_size,
-    }, encrypted=True)
-    spool_id = resp.get("result", {}).get("spoolId", 0)
-    print(f"StartSpool: spoolId={spool_id}", file=sys.stderr)
-    if spool_id == 0:
-        return b"", "", None, 0
-
-    await conn.send_rpc("PullSpoolFragments", {
-        "spoolId": spool_id, "maxFragmentSize": 2808, "maxNotifications": 0,
-    }, encrypted=True, timeout=5.0)
-
-    try:
-        await asyncio.wait_for(spool_done.wait(), timeout=30.0)
-    except asyncio.TimeoutError:
-        print("  timeout waiting for fragments", file=sys.stderr)
-
-    fragments.sort(key=lambda x: x[0])
-    data = b"".join(f[1] for f in fragments)
-
-    expected = state["hash"]
-    if expected:
-        actual = hashlib.sha256(data).hexdigest().upper()
-        ok = "OK" if actual == expected.upper() else "MISMATCH"
-        print(f"  SHA256: {ok} ({len(data)} bytes, {len(fragments)} fragments)",
-              file=sys.stderr)
-
-    return data, state["status"], state["next"], len(fragments)
-
-
-async def cmd_spool(args):
-    addr = resolve_addr(args.addr)
-    conn = As11Connection(debug=args.debug)
-    try:
-        await conn.connect(addr)
-        creds = load_credentials(addr)
-        if not (creds.get("clientId") and creds.get("masterPairKey")):
-            print("No stored credentials. Run 'pair' first.", file=sys.stderr)
-            return
-        new_creds = await conn.reconnect(creds["clientId"], creds["masterPairKey"])
-        creds.update(new_creds)
-        save_credentials(addr, creds)
-
-        spool_type = args.spool_type
-        from_dt = args.from_dt or "2000-01-01T00:00:00.000Z"
-
-        # initial spoolAddress; subsequent rounds use nextSpoolAddress
-        spool_address = {spool_type: {"fromDateTime": from_dt}}
-
-        all_data = bytearray()
-        total_fragments = 0
-        round_num = 0
-        final_status = ""
-        last_next = None
-
-        while True:
-            round_num += 1
-            if round_num > 1:
-                print(f"--- round {round_num} (continuing from nextSpoolAddress) ---",
-                      file=sys.stderr)
-            data, status, nxt, n_frags = await _spool_one_round(
-                conn, spool_address, args.max_size)
-            all_data.extend(data)
-            total_fragments += n_frags
-            final_status = status
-            last_next = nxt
-
-            if args.no_follow:
-                break
-            if status != "SPOOL_COMPLETE_MORE_DATA_PENDING" or not nxt:
-                break
-            if round_num >= args.max_rounds:
-                print(f"  stopping: hit --max-rounds {args.max_rounds}", file=sys.stderr)
-                break
-            spool_address = nxt
-
-        data = bytes(all_data)
-
-        # raw bytes to file (always, when -o)
-        if args.output:
-            with open(args.output, "wb") as f:
-                f.write(data)
-            print(f"Saved {len(data)} bytes to {args.output} "
-                  f"({total_fragments} fragments, {round_num} rounds, "
-                  f"status={final_status})", file=sys.stderr)
-            if last_next and final_status == "SPOOL_COMPLETE_MORE_DATA_PENDING":
-                print(f"  nextSpoolAddress: {json.dumps(last_next)}", file=sys.stderr)
-
-        # decoded text to stdout
-        if args.decode:
-            _print_spool_legend(spool_type)
-            if spool_type == "Summary":
-                _summary_pretty(data)
-            else:
-                _proto_pretty(data)
-            _print_spool_summary(spool_type, data)
-            if last_next and final_status == "SPOOL_COMPLETE_MORE_DATA_PENDING":
-                print(f"\n# status={final_status}", file=sys.stderr)
-                print(f"# nextSpoolAddress: {json.dumps(last_next)}", file=sys.stderr)
-            return
-
-        # default JSON envelope (skip if we already saved to file)
-        if args.output:
-            return
-        out = {
-            "spoolType": spool_type,
-            "fromDateTime": from_dt,
-            "status": final_status,
-            "rounds": round_num,
-            "dataBase64": base64.b64encode(data).decode(),
-            "dataLength": len(data),
-            "fragments": total_fragments,
-            "sha256": hashlib.sha256(data).hexdigest().upper(),
-        }
-        if last_next and final_status == "SPOOL_COMPLETE_MORE_DATA_PENDING":
-            out["nextSpoolAddress"] = last_next
-        print(json.dumps(out, indent=2))
-
-    finally:
-        await conn.disconnect()
-
-
-def cmd_devices(args):
-    all_creds = load_all_credentials()
-    if not all_creds:
-        print("No paired devices.")
-        return
-    print(f"{'address':<20}  {'alias':<15}  {'clientId':<12}")
-    print(f"{'-'*20}  {'-'*15}  {'-'*12}")
-    for addr, data in sorted(all_creds.items()):
-        alias = data.get("alias", "")
-        cid = data.get("clientId", "")[:12]
-        print(f"{addr:<20}  {alias:<15}  {cid}")
-
-def cmd_alias(args):
-    addr = resolve_addr(args.target)
-    all_creds = load_all_credentials()
-    entry = all_creds.setdefault(addr, {})
-    # reject name collision with another device
-    for other_addr, data in all_creds.items():
-        if other_addr != addr and data.get("alias") == args.name:
-            raise SystemExit(f"alias {args.name!r} already used by {other_addr}")
-    entry["alias"] = args.name
-    save_all_credentials(all_creds)
-    print(f"{addr} -> {args.name}")
-
-def cmd_unalias(args):
-    all_creds = load_all_credentials()
-    for addr, data in all_creds.items():
-        if data.get("alias") == args.name:
-            del data["alias"]
-            save_all_credentials(all_creds)
-            print(f"removed alias {args.name!r} from {addr}")
-            return
-    raise SystemExit(f"no such alias: {args.name!r}")
-
-
-def main():
-    # restore default SIGPIPE so piping through head/less exits cleanly
-    try:
-        import signal
-        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-    except (ImportError, AttributeError):
-        pass  # Windows
-
-    examples = """addressing:
-  --addr accepts a MAC, macOS UUID, or an alias. falls back to $AS11_ADDR.
-
-  as11_ble.py --addr AA:BB:CC:DD:EE:FF rpc --method GetVersion
-  as11_ble.py --addr bedroom rpc --method Get --params '["TherapyMode"]'
-  AS11_ADDR=bedroom as11_ble.py stream --data-ids MaskPressure-50hz
-
-see `<subcommand> --help` for per-command examples.
-"""
-    parser = argparse.ArgumentParser(
-        description="AirSense 11 BLE Client",
-        epilog=examples,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+    return 0
+
+
+def cmd_devices(args: argparse.Namespace) -> int:
+    """BLE device management. Uses lib/as11_ble directly."""
+    import asyncio
+    from as11_ble import (
+        As11Connection, load_all_credentials, save_all_credentials,
+        save_credentials, load_credentials, resolve_addr,
     )
-    parser.add_argument("--addr", default=None,
-        help="BLE MAC address, macOS UUID, or alias. Falls back to $AS11_ADDR.")
-    parser.add_argument("--debug", action="store_true", help="verbose packet logging")
-    parser.add_argument("--verbose", "-v", action="store_true", help="info-level logging")
-    sub = parser.add_subparsers(dest="command")
 
+    action = getattr(args, "devices_action", None) or "list"
+
+    if action == "scan":
+        async def _scan():
+            print(f"Scanning for AS11 devices ({args.timeout:.0f}s)...")
+            devices = await As11Connection.scan(timeout=args.timeout)
+            if not devices:
+                print("No devices found.")
+                return
+            for addr, name, rssi in sorted(devices, key=lambda x: -x[2]):
+                print(f"  {addr:<20}  rssi={rssi:>4}  {name}")
+        asyncio.run(_scan())
+        return 0
+
+    if action == "list":
+        creds = load_all_credentials()
+        if not creds:
+            print("No paired devices.")
+            return 0
+        print(f"{'address':<20}  {'alias':<16}  {'clientId':<12}")
+        print(f"{'-'*20:<20}  {'-'*16:<16}  {'-'*12:<12}")
+        for addr, data in sorted(creds.items()):
+            alias = data.get("alias", "") or ""
+            cid = (data.get("clientId", "") or "")[:12]
+            print(f"{addr:<20}  {alias:<16}  {cid:<12}")
+        return 0
+
+    if action == "pair":
+        addr = resolve_addr(getattr(args, "addr", None)
+                           or resolve_device_spec(args).removeprefix("ble:"))
+        async def _pair():
+            conn = As11Connection(debug=args.debug)
+            try:
+                await conn.connect(addr)
+                creds = load_credentials(addr)
+                new = await conn.pair(passkey=getattr(args, "passkey", None))
+                creds.update(new)
+                save_credentials(addr, creds)
+                print(f"Paired with {addr}. clientId={new.get('clientId', '')}")
+            finally:
+                await conn.disconnect()
+        asyncio.run(_pair())
+        return 0
+
+    if action == "alias":
+        target = args.target
+        new_alias = args.name
+        creds = load_all_credentials()
+        # Resolve target: MAC, UUID, or existing alias
+        key = None
+        target_upper = target.upper()
+        for addr in creds:
+            if addr.upper() == target_upper:
+                key = addr
+                break
+            if creds[addr].get("alias") == target:
+                key = addr
+                break
+        if key is None:
+            raise SystemExit(
+                f"alias: {target!r} not found among paired devices"
+            )
+        # clear any existing use of new_alias
+        for addr in creds:
+            if creds[addr].get("alias") == new_alias:
+                creds[addr].pop("alias", None)
+        creds[key]["alias"] = new_alias
+        save_all_credentials(creds)
+        print(f"alias {new_alias} -> {key}")
+        return 0
+
+    if action == "unalias":
+        name = args.name
+        creds = load_all_credentials()
+        removed = False
+        for addr, data in creds.items():
+            if data.get("alias") == name:
+                data.pop("alias", None)
+                removed = True
+        if not removed:
+            raise SystemExit(f"unalias: no alias named {name!r}")
+        save_all_credentials(creds)
+        print(f"removed alias {name}")
+        return 0
+
+    raise SystemExit(f"unknown devices action: {action!r}")
+
+
+
+def build_common_parser() -> argparse.ArgumentParser:
+    SUPPR = argparse.SUPPRESS
+    common = argparse.ArgumentParser(add_help=False)
+    g = common.add_argument_group("device selection")
+    g.add_argument(
+        "-d", "--device", default=SUPPR,
+        help="device spec: ble:<mac|alias>, can:<port>, tcp:<host:port>"
+    )
+    g.add_argument(
+        "--addr", default=SUPPR,
+        help="BLE MAC/UUID/alias (shortcut for -d ble:<addr>; env: AS11_ADDR)"
+    )
+    g.add_argument(
+        "-p", "--port", default=SUPPR,
+        help="CAN serial port (shortcut for -d can:<port>; env: AS11_CAN_PORT)"
+    )
+    common.add_argument("--debug", action="store_true", default=SUPPR,
+                        help="verbose packet logging")
+    common.add_argument("-v", "--verbose", action="store_true", default=SUPPR,
+                        help="info-level logging")
+    return common
+
+
+def _apply_common_defaults(args: argparse.Namespace) -> None:
+    for name, default in (
+        ("device", None),
+        ("addr", None),
+        ("port", None),
+        ("debug", False),
+        ("verbose", False),
+    ):
+        if not hasattr(args, name):
+            setattr(args, name, default)
+
+
+def add_rpc_args(p: argparse.ArgumentParser) -> None:
+    from as11_can_waveshare import CanWaveshareTransport
+    CanWaveshareTransport.add_args(p)
+    p.add_argument("--timeout", type=float, default=5.0,
+                   help="RPC response timeout (seconds)")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    common = build_common_parser()
     raw_fmt = argparse.RawDescriptionHelpFormatter
 
-    p_devices = sub.add_parser("devices",
-        help="manage devices (scan/pair/list/alias/unalias)",
-        epilog="""examples:
-  scan for nearby devices:
-      devices scan
+    p = argparse.ArgumentParser(
+        description="AS11 unified config CLI (BLE / CAN).",
+        parents=[common],
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    sub = p.add_subparsers(dest="command", required=True)
 
-  pair (addr required, passkey appears on device screen):
-      --addr AA:BB:CC:DD:EE:FF devices pair
+    g = sub.add_parser(
+        "get", parents=[common],
+        help="read one or more config variables (Get RPC)",
+        epilog="examples:\n"
+               "  get SerialNumber\n"
+               "  get _MOP _GOM _TOM\n"
+               "  get --group DeviceConfiguration\n"
+               "  get --group TherapyProfile --group FeatureProfiles\n"
+               "  get SerialNumber --group Network\n",
+        formatter_class=raw_fmt,
+    )
+    add_rpc_args(g)
+    g.add_argument("names", nargs="*", help="variable names")
+    g.add_argument("--group", "-g", dest="groups", action="append",
+                   default=[], metavar="NAME",
+                   help="expand to all vars in a group; repeat for multiple")
+    g.add_argument("--list-groups", action="store_true",
+                   help="list known groups and exit (no device needed)")
+    g.set_defaults(func=cmd_get)
 
-  list paired devices (also the default action):
-      devices
-      devices list
+    r = sub.add_parser(
+        "rpc", parents=[common],
+        help="call an arbitrary JSON-RPC method",
+        epilog="examples:\n"
+               "  rpc --method GetVersion\n"
+               "  rpc --method Get --params '[\"SerialNumber\"]'\n"
+               "  rpc --method Set --params '{\"SetPressure\":10}'\n"
+               "  rpc --method GetDateTime --params -       # JSON from stdin\n"
+               "  rpc --method Set --params @params.json",
+        formatter_class=raw_fmt,
+    )
+    add_rpc_args(r)
+    r.add_argument("--method", required=True, help="RPC method name")
+    r.add_argument("--params", default=None,
+                   help="JSON params (literal, '-' stdin, or '@PATH')")
+    r.set_defaults(func=cmd_rpc)
 
-  give a device a friendly alias:
-      devices alias AA:BB:CC:DD:EE:FF bedroom
+    st = sub.add_parser(
+        "set", parents=[common],
+        help="write one or more settings (Set RPC)",
+        epilog="values default to string unless --type follows the pair.\n"
+               "types: str (default), int, float, bool, json.\n\n"
+               "examples:\n"
+               "  set TherapyMode AutoSet\n"
+               "  set SetPressure 10 --type int Mode AutoSet\n"
+               "  set RampEnable true --type bool\n"
+               "  set --json '{\"SetPressure\":10}'\n"
+               "  set --json -                      # JSON from stdin\n"
+               "  set --json @params.json           # JSON from file",
+        formatter_class=raw_fmt,
+    )
+    add_rpc_args(st)
+    st.add_argument("--json", dest="json_payload", default=None,
+                    help="params object as JSON literal, '-' stdin, or '@PATH'")
+    st.add_argument("rest", nargs=argparse.REMAINDER,
+                    help="NAME VALUE [--type T] [NAME2 VALUE2 [--type T2]] ...")
+    st.set_defaults(func=cmd_set)
 
-  rename an existing alias:
-      devices alias bedroom guestroom
+    dt = sub.add_parser(
+        "settime", parents=[common],
+        help="SetDateTime (default: host UTC now)",
+        epilog="TIME (optional) accepts:\n"
+               "  (empty) / now                  host UTC now\n"
+               "  2026-04-24T12:30:00Z           explicit ISO-8601\n"
+               "  2026-04-24T12:30:00            ISO, no TZ (local)\n"
+               "  2026-04-24 12:30:00            space variant\n"
+               "  2026-04-24                     midnight local\n"
+               "  12:30 / 12:30:45               today at that time, local\n"
+               "  +1h / -30m / +7d / +90s        relative to now\n"
+               "  1777061617                     unix epoch (seconds)\n"
+               "\nexamples:\n"
+               "  settime\n"
+               "  settime 2026-01-01T00:00:00Z\n"
+               "  settime +1h\n"
+               "  settime 12:30 --dry-run",
+        formatter_class=raw_fmt,
+    )
+    add_rpc_args(dt)
+    dt.add_argument("time", nargs="?", default=None,
+                    help="flexible date/time (see below); default is host UTC now")
+    dt.add_argument("--dry-run", action="store_true",
+                    help="print the payload without transmitting")
+    dt.set_defaults(func=cmd_settime)
 
-  remove an alias:
-      devices unalias bedroom
-""",
-        formatter_class=raw_fmt)
-    dev_sub = p_devices.add_subparsers(dest="devices_action")
+    s = sub.add_parser("session", parents=[common],
+                       help="interactive REPL, keeps the transport open")
+    add_rpc_args(s)
+    s.set_defaults(func=cmd_session)
 
-    p_scan = dev_sub.add_parser("scan", help="scan for AS11 devices")
-    p_scan.add_argument("--timeout", type=float, default=10.0)
+    stream = sub.add_parser(
+        "stream", parents=[common],
+        help="start real-time data stream (NDJSON to stdout)",
+        epilog="examples:\n"
+               "  stream\n"
+               "  stream --data-ids Leak-50hz,RespiratoryRate-50hz\n"
+               "  stream --sample-ms 100 --report-ms 500\n"
+               "  stream --duration 60                 # stop after 60s",
+        formatter_class=raw_fmt,
+    )
+    add_rpc_args(stream)
+    stream.add_argument("--data-ids", default=None,
+                        help="comma-separated data IDs to stream "
+                             "(default: a small sample)")
+    stream.add_argument("--sample-ms", type=int, default=200,
+                        help="sample interval ms")
+    stream.add_argument("--report-ms", type=int, default=1000,
+                        help="report interval ms")
+    stream.add_argument("--duration", type=float, default=None,
+                        help="stop after N seconds (default: until Ctrl-C)")
+    stream.set_defaults(func=cmd_stream)
 
-    dev_sub.add_parser("pair", help="pair with device",
-        epilog="the passkey appears on the device screen; enter it when prompted.",
-        formatter_class=raw_fmt)
+    sub_p = sub.add_parser(
+        "subscribe", parents=[common],
+        help="subscribe to device events (NDJSON to stdout)",
+    )
+    add_rpc_args(sub_p)
+    sub_p.add_argument("--events", default=None,
+                       help="comma-separated event IDs")
+    sub_p.add_argument("--duration", type=float, default=None,
+                       help="stop after N seconds (default: until Ctrl-C)")
+    sub_p.set_defaults(func=cmd_subscribe)
+
+    sp = sub.add_parser(
+        "spool", parents=[common],
+        help="download spool data from the device",
+        epilog="examples:\n"
+               "  spool Summary\n"
+               "  spool TherapyEvents-RespiratoryEvents --decode\n"
+               "  spool Summary --from-dt 2026-01-01T00:00:00.000Z "
+               "-o /tmp/summary.bin\n"
+               "  spool --list-types",
+        formatter_class=raw_fmt,
+    )
+    add_rpc_args(sp)
+    sp.add_argument("spool_type", nargs="?",
+                    help="spool type (see --list-types)")
+    sp.add_argument("--list-types", action="store_true",
+                    help="print known spool types and exit")
+    sp.add_argument("--from-dt", default=None,
+                    help="from datetime (ISO 8601); default 2000-01-01")
+    sp.add_argument("--max-size", type=int, default=4096,
+                    help="maxSpoolSize per round")
+    sp.add_argument("--max-rounds", type=int, default=100,
+                    help="cap on continuation rounds")
+    sp.add_argument("--no-follow", action="store_true",
+                    help="stop after first round; do not follow continuations")
+    sp.add_argument("--fragment-timeout", type=float, default=30.0,
+                    help="seconds to wait for all fragments of one round")
+    sp.add_argument("--decode", action="store_true",
+                    help="decode protobuf payload to stdout")
+    sp.add_argument("-o", "--output", default=None,
+                    help="write raw binary to this file")
+    sp.set_defaults(func=cmd_spool)
+
+    kn = sub.add_parser(
+        "known",
+        help="show known var/stream/event/spool names (offline, no device)",
+        epilog="examples:\n"
+               "  known                      list registries\n"
+               "  known vars                 list every known variable\n"
+               "  known vars groups          summary of var groupings\n"
+               "  known vars subtrees        aggregate-Get target list\n"
+               "  known vars autoset         filter by therapy-mode prefix\n"
+               "  known vars cellular        filter by topic keyword\n"
+               "  known vars Pressure        substring filter\n"
+               "  known vars TherapyMode     list members of a subtree group\n"
+               "  known streams              valid `stream --data-ids`\n"
+               "  known events               valid `subscribe --events`\n"
+               "  known spools               valid `spool` types",
+        formatter_class=raw_fmt,
+    )
+    kn.add_argument("known_action", nargs="?", choices=list(REGISTRIES),
+                    help="registry to list")
+    kn.add_argument("pattern", nargs="?", default=None,
+                    help="optional filter or sub-action")
+    kn.set_defaults(func=cmd_known)
+
+    dev = sub.add_parser(
+        "devices", parents=[common],
+        help="BLE device management (scan/pair/list/alias/unalias)",
+    )
+    dev_sub = dev.add_subparsers(dest="devices_action")
+
+    dev_scan = dev_sub.add_parser("scan", help="scan for AS11 BLE devices")
+    dev_scan.add_argument("--timeout", type=float, default=10.0)
 
     dev_sub.add_parser("list", help="list paired devices (default)")
 
-    p_alias = dev_sub.add_parser("alias", help="assign alias to a paired device")
-    p_alias.add_argument("target", help="MAC, UUID, or existing alias of the device")
-    p_alias.add_argument("name", help="new alias")
+    dev_pair = dev_sub.add_parser("pair", help="pair with a BLE device")
+    dev_pair.add_argument("--passkey", default=None,
+                          help="4-digit passkey shown on the device screen "
+                               "(prompted if omitted)")
 
-    p_unalias = dev_sub.add_parser("unalias", help="remove an alias")
-    p_unalias.add_argument("name", help="alias to remove")
+    dev_alias = dev_sub.add_parser("alias", help="assign an alias")
+    dev_alias.add_argument("target", help="MAC/UUID/existing alias")
+    dev_alias.add_argument("name", help="new alias")
 
-    p_get = sub.add_parser("get", help="read one or more settings (Get RPC)",
-        epilog="""examples:
-  get TherapyMode
-  get TherapyMode SetPressure SystemDateTime
+    dev_unalias = dev_sub.add_parser("unalias", help="remove an alias")
+    dev_unalias.add_argument("name", help="alias to remove")
 
-  get --group TherapyProfile            # user therapy settings
-  get --group TherapyMode               # per-mode pressure parameters
-  get --group ManufacturingSettings     # hardware/calibration/diagnostics
-  get --group DeviceConfiguration       # device identifiers + test-drive
-  get --group CellularModule            # cellular module identifiers
-  get --group Network                   # AccessPointName
-  get --group TherapyMeasurements       # live physiology (only during therapy)
-  get --group TherapyProfile --group DeviceConfiguration
+    dev.set_defaults(func=cmd_devices)
 
-group names are the firmware CDX subtree names (case-insensitive).
-list them all with `known vars groups`.
-""",
-        formatter_class=raw_fmt)
-    p_get.add_argument("names", nargs="*", help="setting names to read")
-    p_get.add_argument("--group", "-g", dest="groups", action="append",
-        default=[], metavar="NAME",
-        help="expand to all vars in a CDX group; repeat to query multiple groups")
+    return p
 
-    p_set = sub.add_parser("set", help="write one or more settings (Set RPC)",
-        epilog="""values default to string unless --type follows the pair.
-supported types: str (default), int, float, bool, json.
 
-examples:
-  set TherapyMode AutoSet
-  set SetPressure 10 --type int
-  set SetPressure 10 --type int Mode AutoSet
-  set RampEnable true --type bool AutoRampEnable false --type bool
-  set --json '{"SetPressure":10,"TherapyMode":"AutoSet"}'
-  set --json -                                         # read JSON from stdin
-  echo '{"SetPressure":10}' | as11_ble.py set --json -
-""",
-        formatter_class=raw_fmt)
-    p_set.add_argument("--json", dest="json_payload",
-        help="params object as a JSON string; use '-' to read from stdin")
-    p_set.add_argument("rest", nargs=argparse.REMAINDER,
-        help="NAME VALUE [--type T] [NAME2 VALUE2 [--type T2]] ...")
-
-    p_rpc = sub.add_parser("rpc", help="send JSON-RPC command",
-        epilog="""examples:
-  read one setting:
-      rpc --method Get --params '["TherapyMode"]'
-
-  read multiple settings:
-      rpc --method Get --params '["TherapyMode","SetPressure","SystemDateTime"]'
-
-  write a setting:
-      rpc --method Set --params '{"SetPressure":10}'
-
-  list firmware RPC versions:
-      rpc --method GetVersion
-""",
-        formatter_class=raw_fmt)
-    p_rpc.add_argument("--method", required=True, help="RPC method name")
-    p_rpc.add_argument("--debug", action="store_true", default=argparse.SUPPRESS,
-        help=argparse.SUPPRESS)
-    p_rpc.add_argument("--params", help="JSON params string")
-    p_rpc.add_argument("--vcid", type=lambda x: int(x, 0), default=None,
-        help="override TX VCID (hex, e.g. 0x0395)")
-    p_rpc.add_argument("--no-encrypt", action="store_true",
-        help="send plaintext (for non-standard VCIDs)")
-    p_rpc.add_argument("--no-length-prefix", action="store_true",
-        help="encrypt without 2-byte length prefix")
-    p_rpc.add_argument("--raw-hex", default=None,
-        help="send raw hex bytes instead of JSON-RPC (encrypted unless --no-encrypt)")
-    p_rpc.add_argument("--hmac", action="store_true",
-        help="append HMAC-SHA256(K, payload) to encrypted data")
-
-    p_stream = sub.add_parser("stream", help="start real-time data stream (NDJSON)",
-        epilog="""examples:
-  default streams at 1Hz:
-      stream
-
-  mask pressure at 50Hz (sample 20ms, report 100ms):
-      stream --data-ids MaskPressure-50hz --sample-ms 20 --report-ms 100
-
-  multiple signals:
-      stream --data-ids InspiratoryPressure-50hz,Leak-TwoSecond
-
-firmware constraint: reportIntervalMs must be <= sampleIntervalMs * 5.
-stop with Ctrl-C; StartStream with empty dataIds is sent on exit.
-""",
-        formatter_class=raw_fmt)
-    p_stream.add_argument("--data-ids", default=None,
-        help="comma-separated stream IDs (default: InspiratoryPressure-50hz,Leak-TwoSecond,RemainingRampTime)")
-    p_stream.add_argument("--sample-ms", type=int, default=200,
-        help="sample interval ms (min 10, report must be <= sample*5)")
-    p_stream.add_argument("--report-ms", type=int, default=1000, help="report interval ms")
-
-    p_sub = sub.add_parser("subscribe", help="subscribe to device events (NDJSON)",
-        epilog="stop with Ctrl-C.",
-        formatter_class=raw_fmt)
-    p_sub.add_argument("--events", default=None, help="comma-separated event IDs")
-
-    p_spool = sub.add_parser("spool", help="download spool data",
-        epilog="""types: """ + ", ".join(SPOOL_TYPES) + """
-
-examples:
-  human-readable session summary (auto-continues on MORE_DATA_PENDING):
-      spool Summary --decode
-
-  therapy events since a date:
-      spool TherapyEvents-RespiratoryEvents --from-dt 2025-01-01T00:00:00.000Z --decode
-
-  save raw protobuf + print decoded to stdout:
-      spool Summary --decode -o summary.bin
-
-  base64 envelope for further processing (default):
-      spool Summary
-
-  only one round (stops early; output JSON/stderr prints nextSpoolAddress):
-      spool Summary --no-follow
-
-`nextSpoolAddress` (shown when stopped early) is a ready-to-use spoolAddress
-for a fresh StartSpool call to continue from where we left off.
-""",
-        formatter_class=raw_fmt)
-    p_spool.add_argument("spool_type", help="spool type (e.g. Summary, TherapyEvents-RespiratoryEvents)")
-    p_spool.add_argument("--from-dt", default=None, help="from datetime (ISO 8601)")
-    p_spool.add_argument("--max-size", type=int, default=4096, help="max spool size per round")
-    p_spool.add_argument("--no-follow", action="store_true",
-        help="stop after one round even if status=SPOOL_COMPLETE_MORE_DATA_PENDING")
-    p_spool.add_argument("--max-rounds", type=int, default=100,
-        help="safety cap on auto-continuation rounds (default 100)")
-    p_spool.add_argument("--decode", action="store_true",
-        help="print human-readable protobuf tree to stdout (timestamps, nested fields)")
-    p_spool.add_argument("-o", "--output", help="output file (binary). Can combine with --decode.")
-
-    p_known = sub.add_parser("known",
-        help="show known var/stream/event/spool names (discovered from firmware)",
-        epilog="""examples:
-  known                     registry overview
-  known vars                all 402 variable names
-  known vars groups         subgrouping breakdown (modes, topics, CDX groups)
-
-  known vars cpap           therapy-mode prefix filter (Cpap-*)
-  known vars ivaps
-  known vars asvauto
-
-  known vars summary        topic filter (Summary-*)
-  known vars alarm
-  known vars humidifier
-  known vars reminder
-
-  known vars TherapyProfile         list members of the TherapyProfile CDX group
-  known vars ManufacturingSettings
-  known vars TherapyMode
-
-  known vars Pressure       fall-through substring match (also matches subtrees)
-
-  known vars subtrees       aggregate `get` targets (SettingProfiles, ...)
-  known subtrees Profile    filter subtree list
-  known streams
-  known events Alarm
-  known spools
-
-note: these lists are advisory; get/set/stream/subscribe/spool accept any string.
-      `get SettingProfiles` returns the whole subtree as aggregated JSON in
-      ONE rpc - different from `get --group ConfigurationProfiles` which
-      expands client-side to many individual Gets.
-""",
-        formatter_class=raw_fmt)
-    p_known.add_argument("known_action", nargs="?", choices=list(REGISTRIES),
-        help="which registry to list (omit for overview)")
-    p_known.add_argument("pattern", nargs="?", default=None,
-        help="case-insensitive substring filter")
-
-    args = parser.parse_args()
-
-    level = logging.DEBUG if getattr(args, 'debug', False) else logging.WARNING
-    if getattr(args, 'verbose', False):
+def _configure_logging(args: argparse.Namespace) -> None:
+    if getattr(args, "debug", False):
+        level = logging.DEBUG
+    elif getattr(args, "verbose", False):
         level = logging.INFO
-    logging.basicConfig(level=level, format="%(name)s: %(message)s")
-
-    if args.command == "known":
-        cmd_known(args)
-    elif args.command == "get":
-        asyncio.run(cmd_get(args))
-    elif args.command == "set":
-        asyncio.run(cmd_set(args))
-    elif args.command == "rpc":
-        asyncio.run(cmd_rpc(args))
-    elif args.command == "stream":
-        asyncio.run(cmd_stream(args))
-    elif args.command == "subscribe":
-        asyncio.run(cmd_subscribe(args))
-    elif args.command == "spool":
-        asyncio.run(cmd_spool(args))
-    elif args.command == "devices":
-        action = args.devices_action or "list"
-        if action == "scan":
-            asyncio.run(cmd_scan(args))
-        elif action == "pair":
-            asyncio.run(cmd_pair(args))
-        elif action == "list":
-            cmd_devices(args)
-        elif action == "alias":
-            cmd_alias(args)
-        elif action == "unalias":
-            cmd_unalias(args)
     else:
-        parser.print_help()
+        level = logging.WARNING
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    _apply_common_defaults(args)
+    _configure_logging(args)
+    return args.func(args)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

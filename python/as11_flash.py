@@ -1,41 +1,59 @@
 #!/usr/bin/env python3
-"""
-AS11 OTA uploader.
+"""AS11 Flash / OTA Tool.
 
-Examples:
-    as11_ota.py targets
-    as11_ota.py build --block config --desc-preset 15.8.4.0 -f firmware.bin -o Upgrade-CONF.abc
-    as11_ota.py info Upgrade-CONF.abc
-    as11_ota.py --addr as11 upload Upgrade-CONF.abc
-    as11_ota.py --addr as11 flash --block config -f firmware.bin
-    as11_ota.py --addr as11 flash --block full --format 0006 --include-full-flash --apply --key $KOTA -f firmware.bin
+Build, upload and apply firmware images on AirSense 11 / AirCurve 11
+devices. Works over BLE and CAN; transport selected with -d/--device:
+
+    -d ble:<mac|alias>     BLE
+    -d can:<port>          Waveshare USB-CAN-A
+    --addr <x>             same as -d ble:<x>
+    -p/--port <x>          same as -d can:<x>
+
+Offline subcommands (no device needed):
+    targets    list known block regions
+    build      assemble a .abc container from firmware bytes
+    info       inspect a .abc container
+
+Device-touching subcommands:
+    upload     push a pre-built .abc; verify-only unless --apply / --apply-plain
+    flash      build .abc from firmware, optionally apply
+
+Apply-mode decision:
+    --apply-plain          ApplyUpgrade (unauthenticated)
+    --apply-authenticated  ApplyAuthenticatedUpgrade (+HMAC)
+    --apply                alias for --apply-authenticated
+    (no flag)              verify-only; stop after CheckUpgradeFile
+
+Authenticated apply key resolution: --key HEX32, --key-file PATH, $AS11_OTA_KEY,
+built-in DEFAULT_K_OTA_HEX
+
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import binascii
 import hashlib
 import hmac
 import logging
+import os
 import re
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-# defer import to allow offline target to work without ble stack
-def _import_ble():
-    try:
-        from as11_ble import As11Connection, load_credentials, resolve_addr
-    except ImportError as e:
-        raise SystemExit(
-            f"BLE functionality requires as11_ble (which imports bleak): {e}\n"
-            f"run this from the python/ directory, or install bleak")
-    return As11Connection, load_credentials, resolve_addr
 
-log = logging.getLogger("as11_ota")
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE))
+sys.path.insert(0, str(_HERE / "lib"))
+
+from as11_rpc import (  # noqa: E402
+    Transport, TransportError, FramingError,
+)
+
+
+log = logging.getLogger("as11.flash")
 
 
 _FORCE_HELP = ("override local validation warnings (input image HW CRC "
@@ -58,9 +76,8 @@ COMPONENT_LEN  = 0x10
 DEFAULT_COMPONENT_0005 = "PacificFG"
 COMPONENTS_0006 = ("PacificFG", "AlarmModule")
 
-# (parser cap is 1000 hex chars = 500 bytes).
 XFER_RAW_BYTES    = 500
-LONG_RPC_TIMEOUT  = 120.0   # CheckUpgradeFile / Apply* drain NOR flash; be patient
+LONG_RPC_TIMEOUT  = 120.0
 BLOCK_RPC_TIMEOUT = 15.0
 
 FLASH_BASE       = 0x08000000
@@ -138,8 +155,6 @@ BLOCK_ALIASES: dict[str, str] = {
 }
 
 # Per-firmware descriptor presets for 0005 containers. 
-# These are the firmware backed constants that compared against descriptor
-# offsets 0x08 and 0x0c respectively.
 # Only CONF/APPL/APCX/FGBL targets need them. FGCB (and all of format 0006)
 # ignores these fields.
 DESC_PRESETS = {
@@ -153,14 +168,10 @@ DESC_PRESETS = {
     },
 }
 
-# K_ota is the 32-byte HMAC key the OTA verifier signs authenticated-apply
-# tags with. Pulled via SWD from SecurityDataServer this+0x108
-# Whether this key is the same across all AS11 units or provisioned per-device is an open question
-# if ApplyAuthenticatedUpgrade fails with -11306, it's per-device and you need to extract your own.
+# K_ota is the 32-byte HMAC key the OTA verifier signs authenticated-apply tags with
 DEFAULT_K_OTA_HEX = "9bc3e80b872227305052e5d045d8297ee90b0ddb49212a91bdad4ebbaa981368"
 
 
-# ---------------------------------------------------------------------------
 
 def u32_le(value: int) -> bytes:
     if not 0 <= value <= 0xFFFFFFFF:
@@ -260,16 +271,14 @@ def normalize_version(raw: str | None) -> str | None:
     return m.group(1) if m else None
 
 
-async def fetch_pci(conn) -> int | None:
-    """Query the device's PCI value. Returns None on any failure
+def fetch_pci(t: Transport) -> int | None:
+    """Query the device's PCI value. Returns None on any failure.
 
-    We also query `_PRI` in the same call for log context - if PRI==0
-    the device doesn't actually check PCI, so the fallback to 0 when
-    PCI fetch fails is harmless on that device.
+    Also queries `_PRI` for log context. If PRI==0 the device doesn't
+    actually check PCI, so the fallback to 0 is harmless on that device.
     """
     try:
-        resp = await conn.send_rpc("Get", ["_PCI", "_PRI"],
-                                   encrypted=True, timeout=10.0)
+        resp = t.rpc("Get", ["_PCI", "_PRI"], timeout=10.0)
     except Exception as e:
         log.warning("Get(_PCI,_PRI) failed: %s", e)
         return None
@@ -291,13 +300,10 @@ async def fetch_pci(conn) -> int | None:
         return None
 
 
-async def fetch_firmware_version(conn) -> str | None:
-    """Query the device's ApplicationIdentifier and return a normalized
-    "major.minor.build.sub" string, or None on failure.
-    """
+def fetch_firmware_version(t: Transport) -> str | None:
+    """Query the device's ApplicationIdentifier; normalized version or None."""
     try:
-        resp = await conn.send_rpc("Get", ["ApplicationIdentifier"],
-                                   encrypted=True, timeout=10.0)
+        resp = t.rpc("Get", ["ApplicationIdentifier"], timeout=10.0)
     except Exception as e:
         log.warning("Get(ApplicationIdentifier) failed: %s", e)
         return None
@@ -427,26 +433,15 @@ def _auto_preset_needed(args, target: TargetRegion) -> bool:
 def resolve_descriptor_words(args, target: TargetRegion,
                              *, detected_preset: str | None = None
                              ) -> tuple[int, int, int]:
-    """Combine --desc-preset with explicit --desc2/--desc3/--pci.
+    """Combine --desc-preset with explicit --desc2/--desc3/--pci"""
 
-    `detected_preset` is the firmware version string auto-detected by
-    `cmd_flash`. When `args.desc_preset == "auto"` it substitutes in.
-
-    Every "auto but detection failed" or "auto but version not in presets"
-    case is caught earlier (by `cmd_flash.detect_preset_for_descriptor` or
-    `cmd_build`'s pre-check). By the time we get here, if desc_preset is
-    "auto" we either have a valid detected_preset, or the target doesn't
-    actually need the fields. So this function only handles the remaining
-    straightforward case: a preset key, optional overrides, and a
-    target-requirement check for typos or --desc-preset none.
-    """
     desc2     = parse_u32(args.desc2,     name="desc2")
     desc3     = parse_u32(args.desc3,     name="desc3")
     pci = parse_u32(getattr(args, "pci", None), name="pci")
 
     preset_key = args.desc_preset
     if preset_key == "auto":
-        preset_key = detected_preset   # may be None if target didn't need it
+        preset_key = detected_preset
 
     if preset_key and preset_key != "none" and preset_key in DESC_PRESETS:
         p = DESC_PRESETS[preset_key]
@@ -647,83 +642,115 @@ def print_info(info: dict, path: str | None = None) -> None:
 
 
 
-async def _send_block(conn: As11Connection, params: dict) -> None:
-    """Send one UpgradeDataBlock."""
-    resp = await conn.send_rpc("UpgradeDataBlock", params,
-                               encrypted=True,
-                               timeout=BLOCK_RPC_TIMEOUT,
-                               post_send_delay=0.0)
-    if resp.get("result") is True:
-        return
-    raise RuntimeError(
-        f"UpgradeDataBlock @0x{params['fileOffset']:08x} rejected by "
-        f"device (result={resp.get('result')!r}). Restart the upload "
-        f"with a fresh InitiateUpgrade.")
+BLOCK_ATTEMPTS = 3  # per-UpgradeDataBlock retry budget
 
 
-# Apply-mode resolution
-# Three dispositions for the apply step:
-#   "none"          - stop after CheckUpgradeFile
-#   "plain"         - ApplyUpgrade (unauthenticated, admin VCID 0x396 only)
-#   "authenticated" - ApplyAuthenticatedUpgrade (HMAC with K_ota)
+def _send_block(t: Transport, params: dict) -> None:
+    """Send one UpgradeDataBlock. Retries up to BLOCK_ATTEMPTS times on FramingError / TimeoutError.
+       UpgradeDataBlock is offset-addressed, so retrying is safe
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, BLOCK_ATTEMPTS + 1):
+        try:
+            resp = t.rpc("UpgradeDataBlock", params,
+                         timeout=BLOCK_RPC_TIMEOUT)
+            if resp.get("result") is True:
+                return
+            raise RuntimeError(
+                f"UpgradeDataBlock @0x{params['fileOffset']:08x} rejected "
+                f"by device (result={resp.get('result')!r}). Restart the "
+                f"upload with a fresh InitiateUpgrade.")
+        except (TimeoutError, FramingError) as exc:
+            last_exc = exc
+            if attempt < BLOCK_ATTEMPTS:
+                log.warning("block @0x%08x attempt %d/%d: %s; retrying",
+                            params['fileOffset'], attempt, BLOCK_ATTEMPTS, exc)
+                continue
+            raise
+    assert last_exc is not None
+    raise last_exc
 
-ApplyMode = str   # Literal["none", "plain", "authenticated"] would need
-                  # `from typing import Literal`; keep str for minimal churn.
+
+
+ApplyMode = str
 APPLY_NONE          = "none"
 APPLY_PLAIN         = "plain"
 APPLY_AUTHENTICATED = "authenticated"
 
 
-def resolve_apply_mode(args) -> ApplyMode:
+def resolve_apply_mode(args, t: Transport | None = None) -> ApplyMode:
+    """Pick an apply disposition:
+        --apply-plain               -> PLAIN   (ApplyUpgrade)
+        --apply / --apply-authenticated -> AUTHENTICATED (ApplyAuthenticatedUpgrade + HMAC)
+        (nothing)                   -> NONE    (verify-only, stop after CheckUpgradeFile)
     """
-      (no flag)       -> NONE           verify-only
-      --apply         -> AUTHENTICATED  ApplyAuthenticatedUpgrade  (+HMAC)
-      --apply-plain   -> PLAIN          ApplyUpgrade               (admin VCID)
-    """
-    want_auth  = bool(getattr(args, "apply", False))
+    want_auth = bool(getattr(args, "apply", False)
+                     or getattr(args, "apply_authenticated", False))
     want_plain = bool(getattr(args, "apply_plain", False))
     if want_auth and want_plain:
-        raise SystemExit("pass only one of --apply / --apply-plain")
-    if want_plain: return APPLY_PLAIN
-    if want_auth:  return APPLY_AUTHENTICATED
+        raise SystemExit("pass only one of --apply / --apply-authenticated / --apply-plain")
+    if want_plain:
+        return APPLY_PLAIN
+    if want_auth:
+        return APPLY_AUTHENTICATED
     return APPLY_NONE
 
 
+def build_transport_for_flash(args) -> Transport:
+    spec = _resolve_device_spec(args)
 
-from contextlib import asynccontextmanager
+    if spec.startswith("ble:"):
+        target = spec[4:]
+        if not target:
+            raise SystemExit("ble: spec needs MAC / UUID / alias")
+        from as11_ble import BleTransport
+        t = BleTransport.from_args(target, args)
+        t.connect()
+        return t
+
+    if spec.startswith("can:"):
+        target = spec[4:]
+        if not target:
+            raise SystemExit("can: spec needs serial port path")
+        from as11_can_waveshare import CanWaveshareTransport
+        t = CanWaveshareTransport.from_args(target, args)
+        t.connect()
+        return t
+
+    raise SystemExit(
+        f"unrecognised device spec {spec!r}; expected ble:<addr> or can:<port>"
+    )
 
 
-@asynccontextmanager
-async def open_session(args):
-    """Resolve address + creds, connect, reconnect, yield the live
-    As11Connection. Cleans up on exit regardless of failure mode."""
-    As11Connection, load_credentials, resolve_addr = _import_ble()
-    addr = resolve_addr(args.addr)
-    creds = load_credentials(addr)
-    if not creds.get("clientId") or not creds.get("masterPairKey"):
-        raise SystemExit(f"no saved credentials for {addr}; run "
-                         f"`as11_ble.py --addr {addr} devices pair` first.")
-
-    conn = As11Connection(debug=args.debug)
-    try:
-        await conn.connect(addr)
-        await conn.reconnect(creds["clientId"], creds["masterPairKey"])
-        yield conn
-    finally:
-        try:
-            await conn.disconnect()
-        except Exception:
-            pass
+def _resolve_device_spec(args) -> str:
+    if getattr(args, "device", None):
+        return args.device
+    if getattr(args, "addr", None):
+        return f"ble:{args.addr}"
+    if getattr(args, "port", None):
+        return f"can:{args.port}"
+    if os.environ.get("AS11_ADDR"):
+        return f"ble:{os.environ['AS11_ADDR']}"
+    if os.environ.get("AS11_CAN_PORT"):
+        return f"can:{os.environ['AS11_CAN_PORT']}"
+    raise SystemExit(
+        "no device: pass -d/--device ble:<addr> or can:<port>, "
+        "--addr <ble>, -p <can-port>, or set AS11_ADDR / AS11_CAN_PORT"
+    )
 
 
-# Upload phases
+def transport_supports_encrypted(t: Transport) -> bool:
+    return bool(getattr(t, "supports_encrypted", False))
 
-async def phase_initiate(conn: As11Connection, total: int) -> int:
-    """InitiateUpgrade -> validated raw-bytes-per-block."""
+
+# Upload phases. Synchronous, transport-backed.
+
+def phase_initiate(t: Transport, total: int) -> int:
+    """InitiateUpgrade -> device-advertised raw-bytes-per-block."""
     print(f"[1/3] InitiateUpgrade size={total}")
-    resp = await conn.send_rpc("InitiateUpgrade",
-                               {"upgradeFileSize": total},
-                               encrypted=True, timeout=BLOCK_RPC_TIMEOUT)
+    resp = t.rpc("InitiateUpgrade",
+                 {"upgradeFileSize": total},
+                 timeout=BLOCK_RPC_TIMEOUT)
     raw_block = int(resp.get("result", {}).get("xferBlockSize", XFER_RAW_BYTES))
     if raw_block <= 0 or raw_block > XFER_RAW_BYTES:
         raise RuntimeError(f"device returned suspicious xferBlockSize={raw_block}")
@@ -732,20 +759,23 @@ async def phase_initiate(conn: As11Connection, total: int) -> int:
     return raw_block
 
 
-async def phase_stream(conn: As11Connection, abc: bytes,
-                       raw_block: int, *,
-                       block_delay_s: float) -> None:
-    """UpgradeDataBlock loop with progress bar. Silences the `as11_ble`
-    logger for the duration so per-RPC INFO lines don't stomp the bar."""
+def phase_stream(t: Transport, abc: bytes,
+                 raw_block: int, *,
+                 block_delay_s: float) -> None:
+    """UpgradeDataBlock loop with progress bar."""
     total = len(abc)
     n_blocks = (total + raw_block - 1) // raw_block
     print(f"[2/3] UpgradeDataBlock x{n_blocks} "
           f"({raw_block} raw B/block, {raw_block * 2} hex chars/block)")
 
-    ble_log = logging.getLogger("as11_ble")
-    prev_level = ble_log.level
-    if prev_level < logging.WARNING:
-        ble_log.setLevel(logging.WARNING)
+    # Silence noisy per-frame debug logs so the progress line stays readable.
+    noisy_loggers = [logging.getLogger(n) for n in
+                     ("as11_ble", "as11.ble",
+                      "as11.can_waveshare", "as11.flash")]
+    prev_levels = [(lg, lg.level) for lg in noisy_loggers]
+    for lg, _ in prev_levels:
+        if lg.level < logging.WARNING:
+            lg.setLevel(logging.WARNING)
 
     t0 = time.monotonic()
     last_print = t0
@@ -753,12 +783,12 @@ async def phase_stream(conn: As11Connection, abc: bytes,
         for i in range(n_blocks):
             off = i * raw_block
             chunk = abc[off:off + raw_block]
-            await _send_block(
-                conn,
+            _send_block(
+                t,
                 {"fileOffset": off, "encoding": "AsciiHex",
                  "data": chunk.hex().upper()})
             if block_delay_s > 0:
-                await asyncio.sleep(block_delay_s)
+                time.sleep(block_delay_s)
 
             now = time.monotonic()
             if now - last_print >= 1.0 or i == n_blocks - 1:
@@ -772,43 +802,37 @@ async def phase_stream(conn: As11Connection, abc: bytes,
                       end="\r", flush=True)
                 last_print = now
     finally:
-        ble_log.setLevel(prev_level)
-    print()   # newline after progress line
+        for lg, lvl in prev_levels:
+            lg.setLevel(lvl)
+    print()
 
 
-async def phase_check(conn: As11Connection, file_hash: str,
-                      *, verify_timeout: float) -> None:
-    """CheckUpgradeFile. Device drains NOR staging before replying - can
-    take tens of seconds. Propagates device errors as RuntimeError."""
+def phase_check(t: Transport, file_hash: str,
+                *, verify_timeout: float) -> None:
+    """CheckUpgradeFile. can take tens of seconds."""
+
     print(f"[3/3] CheckUpgradeFile hash={file_hash[:16]}...  "
           f"(timeout {verify_timeout:.0f}s)")
-    resp = await conn.send_rpc("CheckUpgradeFile",
-                               {"upgradeFileHash": file_hash},
-                               encrypted=True, timeout=verify_timeout)
+    resp = t.rpc("CheckUpgradeFile",
+                 {"upgradeFileHash": file_hash},
+                 timeout=verify_timeout)
     print(f"  result: {resp.get('result')!r}")
 
 
-async def phase_apply(conn: As11Connection, *,
-                      mode: ApplyMode,
-                      file_hash: str, file_hash_bytes: bytes,
-                      key: bytes,
-                      reset_settings: bool,
-                      apply_vcid: int | None,
-                      verify_timeout: float) -> None:
-    """ApplyUpgrade or ApplyAuthenticatedUpgrade"""
-
+def phase_apply(t: Transport, *,
+                mode: ApplyMode,
+                file_hash: str, file_hash_bytes: bytes,
+                key: bytes,
+                reset_settings: bool,
+                verify_timeout: float) -> None:
+    """ApplyUpgrade or ApplyAuthenticatedUpgrade."""
     if mode == APPLY_PLAIN:
-        # Firmware defaults resetSettingsToDefault to true when omitted;
-        # send it explicitly either way so behaviour is deterministic.
         params = {
             "upgradeFileHash": file_hash,
             "resetSettingsToDefault": bool(reset_settings),
         }
         print(f"[apply] ApplyUpgrade  (timeout {verify_timeout:.0f}s)")
-        resp = await conn.send_rpc("ApplyUpgrade", params,
-                                   encrypted=True,
-                                   vcid_override=apply_vcid,
-                                   timeout=verify_timeout)
+        resp = t.rpc("ApplyUpgrade", params, timeout=verify_timeout)
         print(f"  result: {resp.get('result')!r}")
         return
 
@@ -816,10 +840,10 @@ async def phase_apply(conn: As11Connection, *,
         tag = hmac.new(key, file_hash_bytes, hashlib.sha256).hexdigest().upper()
         print(f"[apply] ApplyAuthenticatedUpgrade tag={tag[:16]}...  "
               f"(timeout {verify_timeout:.0f}s)")
-        resp = await conn.send_rpc("ApplyAuthenticatedUpgrade",
-                                   {"upgradeFileHash": file_hash,
-                                    "authentication":  tag},
-                                   encrypted=True, timeout=verify_timeout)
+        resp = t.rpc("ApplyAuthenticatedUpgrade",
+                     {"upgradeFileHash": file_hash,
+                      "authentication":  tag},
+                     timeout=verify_timeout)
         print(f"  result: {resp.get('result')!r}")
         print("Device should reboot and hand off to the bootloader/apply stage.")
         return
@@ -827,22 +851,20 @@ async def phase_apply(conn: As11Connection, *,
     raise ValueError(f"phase_apply called with mode={mode!r}; caller bug")
 
 
-async def run_upload(conn: As11Connection, abc: bytes, *,
-                     apply_mode: ApplyMode,
-                     apply_vcid: int | None,
-                     reset_settings: bool,
-                     key: bytes,
-                     block_delay_s: float,
-                     verify_timeout: float) -> int:
+def run_upload(t: Transport, abc: bytes, *,
+               apply_mode: ApplyMode,
+               reset_settings: bool,
+               key: bytes,
+               block_delay_s: float,
+               verify_timeout: float) -> int:
 
     total = len(abc)
     file_hash_bytes = hashlib.sha256(abc).digest()
     file_hash = file_hash_bytes.hex().upper()
 
-    raw_block = await phase_initiate(conn, total)
-    await phase_stream(conn, abc, raw_block,
-                       block_delay_s=block_delay_s)
-    await phase_check(conn, file_hash, verify_timeout=verify_timeout)
+    raw_block = phase_initiate(t, total)
+    phase_stream(t, abc, raw_block, block_delay_s=block_delay_s)
+    phase_check(t, file_hash, verify_timeout=verify_timeout)
 
     if apply_mode == APPLY_NONE:
         print()
@@ -850,13 +872,12 @@ async def run_upload(conn: As11Connection, abc: bytes, *,
         print("--apply-plain). Pass --apply once you're ready to reboot.")
         return 0
 
-    await phase_apply(conn,
-                      mode=apply_mode,
-                      file_hash=file_hash,
-                      file_hash_bytes=file_hash_bytes,
-                      key=key, reset_settings=reset_settings,
-                      apply_vcid=apply_vcid,
-                      verify_timeout=verify_timeout)
+    phase_apply(t,
+                mode=apply_mode,
+                file_hash=file_hash,
+                file_hash_bytes=file_hash_bytes,
+                key=key, reset_settings=reset_settings,
+                verify_timeout=verify_timeout)
     return 0
 
 
@@ -982,12 +1003,11 @@ def cmd_info(args) -> int:
     return 0
 
 
-async def detect_preset_for_descriptor(conn: As11Connection) -> str:
-    """Query the device's ApplicationIdentifier and map it to a preset
-    key in DESC_PRESETS. Raises SystemExit with a clean message on any
-    failure path so the caller doesn't have to duplicate error handling."""
+def detect_preset_for_descriptor(t: Transport) -> str:
+    """Query the device's ApplicationIdentifier and map it to DESC_PRESETS.
+    Raises SystemExit with a clean message on any failure path."""
     print("[auto] querying device firmware version...")
-    detected = await fetch_firmware_version(conn)
+    detected = fetch_firmware_version(t)
     if detected is None:
         raise SystemExit(
             "auto-detect failed: device didn't return ApplicationIdentifier. "
@@ -1004,9 +1024,7 @@ async def detect_preset_for_descriptor(conn: As11Connection) -> str:
 
 
 def _upload_kwargs_from_args(args) -> dict:
-    """Build the keyword args to run_upload() from parsed CLI args. Extracted
-    so cmd_upload and cmd_flash don't duplicate validation + parsing.
-    """
+    """Build the keyword args to run_upload() from parsed CLI args."""
     apply_mode = resolve_apply_mode(args)
     if apply_mode == APPLY_AUTHENTICATED:
         key = parse_key(getattr(args, "key", None),
@@ -1015,8 +1033,6 @@ def _upload_kwargs_from_args(args) -> dict:
         key = b""   # unused downstream; phase_apply guards on mode
     return dict(
         apply_mode=apply_mode,
-        apply_vcid=parse_u32(getattr(args, "apply_vcid", None),
-                             name="apply-vcid"),
         reset_settings=bool(getattr(args, "reset_settings", False)),
         key=key,
         block_delay_s=args.block_delay,
@@ -1097,10 +1113,11 @@ def cmd_upload(args) -> int:
 
     upload_kwargs = _upload_kwargs_from_args(args)
 
-    async def run() -> int:
-        async with open_session(args) as conn:
-            return await run_upload(conn, abc, **upload_kwargs)
-    return asyncio.run(run())
+    t = build_transport_for_flash(args)
+    try:
+        return run_upload(t, abc, **upload_kwargs)
+    finally:
+        t.close()
 
 
 def cmd_flash(args) -> int:
@@ -1139,36 +1156,37 @@ def cmd_flash(args) -> int:
     # for 0006 (no secondary descriptor at all).
     pci_fetch_needed = (args.format == "0005" and args.pci is None)
 
-    async def run() -> int:
-        async with open_session(args) as conn:
-            detected_preset = None
-            if need_detect:
-                detected_preset = await detect_preset_for_descriptor(conn)
+    t = build_transport_for_flash(args)
+    try:
+        detected_preset = None
+        if need_detect:
+            detected_preset = detect_preset_for_descriptor(t)
 
-            if pci_fetch_needed:
-                print("[auto] querying device _PCI (and _PRI for context)...")
-                pci_val = await fetch_pci(conn)
-                if pci_val is None:
-                    log.warning("could not read _PCI from device; falling "
-                                "back to 0. If CheckUpgradeFile rejects "
-                                "with -11309 it's likely this device has "
-                                "_PRI=1 and enforces the check. Query "
-                                "manually (`as11_ble.py --addr <dev> get "
-                                "_PCI _PRI`) and pass --pci.")
-                else:
-                    print(f"[auto] using _PCI=0x{pci_val:08X} in descriptor")
-                    args.pci = f"0x{pci_val:08X}"
+        if pci_fetch_needed:
+            print("[auto] querying device _PCI (and _PRI for context)...")
+            pci_val = fetch_pci(t)
+            if pci_val is None:
+                log.warning("could not read _PCI from device; falling "
+                            "back to 0. If CheckUpgradeFile rejects "
+                            "with -11309 it's likely this device has "
+                            "_PRI=1 and enforces the check. Query "
+                            "manually (e.g. `as11_config.py get _PCI "
+                            "_PRI`) and pass --pci.")
+            else:
+                print(f"[auto] using _PCI=0x{pci_val:08X} in descriptor")
+                args.pci = f"0x{pci_val:08X}"
 
-            abc, _, fmt = _build_container(args, detected_preset=detected_preset)
-            print(f"Built {fmt.decode('ascii')} container for {target.code}  "
-                  f"({target.flash_start:#010x}..{target.flash_end:#010x}, "
-                  f"{len(abc)} bytes)")
-            if args.save_abc:
-                Path(args.save_abc).write_bytes(abc)
-                print(f"Saved built container to {args.save_abc}")
+        abc, _, fmt = _build_container(args, detected_preset=detected_preset)
+        print(f"Built {fmt.decode('ascii')} container for {target.code}  "
+              f"({target.flash_start:#010x}..{target.flash_end:#010x}, "
+              f"{len(abc)} bytes)")
+        if args.save_abc:
+            Path(args.save_abc).write_bytes(abc)
+            print(f"Saved built container to {args.save_abc}")
 
-            return await run_upload(conn, abc, **upload_kwargs)
-    return asyncio.run(run())
+        return run_upload(t, abc, **upload_kwargs)
+    finally:
+        t.close()
 
 
 
@@ -1216,7 +1234,7 @@ def _add_build_args(p: argparse.ArgumentParser) -> None:
                         "PCI code (firmware var 0x0232). The app verifier "
                         "checks it only when PRI (var 0x0111) == 1 - a "
                         "runtime gate. To fetch from a live device: "
-                        "`as11_ble.py --addr <dev> get _PCI _PRI`. "
+                        "`as11_config.py --addr <dev> get _PCI _PRI`. "
                         "`flash` auto-fetches _PCI (and logs _PRI for "
                         "context) when this is omitted; `build` defaults "
                         "to 0 since it can't query a device.")
@@ -1236,21 +1254,20 @@ def _add_build_args(p: argparse.ArgumentParser) -> None:
 
 
 def _add_upload_args(p: argparse.ArgumentParser) -> None:
-    """All BLE upload + apply options."""
+    """Upload + apply options."""
     p.add_argument("--apply", action="store_true",
                    help="after CheckUpgradeFile succeeds, call "
-                        "ApplyAuthenticatedUpgrade (requires --key)")
+                        "ApplyAuthenticatedUpgrade (uses --key or default K_ota)")
+    p.add_argument("--apply-authenticated", action="store_true",
+                   help="synonym for --apply")
     p.add_argument("--apply-plain", action="store_true",
                    help="after CheckUpgradeFile succeeds, call "
-                        "unauthenticated ApplyUpgrade (only reachable on "
-                        "admin VCID 0x0396).")
-    p.add_argument("--apply-vcid", metavar="VCID",
-                   help="override VCID for the apply RPC (e.g. 0x0396)")
+                        "unauthenticated ApplyUpgrade.")
     p.add_argument("--reset-settings", action="store_true",
                    help="send resetSettingsToDefault=true with --apply-plain "
                         "(default sends false to preserve settings)")
     p.add_argument("--key", metavar="HEX32",
-                   help="K_ota as 64 hex chars")
+                   help="K_ota as 64 hex chars (env: AS11_OTA_KEY)")
     p.add_argument("--key-file", metavar="PATH",
                    help="K_ota as a 32-byte binary file or a hex-text file")
     p.add_argument("--block-delay", type=float, default=0.0, metavar="SECONDS",
@@ -1268,20 +1285,29 @@ def _add_upload_args(p: argparse.ArgumentParser) -> None:
                    help=_FORCE_HELP)
 
 
+def _add_device_args(p: argparse.ArgumentParser) -> None:
+    """Device-selection args, matching as11_config.py conventions."""
+    g = p.add_argument_group("device selection")
+    g.add_argument("-d", "--device", default=None,
+                   help="device spec: ble:<mac|alias>, can:<port>")
+    g.add_argument("--addr", default=None,
+                   help="BLE target (compat for -d ble:<x>; env: AS11_ADDR)")
+    g.add_argument("-p", "--port", default=None,
+                   help="CAN serial port (compat for -d can:<x>; "
+                        "env: AS11_CAN_PORT)")
+
+
 def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
     ap = argparse.ArgumentParser(
-        prog="as11_ota",
-        description="AirSense 11 OTA firmware uploader "
-                    "(builds .abc, streams over BLE).",
+        prog="as11_flash",
+        description="AirSense 11 flash / OTA tool (BLE + CAN).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__)
-    ap.add_argument("--addr", default=None,
-                    help="device MAC / UUID / alias (defaults to $AS11_ADDR)")
     ap.add_argument("--debug", action="store_true",
-                    help="verbose BLE packet logging")
+                    help="verbose transport-level packet logging")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     # targets
@@ -1305,9 +1331,9 @@ def main(argv=None) -> int:
 
     # upload
     p_u = sub.add_parser("upload",
-                         help="push a pre-built .abc over BLE; "
-                              "CheckUpgradeFile only unless --apply "
-                              "or --apply-plain is given")
+                         help="push a pre-built .abc; CheckUpgradeFile only "
+                              "unless --apply / --apply-plain is given")
+    _add_device_args(p_u)
     p_u.add_argument("file", help=".abc file to upload")
     p_u.add_argument("--fix-crc", action="store_true",
                      help="recompute and patch CRC16-CCITT HW-region footers "
@@ -1319,8 +1345,9 @@ def main(argv=None) -> int:
     # flash (build + upload)
     p_f = sub.add_parser("flash",
                          help="build .abc from firmware and upload in one step; "
-                              "CheckUpgradeFile only unless --apply "
-                              "or --apply-plain is given")
+                              "CheckUpgradeFile only unless --apply / "
+                              "--apply-plain is given")
+    _add_device_args(p_f)
     _add_input_args(p_f)
     _add_build_args(p_f)
     p_f.add_argument("--save-abc", metavar="PATH",
