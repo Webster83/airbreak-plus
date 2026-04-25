@@ -176,6 +176,13 @@ def cmd_set(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gettime(args: argparse.Namespace) -> int:
+    with connect_transport(args) as t:
+        resp = call_rpc(t, args, "GetDateTime", None)
+    print_response(resp)
+    return 0
+
+
 def cmd_settime(args: argparse.Namespace) -> int:
     if args.time:
         try:
@@ -212,6 +219,7 @@ def cmd_session(args: argparse.Namespace) -> int:
             print(f"AS11 session on {t.name}. Commands:")
             print("  get NAME [NAME...]              -> Get RPC")
             print("  set NAME VALUE [--type T] ...   -> Set RPC")
+            print("  gettime                          -> GetDateTime")
             print("  settime [ISO]                   -> SetDateTime")
             print("  rpc METHOD [JSON_PARAMS]        -> arbitrary RPC")
             print("  quit / exit                      -> leave")
@@ -269,6 +277,8 @@ def cmd_session(args: argparse.Namespace) -> int:
                         if aborted:
                             continue
                     resp = do_rpc("Set", params)
+                elif verb == "gettime":
+                    resp = do_rpc("GetDateTime", None)
                 elif verb == "settime":
                     spec = rest.strip()
                     if spec:
@@ -727,6 +737,13 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("rest", nargs=argparse.REMAINDER,
                     help="NAME VALUE [--type T] [NAME2 VALUE2 [--type T2]] ...")
     st.set_defaults(func=cmd_set)
+
+    gt = sub.add_parser(
+        "gettime", parents=[common],
+        help="GetDateTime",
+    )
+    add_rpc_args(gt)
+    gt.set_defaults(func=cmd_gettime)
 
     dt = sub.add_parser(
         "settime", parents=[common],
