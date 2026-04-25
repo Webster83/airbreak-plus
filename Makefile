@@ -60,21 +60,22 @@ binaries: $(S10_CODE_BINS) $(VID_SPOOF_BINS)
 # Binaries are built per-version: common_code_0401.bin, graph_0402.bin, etc.
 #
 # Code cave layout
-#   0x80fcfa0  vid_spoof
-#   0x80fd000  graph
-#   0x80fd400  squarewave
-#   0x80fd700  asv_task_wrapper
-#   0x80fd800  common_code
-#   0x80fec00  backlight_adapt
-#   0x80fee00  wrapper_limit_max_pdiff
-#   0x80ff600  s10_lcd_ili9325
+#   0x80fcfa0  vid_spoof                (  96 B)
+#   0x80fd000  graph                    (1024 B)
+#   0x80fd400  squarewave               ( 768 B)
+#   0x80fd700  asv_task_wrapper         ( 256 B)
+#   0x80fd800  common_code              (5120 B)
+#   0x80fec00  backlight_adapt          (1024 B)
+#   0x80ff000  wrapper_limit_max_pdiff  (2048 B)
+#   0x80ff800  s10_lcd_ili9325          (1024 B)
+#   0x80ffc00  unallocated tail         (1024 B)
 
 graph-offset := 0x80fd000
 squarewave-offset := 0x80fd400
 asv_task_wrapper-offset := 0x80fd700
 common_code-offset := 0x80fd800
 backlight_adapt-offset := 0x80fec00
-wrapper_limit_max_pdiff-offset := 0x80fee00
+wrapper_limit_max_pdiff-offset := 0x80ff000
 vid_spoof-offset := 0x80fcfa0
 
 define S10_CODE_VERSION_template
@@ -155,9 +156,9 @@ LDFLAGS ?= \
 
 # $(BUILD)/shared_code.o: $(BUILD)/shared_code.c
 # 	$(CC) $(CFLAGS) -static -shared -c -o $@ $<
-$(BUILD)/%.o: $(SRC)/%.c| $(BUILD)
+$(BUILD)/%.o: $(SRC)/%.c | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
-$(BUILD)/%.o: $(SRC)/%.S| $(BUILD)
+$(BUILD)/%.o: $(SRC)/%.S | $(BUILD)
 	$(AS) $(ASFLAGS) -c -o $@ $<
 $(BUILD)/%.elf: | $(BUILD)
 	$(LD) $(LDFLAGS) -o $@ $^
@@ -251,7 +252,7 @@ $(BUILD)/stm32-s9-lcd.bin: patch-airsense-s9 s9_lcd_ili9225 | $(BUILD)
 # Build: make s10_lcd_ili9325
 # Usage: PATCH_S10_LCD=1 ./patch-airsense stm32.bin output.bin
 
-S10_LCD_OFFSET ?= 0x080FF600
+S10_LCD_OFFSET ?= 0x080FF800
 S10_LCD_VERSIONS := 0401 0402
 
 $(BUILD)/s10_lcd_ili9325.o: $(SRC)/s10_lcd_ili9325.c | $(BUILD)

@@ -356,7 +356,7 @@ patch_wrapper_limit_max_pdiff() {
         *) echo "  patch_wrapper_limit_max_pdiff: unsupported $ver"; return 1 ;;
     esac
     echo "Patching wrapper for pressure_limit_max_diff ($ver)"
-    patch_pointer "$BIN" 0xfee00 "$FPTR" "$(le_thumb_ptr 0x80fee00)"
+    patch_pointer "$BIN" 0xff000 "$FPTR" "$(le_thumb_ptr 0x80ff000)"
 }
 
 patch_code() {
@@ -646,7 +646,7 @@ patch_lcd_ili9325() {
         die "LCD patch binary not found: $BIN (run make s10_lcd_ili9325)"
     fi
 
-    local LCD_FLASH=${S10_LCD_OFFSET:-0x080FF600}
+    local LCD_FLASH=${S10_LCD_OFFSET:-0x080FF800}
     local LCD_OFF=$(( LCD_FLASH - 0x08000000 ))
 
     local BL_OFF EXPECTED_BL

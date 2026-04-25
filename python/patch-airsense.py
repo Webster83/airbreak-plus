@@ -623,8 +623,8 @@ class ASFirmwarePatches(object):
         if fptr is None:
             print("  patch_wrapper_limit_max_pdiff: skipped (unsupported CDX version %s)" % self.asf.cdx_ver)
             return
-        self._patch_pointer(data, 0xfee00, fptr)
-        print("  limit_max_pdiff: %dB at 0xFEE00" % len(data))
+        self._patch_pointer(data, 0xff000, fptr)
+        print("  limit_max_pdiff: %dB at 0xFF000" % len(data))
 
     def patch_lcd_ili9325(self):
         """Universal ILI9325/ILI9328 + ILI9341 LCD driver"""
@@ -641,7 +641,7 @@ class ASFirmwarePatches(object):
         data, ver = self._load_versioned_bin('s10_lcd_ili9325')
         if data is None:
             return
-        lcd_offset = 0xFF600
+        lcd_offset = 0xFF800
         self.asf.patch(data, lcd_offset, checkempty=True)
         print("  lcd_ili9325: %dB at 0x%X" % (len(data), lcd_offset))
         bl_bytes = self._encode_thumb_bl(bl_off, 0x08000000 + lcd_offset + 1)
