@@ -955,6 +955,17 @@ class S11FirmwarePatches(object):
             scanned += 1
         print("Patching BLE permissions... %d commands unlocked (%d entries scanned)" % (n, scanned))
 
+    def patch_edf_superset(self):
+        """Expose the official S11 EDF schema superset."""
+        try:
+            from as11_edf_superset import patch_edf_superset
+        except ImportError:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            sys.path.insert(0, script_dir)
+            from as11_edf_superset import patch_edf_superset
+
+        patch_edf_superset(self.asf)
+
 
 PATCH_LIST = [
     {
@@ -980,6 +991,12 @@ PATCH_LIST = [
         "desc": "Expose supported therapy/feature profile nodes in RPC JSON.",
         "default": True,
         "function": "rpc_json_profile_visibility",
+    },
+    {
+        "arg": "patch-edf-superset",
+        "desc": "Expose the official S11 EDF PLD and STR superset.",
+        "default": True,
+        "function": "patch_edf_superset",
     },
     {
         "arg": "patch-motor-nagscreen",
