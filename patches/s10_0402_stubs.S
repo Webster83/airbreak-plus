@@ -2,7 +2,11 @@
 
 #define NSTUB(addr,name) \
 	.global name; \
-	.extern name; \
+	.type name, %function; \
+	name = addr
+#define NSTUB_VAR(addr,name) \
+	.global name; \
+	.type name, %object; \
 	name = addr
 .text
 
@@ -18,20 +22,20 @@ NSTUB(0x08072D89, GUI_SetTextMode)
 NSTUB(0x08072DA1, GUI_SetTextAlign)
 NSTUB(0x0807BCE9, GUI_GotoXY)
 NSTUB(0x08072F6D, GUI_DispStringAt)
-NSTUB(0x08060DB4, font_16)
-NSTUB(0x680000A0, gui_context)
+NSTUB_VAR(0x08060DB4, font_16)
+NSTUB_VAR(0x680000A0, gui_context)
 
 NSTUB(0x08063D5D, malloc)
 NSTUB(0x08082097, tim_read_tim5)
 
 NSTUB(0x080BCBC3, pressure_limit_max_difference)
-NSTUB(0x2000E954, fvars)
-NSTUB(0x2000E75C, ivars)
-NSTUB(0x2000E814, isNotBreathingPtr)
-NSTUB(0x2000EAA8, breathPercentagePtr)
+NSTUB_VAR(0x2000E954, fvars)
+NSTUB_VAR(0x2000E75C, ivars)
+NSTUB_VAR(0x2000E814, isNotBreathingPtr)
+NSTUB_VAR(0x2000EAA8, breathPercentagePtr)
 NSTUB(0x080E36DD, asv_task_function)
 
-NSTUB(0x20000BE0, magic_ptr)
+NSTUB_VAR(0x20000BE0, magic_ptr)
 
 // Backlight adaptation
 NSTUB(0x08066FC6, variable_get_g8)

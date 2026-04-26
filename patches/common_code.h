@@ -13,7 +13,11 @@ typedef signed short int16;
 typedef signed char int8;
 typedef unsigned char uint8;
 typedef __fp16 float16;
-typedef enum { false, true } bool;
+#if __STDC_VERSION__ < 202311L
+typedef _Bool bool;
+#define false 0
+#define true  1
+#endif
 
 
 // PAP memory addresses (resolved from per-version stubs.S)
