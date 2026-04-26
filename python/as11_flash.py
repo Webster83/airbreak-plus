@@ -735,7 +735,8 @@ def _send_block(t: Transport, params: dict) -> None:
     for attempt in range(1, BLOCK_ATTEMPTS + 1):
         try:
             resp = t.rpc("UpgradeDataBlock", params,
-                         timeout=BLOCK_RPC_TIMEOUT)
+                         timeout=BLOCK_RPC_TIMEOUT,
+                         post_send_delay=0.0)
             if resp.get("result") is True:
                 return
             raise RuntimeError(
