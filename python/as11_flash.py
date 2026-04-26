@@ -67,6 +67,7 @@ PRIMARY_SIZE   = 0x58
 DESCRIPTOR_SIZE = 0x50
 PAYLOAD_OFFSET_0005 = PRIMARY_SIZE + DESCRIPTOR_SIZE   # 0xa8
 PAYLOAD_OFFSET_0006 = PRIMARY_SIZE                     # 0x58
+SEGMENT_ENTRY_SIZE = 8
 
 OFF_MAGIC      = 0x00
 OFF_FORMAT     = 0x04
@@ -110,6 +111,16 @@ class TargetRegion:
     @property
     def flash_end(self) -> int:
         return self.flash_start + self.size
+
+
+@dataclass(frozen=True)
+class SegmentEntry:
+    length: int
+    flash_start: int
+
+    @property
+    def flash_end(self) -> int:
+        return self.flash_start + self.length
 
 
 TARGETS: dict[str, TargetRegion] = {
@@ -236,6 +247,72 @@ def fix_payload_crcs(payload: bytes, target: TargetRegion
         buf[off + size - 1] = crc & 0xFF
         fixed.append((name, crc))
     return bytes(buf), fixed
+
+
+def build_segment_table(segments: list[SegmentEntry]) -> bytes:
+    if not 1 <= len(segments) <= 0xFF:
+        raise ValueError(f"0005 segment count must be 1..255, got {len(segments)}")
+    out = bytearray()
+    for seg in segments:
+        out += u32_le(seg.length)
+        out += u32_le(seg.flash_start)
+    return bytes(out)
+
+
+def build_0005_rest(target: TargetRegion, payload: bytes
+                    ) -> tuple[bytes, list[SegmentEntry]]:
+    segments = [SegmentEntry(length=len(payload), flash_start=target.flash_start)]
+    return build_segment_table(segments) + payload, segments
+
+
+def parse_0005_segments(descriptor: bytes, rest: bytes,
+                        *, absolute_payload_offset: int = PAYLOAD_OFFSET_0005
+                        ) -> dict:
+    """Decode the SRAM-updater segment table stored at descriptor+0x48.
+
+        segment_count * {u32 length, u32 destination} + concatenated data.
+    """
+    count = get_u32(descriptor, 0x48)
+    table_size = count * SEGMENT_ENTRY_SIZE
+    table_ok = 1 <= count <= 0xFF and table_size <= len(rest)
+    segments = []
+    data_cursor = 0
+
+    if table_ok:
+        for idx in range(count):
+            off = idx * SEGMENT_ENTRY_SIZE
+            length = get_u32(rest, off)
+            flash_start = get_u32(rest, off + 4)
+            segments.append({
+                "index": idx,
+                "length": length,
+                "flash_start": flash_start,
+                "flash_end": flash_start + length,
+                "data_offset": absolute_payload_offset + table_size + data_cursor,
+                "rest_data_offset": table_size + data_cursor,
+            })
+            data_cursor += length
+
+    segment_data_size = len(rest) - table_size if table_ok else None
+    segment_data_len_ok = (segment_data_size is not None
+                           and data_cursor == segment_data_size)
+    return {
+        "segment_count": count,
+        "segment_table_size": table_size,
+        "segment_table_ok": table_ok,
+        "segment_data_size": segment_data_size,
+        "segment_data_expected_size": data_cursor if table_ok else None,
+        "segment_data_len_ok": segment_data_len_ok,
+        "segments": segments,
+    }
+
+
+def target_payload_slice(info: dict) -> tuple[int, int] | None:
+    off = info.get("target_payload_offset")
+    size = info.get("target_payload_size")
+    if off is None or size is None:
+        return None
+    return int(off), int(size)
 
 
 def parse_u32(text: str | None, *, name: str) -> int | None:
@@ -476,24 +553,24 @@ def build_primary_header(*, fmt: bytes, component: str) -> bytes:
     return bytes(hdr)
 
 
-def build_descriptor(target: TargetRegion, payload: bytes,
+def build_descriptor(target: TargetRegion, rest: bytes,
                      *, primary_header: bytes,
                      desc2: int, desc3: int, pci: int,
-                     flags: int = 0) -> bytes:
+                     segment_count: int) -> bytes:
     if len(primary_header) != PRIMARY_SIZE:
         raise ValueError(f"primary header must be {PRIMARY_SIZE} bytes")
-    if not 0 <= flags < 0x100:
+    if not 1 <= segment_count <= 0xFF:
         raise SystemExit(
-            f"--flags out of range: 0x{flags:X}")
+            f"0005 segment count out of range: {segment_count}")
     desc = bytearray(DESCRIPTOR_SIZE)
     put_u32(desc, 0x00, 1)
     desc[0x04:0x08] = target.code.encode("ascii")
     put_u32(desc, 0x08, desc2)
     put_u32(desc, 0x0C, desc3)
     put_u32(desc, 0x10, pci)    # PCI (var 0x232); enforced when PRI (var 0x111) == 1
-    put_u32(desc, 0x40, len(payload))
-    put_u32(desc, 0x44, crc32_final(payload))
-    put_u32(desc, 0x48, flags)
+    put_u32(desc, 0x40, len(rest))
+    put_u32(desc, 0x44, crc32_final(rest))
+    put_u32(desc, 0x48, segment_count)
     # Descriptor CRC (0x4c) covers primary header + descriptor[0:0x4c]
     put_u32(desc, 0x4C, crc32_final(primary_header + bytes(desc[:0x4C])))
     return bytes(desc)
@@ -501,14 +578,16 @@ def build_descriptor(target: TargetRegion, payload: bytes,
 
 def build_0005(target: TargetRegion, payload: bytes,
                *, desc2: int, desc3: int, pci: int = 0,
-               flags: int = 0) -> bytes:
+               ) -> bytes:
     primary = build_primary_header(fmt=FORMAT_0005,
                                    component=DEFAULT_COMPONENT_0005)
-    descriptor = build_descriptor(target, payload,
+    rest, segments = build_0005_rest(target, payload)
+    descriptor = build_descriptor(target, rest,
                                   primary_header=primary,
                                   desc2=desc2, desc3=desc3,
-                                  pci=pci, flags=flags)
-    return primary + descriptor + payload
+                                  pci=pci,
+                                  segment_count=len(segments))
+    return primary + descriptor + rest
 
 
 def target_for_container(info: dict) -> TargetRegion | None:
@@ -521,23 +600,6 @@ def target_for_container(info: dict) -> TargetRegion | None:
     if info["format"] == FORMAT_0006:
         return TARGETS["FGCB"]
     return None
-
-
-def rebuild_0005_with_payload(primary: bytes, descriptor: bytes,
-                              payload: bytes) -> bytes:
-    """Assemble a 0005 container from its three parts, refreshing the
-    payload-length, payload-CRC, and descriptor-CRC fields to match the
-    (possibly patched) payload."""
-    if len(primary) != PRIMARY_SIZE:
-        raise ValueError(f"primary must be {PRIMARY_SIZE} B, got {len(primary)}")
-    if len(descriptor) != DESCRIPTOR_SIZE:
-        raise ValueError(f"descriptor must be {DESCRIPTOR_SIZE} B, "
-                         f"got {len(descriptor)}")
-    desc = bytearray(descriptor)
-    put_u32(desc, 0x40, len(payload))
-    put_u32(desc, 0x44, crc32_final(payload))
-    put_u32(desc, 0x4C, crc32_final(primary + bytes(desc[:0x4C])))
-    return primary + bytes(desc) + payload
 
 
 def build_0006(payload: bytes, component: str) -> bytes:
@@ -571,22 +633,23 @@ def inspect_container(data: bytes) -> dict:
         if len(data) < PAYLOAD_OFFSET_0005:
             raise ValueError(f"0005 container too short: {len(data)} bytes")
         descriptor = data[PRIMARY_SIZE:PAYLOAD_OFFSET_0005]
-        payload    = data[PAYLOAD_OFFSET_0005:]
+        rest       = data[PAYLOAD_OFFSET_0005:]
         exp_payload_len = get_u32(descriptor, 0x40)
         exp_payload_crc = get_u32(descriptor, 0x44)
         exp_desc_crc    = get_u32(descriptor, 0x4C)
-        act_payload_crc = crc32_final(payload)
+        act_payload_crc = crc32_final(rest)
         act_desc_crc    = crc32_final(primary + descriptor[:0x4C])
+        seg_info = parse_0005_segments(descriptor, rest)
         info.update({
             "payload_offset":     PAYLOAD_OFFSET_0005,
-            "payload_size":       len(payload),
+            "payload_size":       len(rest),
+            "rest_size":          len(rest),
             "code":               descriptor[0x04:0x08].decode("ascii", "replace"),
             "marker":             get_u32(descriptor, 0x00),
             "desc2":              get_u32(descriptor, 0x08),
             "desc3":              get_u32(descriptor, 0x0C),
             "pci":                get_u32(descriptor, 0x10),
-            "flags":              get_u32(descriptor, 0x48),
-            "payload_len_ok":     len(payload) == exp_payload_len,
+            "payload_len_ok":     len(rest) == exp_payload_len,
             "expected_payload_len": exp_payload_len,
             "payload_crc":        act_payload_crc,
             "expected_payload_crc": exp_payload_crc,
@@ -595,16 +658,28 @@ def inspect_container(data: bytes) -> dict:
             "expected_desc_crc":  exp_desc_crc,
             "descriptor_crc_ok":  act_desc_crc == exp_desc_crc,
         })
+        info.update(seg_info)
+        if (seg_info["segment_count"] == 1
+                and seg_info["segment_table_ok"]
+                and seg_info["segment_data_len_ok"]):
+            seg = seg_info["segments"][0]
+            info["target_payload_offset"] = seg["data_offset"]
+            info["target_payload_size"] = seg["length"]
     elif fmt == FORMAT_0006:
         info.update({
             "payload_offset":     PAYLOAD_OFFSET_0006,
             "payload_size":       len(data) - PAYLOAD_OFFSET_0006,
+            "target_payload_offset": PAYLOAD_OFFSET_0006,
+            "target_payload_size": len(data) - PAYLOAD_OFFSET_0006,
         })
 
-    # HW-region CRC check inside the payload (applies to both formats).
+    # HW-region CRC check inside the target image bytes, not the 0005
+    # segment table that precedes them.
     target = target_for_container(info)
-    if target is not None and "payload_offset" in info:
-        payload = data[info["payload_offset"]:]
+    target_slice = target_payload_slice(info)
+    if target is not None and target_slice is not None:
+        off, size = target_slice
+        payload = data[off:off + size]
         info["hw_crc_results"] = verify_payload_crcs(payload, target)
     else:
         info["hw_crc_results"] = []
@@ -625,8 +700,15 @@ def print_info(info: dict, path: str | None = None) -> None:
         print(f"Descriptor:    desc2=0x{info['desc2']:08X}  "
               f"desc3=0x{info['desc3']:08X}  "
               f"pci=0x{info['pci']:08X}  "
-              f"flags=0x{info['flags']:08X}")
-        print(f"Payload CRC:   0x{info['payload_crc']:08X}  "
+              f"segments={info['segment_count']}")
+        table_tag = "ok" if info["segment_table_ok"] else "INVALID"
+        data_tag = "ok" if info["segment_data_len_ok"] else "MISMATCH"
+        print(f"Segments:      table={info['segment_table_size']} B {table_tag}; "
+              f"data={info.get('segment_data_size')} B {data_tag}")
+        for seg in info.get("segments", []):
+            print(f"  [{seg['index']:02d}] len=0x{seg['length']:08X} "
+                  f"dest=0x{seg['flash_start']:08X}..0x{seg['flash_end']:08X}")
+        print(f"Rest CRC:      0x{info['payload_crc']:08X}  "
               f"({'ok' if info['payload_crc_ok'] else 'MISMATCH, desc says 0x'+format(info['expected_payload_crc'],'08X')})")
         print(f"Desc CRC:      0x{info['descriptor_crc']:08X}  "
               f"({'ok' if info['descriptor_crc_ok'] else 'MISMATCH, desc says 0x'+format(info['expected_desc_crc'],'08X')})")
@@ -955,10 +1037,9 @@ def _build_container(args, *,
     # 0005
     desc2, desc3, pci = resolve_descriptor_words(args, target,
                                                  detected_preset=detected_preset)
-    flags = parse_u32(args.flags, name="flags") or 0
     abc = build_0005(target, payload,
                      desc2=desc2, desc3=desc3,
-                     pci=pci, flags=flags)
+                     pci=pci)
     return abc, target, FORMAT_0005
 
 
@@ -1073,36 +1154,89 @@ def cmd_upload(args) -> int:
         if info.get("marker") != 1:
             _soft(f"0005 descriptor marker={info.get('marker')} "
                   f"(verifier requires 1)")
-        if info.get("flags", 0) >= 0x100:
-            _soft(f"0005 descriptor flags=0x{info.get('flags', 0):X} "
-                  f"(verifier requires < 0x100)")
-        if not info.get("payload_len_ok", True):
-            _soft("descriptor payload length field doesn't match "
+        legacy_raw_0005 = (info.get("segment_count") == 0
+                           and args.fix_crc
+                           and info.get("code") in TARGETS)
+        if not legacy_raw_0005:
+            if not 1 <= info.get("segment_count", 0) <= 0xFF:
+                _soft(f"0005 descriptor segment_count="
+                      f"{info.get('segment_count')} "
+                      f"(bootloader requires 1..255)")
+            if not info.get("segment_table_ok", False):
+                _soft("0005 segment table is missing or truncated")
+            if not info.get("segment_data_len_ok", False):
+                _soft("0005 segment data length doesn't match the "
+                      "descriptor segment table")
+
+        target = target_for_container(info)
+        if target is not None and info.get("segments"):
+            total = 0
+            for seg in info["segments"]:
+                total += seg["length"]
+                if seg["flash_start"] < target.flash_start:
+                    _soft(f"segment {seg['index']} starts before "
+                          f"{target.code}: 0x{seg['flash_start']:08X}")
+                if seg["flash_end"] > target.flash_end:
+                    _soft(f"segment {seg['index']} ends after "
+                          f"{target.code}: 0x{seg['flash_end']:08X}")
+            if total != target.size:
+                _soft(f"0005 segment data totals {total} bytes, "
+                      f"but {target.code} target size is {target.size} bytes")
+
+        if not info.get("payload_len_ok", True) and not args.fix_crc:
+            _soft("descriptor rest length field doesn't match "
                   "actual payload size")
 
         if not info.get("payload_crc_ok", True) and not args.fix_crc:
-            _soft("descriptor payload CRC mismatch "
+            _soft("descriptor rest CRC mismatch "
                   "(pass --fix-crc to recompute)")
         if not info.get("descriptor_crc_ok", True) and not args.fix_crc:
             _soft("descriptor CRC mismatch (pass --fix-crc to recompute)")
 
-    # HW-region CRC check inside the payload. May return a patched
-    # payload when --fix-crc repaired a broken footer.
+    if info["format"] == FORMAT_0006 and resolve_apply_mode(args) != APPLY_NONE:
+        _soft("format 0006 can pass the app verifier, but the SRAM updater "
+              "path found so far only applies OTA!0005 containers")
+
+    # HW-region CRC check inside the target image bytes. May return a patched
+    # image when --fix-crc repaired a broken footer.
     target = target_for_container(info)
-    payload = abc[info["payload_offset"]:] if target is not None else None
-    if target is not None:
+    if info["format"] == FORMAT_0006 and target is not None:
+        if info.get("payload_size") != target.size:
+            _soft(f"0006 payload is {info.get('payload_size')} bytes, "
+                  f"but {target.code} target size is {target.size} bytes")
+    target_slice = target_payload_slice(info)
+    if target_slice is not None:
+        off, size = target_slice
+        payload = abc[off:off + size]
+    elif (info["format"] == FORMAT_0005 and args.fix_crc
+          and info.get("segment_count") == 0 and target is not None):
+        # Repair older app-verifier-valid containers that omitted the
+        # bootloader segment table and stored raw image bytes directly.
+        payload = abc[PAYLOAD_OFFSET_0005:]
+        print("  treating legacy 0005 raw payload as one bootloader segment")
+    else:
+        payload = None
+
+    if target is not None and payload is not None:
         payload = check_and_maybe_fix_hw_crcs(
             payload, target,
             fix=args.fix_crc, force=args.force,
-            label=f"{args.file} payload")
+            label=f"{args.file} target image")
 
     if args.fix_crc and target is not None:
         if info["format"] == FORMAT_0005:
-            primary = abc[:PRIMARY_SIZE]
-            desc    = abc[PRIMARY_SIZE:PAYLOAD_OFFSET_0005]
-            abc = rebuild_0005_with_payload(primary, desc, payload)
-            print("  rebuilt 0005 descriptor (payload-len / payload-CRC / "
-                  "descriptor-CRC fields refreshed)")
+            desc = abc[PRIMARY_SIZE:PAYLOAD_OFFSET_0005]
+            desc2 = get_u32(desc, 0x08)
+            desc3 = get_u32(desc, 0x0C)
+            pci = get_u32(desc, 0x10)
+            if payload is None:
+                raise SystemExit(
+                    f"{path}: cannot --fix-crc because this 0005 container "
+                    "does not expose a single target-image payload")
+            abc = build_0005(target, payload,
+                             desc2=desc2, desc3=desc3, pci=pci)
+            print("  rebuilt 0005 descriptor + segment table "
+                  "(rest-len / rest-CRC / descriptor-CRC refreshed)")
         elif info["format"] == FORMAT_0006:
             abc = abc[:PRIMARY_SIZE] + payload
 
@@ -1238,9 +1372,6 @@ def _add_build_args(p: argparse.ArgumentParser) -> None:
                         "`flash` auto-fetches _PCI (and logs _PRI for "
                         "context) when this is omitted; `build` defaults "
                         "to 0 since it can't query a device.")
-    p.add_argument("--flags", default="0", metavar="U8",
-                   help="0005 descriptor word at offset 0x48; verifier "
-                        "requires it to be < 0x100")
     # safety
     p.add_argument("--include-bootloader", action="store_true",
                    help="permit building/uploading FGBL (bootloader region)")
@@ -1337,8 +1468,9 @@ def main(argv=None) -> int:
     p_u.add_argument("file", help=".abc file to upload")
     p_u.add_argument("--fix-crc", action="store_true",
                      help="recompute and patch CRC16-CCITT HW-region footers "
-                          "in the payload and refresh the 0005 descriptor "
-                          "CRC fields before sending")
+                          "in the target image; for 0005, also refresh the "
+                          "descriptor and add the bootloader segment table "
+                          "when repairing an older raw-payload container")
     _add_upload_args(p_u)
     p_u.set_defaults(func=cmd_upload)
 
