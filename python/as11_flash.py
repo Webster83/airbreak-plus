@@ -260,7 +260,7 @@ def parse_u32(text: str | None, *, name: str) -> int | None:
     return value
 
 
-_VERSION_RE = re.compile(r"(\d+\.\d+\.\d+\.\d+)")
+_VERSION_RE = re.compile(r"(?<!\d)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?!\d)")
 
 
 def normalize_version(raw: str | None) -> str | None:
