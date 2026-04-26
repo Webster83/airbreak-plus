@@ -20,6 +20,8 @@ PLD_STREAM_TAG = "PLD"
 STREAM_HEADER_SIZE = 16
 STREAM_SIGNAL_SIZE = 16
 SUMMARY_RECORD_SIZE = 36
+STR_RECORD_SETTING = 0x00
+STR_RECORD_SUMMARY = 0x01
 
 
 # Format: EDF signal id, EDF label, EDF physical unit, firmware scale.
@@ -40,7 +42,10 @@ PLD_SUPERSET_SIGNALS = (
 
 
 # STR formatter metadata from the active-row union of official S11 8.4.0 variants.
-# Format: key, EDF label, EDF unit, logical scale, EDF output scale, unk14, unk16
+# record_class is 0 for setting snapshots and 1 for summary/status rows.
+# reserved16 is always zero in checked official active rows.
+# Format: key, EDF label, EDF unit, logical scale, EDF output scale,
+# record_class, reserved16
 STR_SUPERSET_METADATA = (
     ((0, 3, 0x7FFF, 0x7FFF, 0x0000), "", "", 1, 1, 0x01, 0x0000),  # n/a
     ((1, 2, 0x02B6, 0x7FFF, 0x0000), "Duration", "min.", 1, 1, 0x01, 0x0000),  # PPD
@@ -398,7 +403,7 @@ class S11EdfSupersetPatcher:
         if set(metadata) != wanted:
             raise ValueError("STR metadata/key table mismatch")
         strings = []
-        for _key, label, unit, _logical_scale, _edf_scale, _unk14, _unk16 in STR_SUPERSET_METADATA:
+        for _key, label, unit, _logical_scale, _edf_scale, _record_class, _reserved16 in STR_SUPERSET_METADATA:
             strings.append(label)
             strings.append(unit)
         string_ptrs, strings_written = self.resolve_str_string_ptrs(strings)
@@ -412,14 +417,14 @@ class S11EdfSupersetPatcher:
             if key not in wanted:
                 continue
             found.add(key)
-            label, unit, logical_scale, edf_scale, unk14, unk16 = metadata[key]
+            label, unit, logical_scale, edf_scale, record_class, reserved16 = metadata[key]
             before = bytes(self.asf.fw[off + 16:off + 36])
             struct.pack_into("<f", self.asf.fw, off + 16, logical_scale)
-            self.asf.write_u8(off + 20, unk14)
+            self.asf.write_u8(off + 20, record_class)
             if self.asf.u8(off + 21) == 0:
                 self.asf.write_u8(off + 21, 1)
                 activated += 1
-            self.asf.write_u16(off + 22, unk16)
+            self.asf.write_u16(off + 22, reserved16)
             self.asf.write_u32(off + 24, string_ptrs[label])
             self.asf.write_u32(off + 28, string_ptrs[unit])
             struct.pack_into("<f", self.asf.fw, off + 32, edf_scale)
