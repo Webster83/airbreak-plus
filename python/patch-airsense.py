@@ -830,7 +830,7 @@ if __name__ == "__main__":
         {'arg':"patch-fw-vauto-wrapper",'desc':"Add VAuto/ASV pressure shaping wrapper.",               'default':False, 'function':'patch_wrapper_limit_max_pdiff'},
         {'arg':"patch-fw-vidspoof",     'desc':"Hook MOP write to dynamically set VID per therapy mode.", 'default':True, 'function':'patch_vid_spoof'},
         {'arg':"patch-fw-lcd",          'desc':"Universal ILI9325/ILI9328 LCD driver.",                 'default':False, 'function':'patch_lcd_ili9325'},
-        {'arg':"patch-fw-backlight",    'desc':"Improved backlight adaptation to ambient light.",       'default':False, 'function':'patch_backlight_adapt'},
+        {'arg':"patch-fw-backlight",    'desc':"Improved backlight adaptation to ambient light.",       'default':True,  'function':'patch_backlight_adapt'},
         {'arg':"patch-past-date",       'desc':"Allow setting past date in menu and UART.",             'default':True,  'function':'patch_past_date'},
         {'arg':"patch-motor-nagscreen", 'desc':"Remove \"Motor life exceeded\" nag screen",             'default':True,  'function':'motor_nagscreen'},
         {'arg':"patch-edf-merge",       'desc':"Merge universal EDF signal superset into CCX.",         'default':True,  'function':'patch_edf_merge'},
