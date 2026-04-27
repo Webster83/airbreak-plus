@@ -5,7 +5,7 @@ Get/Set settings, run JSON-RPC, stream/subscribe/spool data. Picks
 transport from -d/--device:
 
     -d ble:<mac|alias>          BLE (via bleak + SRP pairing)
-    -d can:<port>               Waveshare USB-CAN-A
+    -d can:<port>               CAN serial adapter (Waveshare, CANable SLCAN)
     -d tcp:<host>:<port>        TCP airbridge (future)
 
 Compat aliases:
@@ -31,6 +31,14 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE / "lib"))
+
+try:  # optional: only used to register CAN-specific CLI args
+    import as11_can_transport as _can_transport  # noqa: E402
+except ModuleNotFoundError as exc:  # pragma: no cover - dev setups may omit CAN support
+    if exc.name == "as11_can_transport":
+        _can_transport = None
+    else:
+        raise
 
 from as11_rpc import (  # noqa: E402
     Transport, TransportError, FramingError,
@@ -98,8 +106,10 @@ def build_transport(args: argparse.Namespace) -> Transport:
         target = spec[4:]
         if not target:
             raise SystemExit("can: spec needs serial port path")
-        from as11_can_waveshare import CanWaveshareTransport
-        return CanWaveshareTransport.from_args(target, args)
+        if _can_transport is not None:
+            return _can_transport.from_args(target, args)
+        from as11_can_transport import from_args as can_transport_from_args
+        return can_transport_from_args(target, args)
 
     if spec.startswith("tcp:"):
         raise SystemExit("tcp: transport not implemented yet")
@@ -663,8 +673,8 @@ def _apply_common_defaults(args: argparse.Namespace) -> None:
 
 
 def add_rpc_args(p: argparse.ArgumentParser) -> None:
-    from as11_can_waveshare import CanWaveshareTransport
-    CanWaveshareTransport.add_args(p)
+    if _can_transport is not None:
+        _can_transport.add_args(p)
     p.add_argument("--timeout", type=float, default=5.0,
                    help="RPC response timeout (seconds)")
 

@@ -16,6 +16,15 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Iterable
 
+from as11_can_common import (
+    CanDatagramCodec,
+    CanFrame,
+    DEFAULT_RPC_RX_ID,
+    DEFAULT_RPC_TX_ID,
+    hex_bytes,
+    parse_int,
+)
+
 try:
     import serial
     from serial.tools import list_ports
@@ -71,10 +80,6 @@ def require_serial() -> None:
         )
 
 
-def parse_int(text: str) -> int:
-    return int(text.replace("_", ""), 0)
-
-
 def parse_bitrate(text: str) -> int:
     value = parse_int(text)
     if value not in CAN_BITRATE_CODES:
@@ -107,36 +112,6 @@ def config_id_bytes(can_id: int) -> bytes:
     if not 0 <= can_id <= 0x1FFFFFFF:
         raise ValueError("filter/mask ID must be in range 0..0x1fffffff")
     return can_id.to_bytes(4, "big")
-
-
-def hex_bytes(data: bytes) -> str:
-    return " ".join(f"{b:02X}" for b in data)
-
-
-@dataclass
-class CanFrame:
-    timestamp: float
-    can_id: int
-    extended: bool
-    remote: bool
-    data: bytes
-    raw: bytes
-
-    @property
-    def id_width(self) -> int:
-        return 8 if self.extended else 3
-
-    def format(self, start_time: float | None = None, raw: bool = False) -> str:
-        ts = self.timestamp if start_time is None else self.timestamp - start_time
-        kind = "ext" if self.extended else "std"
-        rtr = " rtr" if self.remote else ""
-        line = (
-            f"{ts:10.6f}  {kind}{rtr}  "
-            f"0x{self.can_id:0{self.id_width}X}  [{len(self.data)}]  {hex_bytes(self.data)}"
-        )
-        if raw:
-            line += f"    raw: {hex_bytes(self.raw)}"
-        return line
 
 
 class UsbCanA:
@@ -751,110 +726,16 @@ def add_can_config_args(parser: argparse.ArgumentParser, *, scan: bool = False) 
 
 # JSON-RPC over Waveshare CAN.
 
-import binascii as _binascii
 import json as _json
 import logging as _logging
-import struct as _struct
-from dataclasses import dataclass as _dataclass, field as _field
+from dataclasses import dataclass as _dataclass
 
 from as11_rpc import (
     TransportError, FramingError,
-    build_request, parse_response,
+    build_request,
 )
-
-
-DEFAULT_RPC_TX_ID = 0x383   # host -> device, service JSON-RPC lane
-DEFAULT_RPC_RX_ID = 0x382   # device -> host
 DEFAULT_LOG_ID    = 0x796   # device -> host, S70-prefixed CAL log
 DEFAULT_FG_POWERUP_ID = 0x2C8  # device boot notification
-
-
-class CanDatagramCodec:
-    """AS11 DatagramCan fragmentation over classic 8-byte CAN frames.
-
-    Wire format:
-      Single-frame (<=7B payload):
-          [0x03][payload]                                   (no CRC)
-      Multi-frame:
-          start:     [0x01][crc32_le:4B][payload[0:3]]       (exactly 8B)
-          middle(s): [0x00][payload chunk up to 7B]
-          end:       [0x02][payload chunk up to 7B]          (CRC verified)
-
-    Stateful RX: feed frame payloads in order via ``feed``; returns the
-    reassembled datagram bytes on a 0x02/0x03 frame, or None when more
-    bytes are needed. Raises ValueError on CRC mismatch.
-    """
-
-    FLAG_MULTI_START = 0x01
-    FLAG_MULTI_END   = 0x02
-    FLAG_SINGLE      = 0x03
-    FLAG_MASK        = 0x03
-
-    def __init__(self) -> None:
-        self._parts: list[bytes] = []
-        self._expected_crc: int | None = None
-
-    def reset(self) -> None:
-        self._parts.clear()
-        self._expected_crc = None
-
-    @staticmethod
-    def encode(payload: bytes) -> list[bytes]:
-        if len(payload) <= 7:
-            return [bytes([CanDatagramCodec.FLAG_SINGLE]) + payload]
-        crc = _binascii.crc32(payload) & 0xFFFFFFFF
-        frames = [
-            bytes([CanDatagramCodec.FLAG_MULTI_START])
-            + _struct.pack("<I", crc)
-            + payload[:3]
-        ]
-        offset = 3
-        while offset < len(payload):
-            chunk = payload[offset : offset + 7]
-            offset += len(chunk)
-            flag = (CanDatagramCodec.FLAG_MULTI_END if offset >= len(payload)
-                    else 0x00)
-            frames.append(bytes([flag]) + chunk)
-        return frames
-
-    def feed(self, data: bytes) -> bytes | None:
-        if not data:
-            return None
-        flag = data[0] & self.FLAG_MASK
-        if flag == self.FLAG_SINGLE:
-            # A single-frame datagram also resets any in-flight multi.
-            self._parts.clear()
-            self._expected_crc = None
-            return bytes(data[1:])
-        if flag == self.FLAG_MULTI_START:
-            if len(data) < 5:
-                raise ValueError("CAN datagram start frame too short")
-            self._parts = [bytes(data[5:])]
-            self._expected_crc = _struct.unpack("<I", data[1:5])[0]
-            return None
-        if flag == 0x00:
-            if not self._parts:
-                raise ValueError("CAN datagram middle frame without start")
-            self._parts.append(bytes(data[1:]))
-            return None
-        if flag == self.FLAG_MULTI_END:
-            if not self._parts:
-                raise ValueError("CAN datagram end frame without start")
-            self._parts.append(bytes(data[1:]))
-            payload = b"".join(self._parts)
-            expected = self._expected_crc
-            self._parts.clear()
-            self._expected_crc = None
-            actual = _binascii.crc32(payload) & 0xFFFFFFFF
-            if actual != expected:
-                raise ValueError(
-                    f"CAN datagram CRC mismatch "
-                    f"(expected {expected:#010x}, got {actual:#010x}, "
-                    f"len={len(payload)}, "
-                    f"head={payload[:32].hex()}, tail={payload[-32:].hex()})"
-                )
-            return payload
-        raise ValueError(f"CAN datagram unknown flag {flag:#x}")
 
 
 
@@ -902,40 +783,9 @@ class CanWaveshareTransport:
 
 
     @classmethod
-    def add_args(cls, p: argparse.ArgumentParser) -> None:
-        """Register CAN-adapter flags on `p` (paired with `from_args`)."""
-        g = p.add_argument_group("CAN adapter (ignored unless -d can:...)")
-        g.add_argument("--can-flavour", default="waveshare",
-                       choices=["waveshare"],
-                       help="which CAN adapter protocol to use")
-        g.add_argument("--serial-baud", type=int, default=2_000_000)
-        g.add_argument("--bitrate", type=parse_int, default=1_000_000,
-                       help="CAN bitrate")
-        g.add_argument("--mode", choices=tuple(MODE_CODES), default="normal")
-        g.add_argument("--no-reset-buffers", action="store_true")
-        g.add_argument("--dtr", dest="dtr", action="store_true", default=None)
-        g.add_argument("--no-dtr", dest="dtr", action="store_false")
-        g.add_argument("--rts", dest="rts", action="store_true", default=None)
-        g.add_argument("--no-rts", dest="rts", action="store_false")
-        g.add_argument("--tx-id", type=parse_int, default=DEFAULT_RPC_TX_ID,
-                       help=f"CAN host->device ID "
-                            f"(default 0x{DEFAULT_RPC_TX_ID:03X})")
-        g.add_argument("--rx-id", type=parse_int, default=DEFAULT_RPC_RX_ID,
-                       help=f"CAN device->host ID "
-                            f"(default 0x{DEFAULT_RPC_RX_ID:03X})")
-        g.add_argument("--frame-interval", type=float, default=0.002,
-                       help="delay between outgoing CAN frames in a datagram")
-
-    @classmethod
     def from_args(cls, target: str,
                   args: argparse.Namespace) -> "CanWaveshareTransport":
         """Construct from a `can:<port>` target + parsed CLI args."""
-        flavour = getattr(args, "can_flavour", "waveshare")
-        if flavour != "waveshare":
-            raise SystemExit(
-                f"unsupported --can-flavour {flavour!r} "
-                "(only 'waveshare' is implemented today)"
-            )
         return cls(
             port=target,
             bitrate=getattr(args, "bitrate", 1_000_000),

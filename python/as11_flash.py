@@ -5,7 +5,7 @@ Build, upload and apply firmware images on AirSense 11 / AirCurve 11
 devices. Works over BLE and CAN; transport selected with -d/--device:
 
     -d ble:<mac|alias>     BLE
-    -d can:<port>          Waveshare USB-CAN-A
+    -d can:<port>          CAN serial adapter (Waveshare, CANable SLCAN)
     --addr <x>             same as -d ble:<x>
     -p/--port <x>          same as -d can:<x>
 
@@ -47,6 +47,14 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE / "lib"))
+
+try:  # optional: only used to register CAN-specific CLI args
+    import as11_can_transport as _can_transport  # noqa: E402
+except ModuleNotFoundError as exc:  # pragma: no cover - dev setups may omit CAN support
+    if exc.name == "as11_can_transport":
+        _can_transport = None
+    else:
+        raise
 
 from as11_rpc import (  # noqa: E402
     Transport, TransportError, FramingError,
@@ -795,8 +803,11 @@ def build_transport_for_flash(args) -> Transport:
         target = spec[4:]
         if not target:
             raise SystemExit("can: spec needs serial port path")
-        from as11_can_waveshare import CanWaveshareTransport
-        t = CanWaveshareTransport.from_args(target, args)
+        if _can_transport is not None:
+            t = _can_transport.from_args(target, args)
+        else:
+            from as11_can_transport import from_args as can_transport_from_args
+            t = can_transport_from_args(target, args)
         t.connect()
         return t
 
@@ -1419,14 +1430,17 @@ def _add_upload_args(p: argparse.ArgumentParser) -> None:
 
 def _add_device_args(p: argparse.ArgumentParser) -> None:
     """Device-selection args, matching as11_config.py conventions."""
+    suppr = argparse.SUPPRESS
     g = p.add_argument_group("device selection")
-    g.add_argument("-d", "--device", default=None,
+    g.add_argument("-d", "--device", default=suppr,
                    help="device spec: ble:<mac|alias>, can:<port>")
-    g.add_argument("--addr", default=None,
+    g.add_argument("--addr", default=suppr,
                    help="BLE target (compat for -d ble:<x>; env: AS11_ADDR)")
-    g.add_argument("-p", "--port", default=None,
+    g.add_argument("-p", "--port", default=suppr,
                    help="CAN serial port (compat for -d can:<x>; "
                         "env: AS11_CAN_PORT)")
+    if _can_transport is not None:
+        _can_transport.add_args(p)
 
 
 def main(argv=None) -> int:
