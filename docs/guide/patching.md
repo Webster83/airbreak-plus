@@ -75,6 +75,7 @@ All patches below are **enabled by default** unless noted.
 | Bypass integrity check | Disables firmware integrity checks that prevent boot on crc mismatch | `patch_tamper` | `--patch-bypass-start` |
 | Bypass PSU check | Disables power supply ID check at startup | `patch_psu_id` | `--patch-bypass-psuid` |
 | Color palette | Applies custom color scheme | `custom_palette` | -- |
+| Backlight adaptation | Continuous LCD/button brightness adjustment to ambient light | `patch_backlight_adapt` | `--patch-fw-backlight` |
 
 ### Compiled patches (off by default)
 
@@ -93,7 +94,7 @@ Example with custom ASV:
 export PATCH_CODE=1
 export PATCH_ASV_TASK_WRAPPER=1
 export PATCH_VAUTO_WRAPPER=1
-./patch-airsense stm32.bin build/stm32-asv.bin
+./patch-airsense stm32.bin build/stm32-asv-plus.bin
 ```
 
 ## Disabling a default patch

@@ -112,12 +112,13 @@
 | 107 | OAI | 0x0056 | CLI | x | x | . |
 | 108 | CAI | 0x0057 | OPI | x | x | . |
 | 109 | UAI | 0x0058 | UAI | x | x | . |
-| 110 | Fault.Device | 0x0201 | SYS | x | x | x |
-| 111 | Fault.Alarm | 0x0202 | SYT | x | x | x |
-| 112 | Fault.Humidifier | 0x01FF | SYC | x | x | x |
-| 113 | Fault.HeatedTube | 0x0200 | SYH | x | x | x |
-| 114 | Crc16 | 0x0023 | DCR | x | x | x |
+| 110 | RIN | 0x0050 | RIN | x | . | . |
+| 111 | Fault.Device | 0x0201 | SYS | x | x | x |
+| 112 | Fault.Alarm | 0x0202 | SYT | x | x | x |
+| 113 | Fault.Humidifier | 0x01FF | SYC | x | x | x |
+| 114 | Fault.HeatedTube | 0x0200 | SYH | x | x | x |
+| 115 | Crc16 | 0x0023 | DCR | x | x | x |
 
 AS = AutoSet (37101), VA = VAuto (37164), ASV = CS PaceWave (37113)
 x = present in OEM firmware, . = added by superset merge
-1 sample per session, 115 fields total (superset)
+1 sample per session, 116 fields total (superset)

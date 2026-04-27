@@ -48,7 +48,7 @@
 | 4 | SAR | 0x007B | SAR |
 | 5 | NVS | 0x0075 | NVS |
 
-## STR.edf -- Session statistics (1 record per session, 115 fields)
+## STR.edf -- Session statistics (1 record per session, 116 fields)
 
 ### Session header [0-3]
 
@@ -204,7 +204,7 @@
 | 102 | TgtVent.95 | 0x002B | VA9 |
 | 103 | TgtVent.Max | 0x002C | VAA |
 
-### AEV -- apnea/hypopnea indices [104-109]
+### AEV -- apnea/hypopnea indices [104-110]
 
 | # | Signal | var_id | UART |
 |---|--------|--------|------|
@@ -214,13 +214,14 @@
 | 107 | OAI | 0x0056 | CLI |
 | 108 | CAI | 0x0057 | OPI |
 | 109 | UAI | 0x0058 | UAI |
+| 110 | RIN | 0x0050 | RIN |
 
-### CSL tail -- faults + CRC [110-114]
+### CSL tail -- faults + CRC [111-115]
 
 | # | Signal | var_id | UART |
 |---|--------|--------|------|
-| 110 | Fault.Device | 0x0201 | SYS |
-| 111 | Fault.Alarm | 0x0202 | SYT |
-| 112 | Fault.Humidifier | 0x01FF | SYC |
-| 113 | Fault.HeatedTube | 0x0200 | SYH |
-| 114 | Crc16 | 0x0023 | DCR |
+| 111 | Fault.Device | 0x0201 | SYS |
+| 112 | Fault.Alarm | 0x0202 | SYT |
+| 113 | Fault.Humidifier | 0x01FF | SYC |
+| 114 | Fault.HeatedTube | 0x0200 | SYH |
+| 115 | Crc16 | 0x0023 | DCR |
