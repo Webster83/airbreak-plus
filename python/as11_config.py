@@ -5,12 +5,12 @@ Get/Set settings, run JSON-RPC, stream/subscribe/spool data. Picks
 transport from -d/--device:
 
     -d ble:<mac|alias>          BLE (via bleak + SRP pairing)
-    -d can:<port>               CAN serial adapter (Waveshare, CANable SLCAN)
+    -d can:<target>             CAN adapter target (Waveshare, CANable SLCAN, SocketCAN)
     -d tcp:<host>:<port>        TCP airbridge (future)
 
 Compat aliases:
     --addr <ble-target>         same as -d ble:<ble-target>
-    -p/--port <can-port>        same as -d can:<can-port>
+    -p/--port <can-target>      same as -d can:<can-target>
     $AS11_ADDR / $AS11_CAN_PORT env fallbacks
 
 """
@@ -105,7 +105,7 @@ def build_transport(args: argparse.Namespace) -> Transport:
     if spec.startswith("can:"):
         target = spec[4:]
         if not target:
-            raise SystemExit("can: spec needs serial port path")
+            raise SystemExit("can: spec needs adapter target (serial path or interface name)")
         if _can_transport is not None:
             return _can_transport.from_args(target, args)
         from as11_can_transport import from_args as can_transport_from_args
@@ -651,7 +651,7 @@ def build_common_parser() -> argparse.ArgumentParser:
     )
     g.add_argument(
         "-p", "--port", default=SUPPR,
-        help="CAN serial port (shortcut for -d can:<port>; env: AS11_CAN_PORT)"
+        help="CAN target (shortcut for -d can:<target>; env: AS11_CAN_PORT)"
     )
     common.add_argument("--debug", action="store_true", default=SUPPR,
                         help="verbose packet logging")
@@ -923,4 +923,27 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("\ninterrupted.", file=sys.stderr)
+        raise SystemExit(130)
+    except SystemExit:
+        raise
+    except argparse.ArgumentTypeError as exc:
+        print(f"\nerror: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    except TimeoutError as exc:
+        print(f"\ntimeout: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    except TransportError as exc:
+        print(f"\ntransport error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    except RuntimeError as exc:
+        if str(exc).startswith("RPC error "):
+            print(f"\n{exc}", file=sys.stderr)
+            raise SystemExit(1)
+        raise
+    except Exception as exc:
+        log.exception("fatal: %s", exc)
+        raise SystemExit(1)

@@ -5,9 +5,9 @@ Build, upload and apply firmware images on AirSense 11 / AirCurve 11
 devices. Works over BLE and CAN; transport selected with -d/--device:
 
     -d ble:<mac|alias>     BLE
-    -d can:<port>          CAN serial adapter (Waveshare, CANable SLCAN)
+    -d can:<target>        CAN adapter target (Waveshare, CANable SLCAN, SocketCAN)
     --addr <x>             same as -d ble:<x>
-    -p/--port <x>          same as -d can:<x>
+    -p/--port <x>          same as -d can:<target>
 
 Offline subcommands (no device needed):
     targets    list known block regions
@@ -802,7 +802,7 @@ def build_transport_for_flash(args) -> Transport:
     if spec.startswith("can:"):
         target = spec[4:]
         if not target:
-            raise SystemExit("can: spec needs serial port path")
+            raise SystemExit("can: spec needs adapter target (serial path or interface name)")
         if _can_transport is not None:
             t = _can_transport.from_args(target, args)
         else:
@@ -1437,7 +1437,7 @@ def _add_device_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--addr", default=suppr,
                    help="BLE target (compat for -d ble:<x>; env: AS11_ADDR)")
     g.add_argument("-p", "--port", default=suppr,
-                   help="CAN serial port (compat for -d can:<x>; "
+                   help="CAN target (compat for -d can:<x>; "
                         "env: AS11_CAN_PORT)")
     if _can_transport is not None:
         _can_transport.add_args(p)
@@ -1527,6 +1527,9 @@ if __name__ == "__main__":
         sys.exit(2)
     except TimeoutError as e:
         print(f"\ntimeout: {e}", file=sys.stderr)
+        sys.exit(1)
+    except TransportError as e:
+        print(f"\ntransport error: {e}", file=sys.stderr)
         sys.exit(1)
     except RuntimeError as e:
         if str(e).startswith("RPC error "):
