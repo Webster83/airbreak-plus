@@ -37,7 +37,7 @@ def add_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--rx-id", type=parse_int, default=suppr,
                    help=f"CAN device->host ID (default 0x{DEFAULT_RPC_RX_ID:03X})")
     g.add_argument("--frame-interval", type=float, default=suppr,
-                   help="delay between outgoing CAN frames in a datagram (default: 0.002)")
+                   help="delay between outgoing CAN frames in a datagram (default: 0)")
 
 def from_args(target: str, args: argparse.Namespace):
     flavour = getattr(args, "can_flavour", "canable")

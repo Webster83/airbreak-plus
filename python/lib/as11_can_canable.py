@@ -175,7 +175,7 @@ class _CanableConfig:
     serial_bauds: tuple[int, ...] = SERIAL_BAUD_CANDIDATES
     tx_id: int = DEFAULT_RPC_TX_ID
     rx_id: int = DEFAULT_RPC_RX_ID
-    frame_interval: float = 0.002
+    frame_interval: float = 0.0
     reset_buffers: bool = True
     dtr: bool | None = None
     rts: bool | None = None
@@ -402,7 +402,7 @@ class CanCanableTransport:
     def __init__(self, port: str, *, bitrate: int = 1_000_000,
                  mode: str = "normal", serial_bauds: tuple[int, ...] = SERIAL_BAUD_CANDIDATES,
                  tx_id: int = DEFAULT_RPC_TX_ID, rx_id: int = DEFAULT_RPC_RX_ID,
-                 frame_interval: float = 0.002, reset_buffers: bool = True,
+                 frame_interval: float = 0.0, reset_buffers: bool = True,
                  dtr: bool | None = None, rts: bool | None = None,
                  debug: bool = False) -> None:
         self._cfg = _CanableConfig(
@@ -437,7 +437,7 @@ class CanCanableTransport:
             serial_bauds=serial_bauds,
             tx_id=getattr(args, "tx_id", DEFAULT_RPC_TX_ID),
             rx_id=getattr(args, "rx_id", DEFAULT_RPC_RX_ID),
-            frame_interval=getattr(args, "frame_interval", 0.002),
+            frame_interval=getattr(args, "frame_interval", 0.0),
             reset_buffers=not getattr(args, "no_reset_buffers", False),
             dtr=getattr(args, "dtr", None),
             rts=getattr(args, "rts", None),
