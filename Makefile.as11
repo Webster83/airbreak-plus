@@ -1,0 +1,47 @@
+AS11_FIRMWARE ?= as11.bin
+AS11_PATCHED ?= $(BUILD)/as11-patched.bin
+
+# must match offset in patch-airsense-s11.py
+AS11_VID_SPOOF_OFFSET := 0x081DA000
+AS11_VID_SPOOF_BIN := $(BUILD)/as11_vid_spoof.bin
+AS11_BINS := $(AS11_VID_SPOOF_BIN)
+
+AS11_CFLAGS := \
+	-g \
+	-Os \
+	-mcpu=cortex-m7 \
+	-mthumb \
+	-mfloat-abi=hard \
+	-mfpu=fpv5-d16 \
+	-W \
+	-Wall \
+	-Wno-unused-result \
+	-Wno-unused-parameter \
+	-Wno-unused-variable \
+	-nostdlib \
+	-nostdinc \
+	-ffreestanding
+
+$(BUILD)/as11_vid_spoof.o: $(SRC)/as11/vid_spoof.c | $(BUILD)
+	$(CC) $(AS11_CFLAGS) -c -o $@ $<
+
+$(BUILD)/as11_vid_spoof.elf: $(BUILD)/as11_vid_spoof.o | $(BUILD)
+	$(LD) --nostdlib --no-dynamic-linker \
+		--Ttext $(AS11_VID_SPOOF_OFFSET) --entry start --sort-section=name \
+		-o $@ $^
+
+$(BUILD)/as11_vid_spoof.bin: $(BUILD)/as11_vid_spoof.elf
+	$(OBJCOPY) -Obinary $< $@
+
+.PHONY: as11-binaries as11-vid-spoof as11-patched
+
+as11-binaries: $(AS11_BINS)
+
+as11-vid-spoof: $(AS11_VID_SPOOF_BIN)
+	@echo "AS11 VID spoof patch built:"
+	@echo "  $(AS11_VID_SPOOF_BIN)"
+
+as11-patched: $(AS11_PATCHED)
+
+$(AS11_PATCHED): $(AS11_FIRMWARE) patch-airsense-s11 | $(BUILD)
+	./patch-airsense-s11 $< $@

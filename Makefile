@@ -323,3 +323,5 @@ backlight_adapt: $(foreach v,$(S10_CODE_VERSIONS),$(BUILD)/backlight_adapt_$(v).
 
 clean:
 	$(RM) $(BUILD)/*
+
+-include Makefile.as11
