@@ -9,6 +9,7 @@ listen-only mode remain the caller's responsibility outside this tool.
 from __future__ import annotations
 
 import argparse
+import errno
 import json as _json
 import logging as _logging
 import socket
@@ -50,7 +51,7 @@ class _SocketcanConfig:
     mode: str = "normal"
     tx_id: int = DEFAULT_RPC_TX_ID
     rx_id: int = DEFAULT_RPC_RX_ID
-    frame_interval: float = 0.002
+    frame_interval: float = 0.0
     debug: bool = False
 
 
@@ -128,7 +129,8 @@ class _SocketcanRaw:
             )
         return None
 
-    def send_frame(self, can_id: int, data: bytes, *, extended: bool = False, remote: bool = False) -> None:
+    def send_frame(self, can_id: int, data: bytes, *, extended: bool = False,
+                   remote: bool = False, timeout: float = 1.0) -> None:
         if extended:
             if not 0 <= can_id <= _CAN_EFF_MASK:
                 raise ValueError("extended CAN ID must be in range 0..0x1fffffff")
@@ -144,10 +146,17 @@ class _SocketcanRaw:
         raw = _FRAME_STRUCT.pack(can_id_raw, len(data), data.ljust(8, b"\x00"))
         if self.debug:
             _log_can_rpc.debug("raw >>> %s", hex_bytes(raw))
-        try:
-            self.sock.send(raw)
-        except OSError as exc:
-            raise TransportError(f"SocketCAN write failed on {self.ifname!r}: {exc}") from exc
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                self.sock.send(raw)
+                return
+            except OSError as exc:
+                if exc.errno not in (errno.ENOBUFS, errno.EAGAIN, errno.EWOULDBLOCK):
+                    raise TransportError(f"SocketCAN write failed on {self.ifname!r}: {exc}") from exc
+                if time.monotonic() >= deadline:
+                    raise TransportError(f"SocketCAN write timed out on {self.ifname!r}: {exc}") from exc
+                time.sleep(0.0005)
 
 
 class CanSocketcanTransport:
@@ -158,7 +167,7 @@ class CanSocketcanTransport:
     def __init__(self, ifname: str, *, bitrate: int = 1_000_000,
                  mode: str = "normal",
                  tx_id: int = DEFAULT_RPC_TX_ID, rx_id: int = DEFAULT_RPC_RX_ID,
-                 frame_interval: float = 0.002,
+                 frame_interval: float = 0.0,
                  debug: bool = False) -> None:
         self._cfg = _SocketcanConfig(
             ifname=ifname,
@@ -183,7 +192,7 @@ class CanSocketcanTransport:
             mode=getattr(args, "mode", "normal"),
             tx_id=getattr(args, "tx_id", DEFAULT_RPC_TX_ID),
             rx_id=getattr(args, "rx_id", DEFAULT_RPC_RX_ID),
-            frame_interval=getattr(args, "frame_interval", 0.002),
+            frame_interval=getattr(args, "frame_interval", 0.0),
             debug=getattr(args, "debug", False),
         )
 

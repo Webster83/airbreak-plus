@@ -33,6 +33,8 @@ SERIAL_BAUD_CANDIDATES = (
     115_200,
 )
 DEFAULT_TIMEOUT = 5.0
+FRAME_BATCH_SIZE = 8
+FRAME_BATCH_INTERVAL = 0.0
 
 ELMUE_BITRATE_CODES = {
     10_000: "0",
@@ -393,6 +395,19 @@ class _CanableSlcan:
             return
         self._command_no_feedback(cmd, settle=0.0)
 
+    def send_frames_batch(self, can_id: int, frames: list[bytes], *,
+                          extended: bool = False) -> None:
+        for offset in range(0, len(frames), FRAME_BATCH_SIZE):
+            batch = frames[offset:offset + FRAME_BATCH_SIZE]
+            payload = b"".join(
+                _format_slcan_frame(can_id, frame, extended=extended, remote=False).encode("ascii") + b"\r"
+                for frame in batch
+            )
+            self.ser.write(payload)
+            self.ser.flush()
+            if FRAME_BATCH_INTERVAL > 0 and offset + FRAME_BATCH_SIZE < len(frames):
+                time.sleep(FRAME_BATCH_INTERVAL)
+
 
 class CanCanableTransport:
     """JSON-RPC transport over a CANable-style SLCAN serial adapter."""
@@ -516,6 +531,12 @@ class CanCanableTransport:
 
     def send_payload(self, payload: bytes) -> None:
         frames = CanDatagramCodec.encode(payload)
+        if self._cfg.frame_interval <= 0:
+            self.dev.send_frames_batch(self._cfg.tx_id, frames, extended=False)
+            if self._cfg.debug:
+                for frame in frames:
+                    _log_can_rpc.debug("TX 0x%03X %s", self._cfg.tx_id, hex_bytes(frame))
+            return
         for idx, frame in enumerate(frames):
             self.dev.send_frame(self._cfg.tx_id, frame, extended=False)
             if self._cfg.debug:
