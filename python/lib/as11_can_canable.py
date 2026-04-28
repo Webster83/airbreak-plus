@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CANable/CANable 2.5 SLCAN transport for AS11 CAN RPC."""
+"""CANable/CANable 2.x SLCAN transport for AS11 CAN RPC."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from dataclasses import dataclass as _dataclass
 
 try:
     import serial
-except Exception:  # pragma: no cover
+except Exception:  # pragma: no cover - dependency may be absent on dev hosts
     serial = None
 
 from as11_can_common import (
@@ -28,7 +28,7 @@ from as11_rpc import FramingError, TransportError, build_request
 SERIAL_BAUD_DEFAULT = 115_200
 DEFAULT_TIMEOUT = 5.0
 
-SLCAN_BITRATE_CODES = {
+ELMUE_BITRATE_CODES = {
     10_000: "0",
     20_000: "1",
     50_000: "2",
@@ -38,6 +38,19 @@ SLCAN_BITRATE_CODES = {
     500_000: "6",
     800_000: "7",
     1_000_000: "8",
+}
+
+LEGACY_BITRATE_CODES = {
+    10_000: "0",
+    20_000: "1",
+    50_000: "2",
+    100_000: "3",
+    125_000: "4",
+    250_000: "5",
+    500_000: "6",
+    750_000: "7",
+    1_000_000: "8",
+    83_300: "9",
 }
 
 SLCAN_FEEDBACK = {
@@ -59,6 +72,11 @@ SLCAN_FEEDBACK = {
 MODE_TO_OPEN_COMMAND = {
     "normal": "ON",
     "silent": "OS",
+}
+
+LEGACY_MODE_TO_PREOPEN_COMMAND = {
+    "normal": "M0",
+    "silent": "M1",
 }
 
 _log_can_rpc = _logging.getLogger("as11.can_canable")
@@ -194,6 +212,7 @@ class _CanableSlcan:
         self.debug = debug
         self._rx_frames: deque[CanFrame] = deque()
         self._version_text: str | None = None
+        self._protocol = "unknown"
         if open_delay:
             time.sleep(open_delay)
         if reset_buffers:
@@ -202,6 +221,10 @@ class _CanableSlcan:
     @property
     def version_text(self) -> str | None:
         return self._version_text
+
+    @property
+    def protocol(self) -> str:
+        return self._protocol
 
     def reset_input_buffer(self) -> None:
         self.ser.reset_input_buffer()
@@ -256,9 +279,20 @@ class _CanableSlcan:
         if self.debug:
             _log_can_rpc.debug("serial event <<< %s", line)
 
-    def _wait_feedback(self, *, deadline: float) -> None:
+    def _read_event_line(self, *, deadline: float | None) -> str | None:
         while True:
             line = self._read_line(deadline=deadline)
+            if line is None:
+                return None
+            frame = _parse_slcan_frame(line)
+            if frame is not None:
+                self._rx_frames.append(frame)
+                continue
+            return line
+
+    def _wait_feedback(self, *, deadline: float) -> None:
+        while True:
+            line = self._read_event_line(deadline=deadline)
             if line is None:
                 raise TimeoutError("timeout waiting for SLCAN feedback")
             if line.startswith("#"):
@@ -267,7 +301,6 @@ class _CanableSlcan:
                     return
                 detail = SLCAN_FEEDBACK.get(code, f"unknown adapter feedback {code!r}")
                 raise TransportError(f"SLCAN command failed: {detail}")
-            self._queue_or_ignore(line)
 
     def command(self, command: str, *, expect_feedback: bool = False, expect_text: bool = False,
                 timeout: float = 1.0) -> str | None:
@@ -275,7 +308,7 @@ class _CanableSlcan:
         self._write_command(command)
         if expect_text:
             while True:
-                line = self._read_line(deadline=deadline)
+                line = self._read_event_line(deadline=deadline)
                 if line is None:
                     raise TimeoutError(f"timeout waiting for response to {command!r}")
                 if line.startswith("+"):
@@ -286,29 +319,52 @@ class _CanableSlcan:
                         detail = SLCAN_FEEDBACK.get(code, f"unknown adapter feedback {code!r}")
                         raise TransportError(f"SLCAN command failed: {detail}")
                     continue
-                self._queue_or_ignore(line)
+                return line
         if expect_feedback:
             self._wait_feedback(deadline=deadline)
         return None
 
+    def _command_no_feedback(self, command: str, *, settle: float = 0.02) -> None:
+        self._write_command(command)
+        if settle > 0:
+            time.sleep(settle)
+
+    def _probe_version(self, *, timeout: float = 1.0) -> tuple[str, str]:
+        version = self.command("V", expect_text=True, timeout=timeout)
+        if version is None:
+            raise TimeoutError("timeout waiting for version response")
+        if "\t" in version or version.startswith("Board:") or version.startswith("Slcan:"):
+            return "elmue", version
+        return "legacy", version
+
     def configure(self, bitrate: int, mode: str) -> None:
-        if bitrate not in SLCAN_BITRATE_CODES:
-            choices = ", ".join(str(v) for v in sorted(SLCAN_BITRATE_CODES))
-            raise ValueError(f"unsupported SLCAN bitrate {bitrate}; choices: {choices}")
-        if mode not in MODE_TO_OPEN_COMMAND:
+        if mode not in MODE_TO_OPEN_COMMAND or mode not in LEGACY_MODE_TO_PREOPEN_COMMAND:
             raise ValueError(f"unsupported SLCAN mode {mode!r}")
 
-        # Close/reset without waiting: CANable 2.5 intentionally keeps this
-        # command legacy-compatible and silent.
-        self.command("C", timeout=0.2)
+        # Close/reset without waiting: both Elmue 2.5 and legacy CANable
+        # firmwares keep this command silent.
+        self._command_no_feedback("C", settle=0.05)
         time.sleep(0.05)
         self.reset_input_buffer()
 
-        version = self.command("V", expect_text=True, timeout=1.0)
+        protocol, version = self._probe_version(timeout=1.0)
+        self._protocol = protocol
         self._version_text = version
-        self.command("MF", expect_feedback=True, timeout=1.0)
-        self.command(f"S{SLCAN_BITRATE_CODES[bitrate]}", expect_feedback=True, timeout=1.0)
-        self.command(MODE_TO_OPEN_COMMAND[mode], expect_feedback=True, timeout=1.0)
+        if protocol == "elmue":
+            if bitrate not in ELMUE_BITRATE_CODES:
+                choices = ", ".join(str(v) for v in sorted(ELMUE_BITRATE_CODES))
+                raise ValueError(f"unsupported Elmue SLCAN bitrate {bitrate}; choices: {choices}")
+            self.command("MF", expect_feedback=True, timeout=1.0)
+            self.command(f"S{ELMUE_BITRATE_CODES[bitrate]}", expect_feedback=True, timeout=1.0)
+            self.command(MODE_TO_OPEN_COMMAND[mode], expect_feedback=True, timeout=1.0)
+            return
+
+        if bitrate not in LEGACY_BITRATE_CODES:
+            choices = ", ".join(str(v) for v in sorted(LEGACY_BITRATE_CODES))
+            raise ValueError(f"unsupported legacy CANable bitrate {bitrate}; choices: {choices}")
+        self._command_no_feedback(f"S{LEGACY_BITRATE_CODES[bitrate]}")
+        self._command_no_feedback(LEGACY_MODE_TO_PREOPEN_COMMAND[mode])
+        self._command_no_feedback("O", settle=0.05)
 
     def read_frame(self, deadline: float | None = None) -> CanFrame | None:
         if self._rx_frames:
@@ -326,7 +382,10 @@ class _CanableSlcan:
 
     def send_frame(self, can_id: int, data: bytes, *, extended: bool = False, remote: bool = False) -> None:
         cmd = _format_slcan_frame(can_id, data, extended=extended, remote=remote)
-        self.command(cmd, expect_feedback=True, timeout=1.0)
+        if self._protocol == "elmue":
+            self.command(cmd, expect_feedback=True, timeout=1.0)
+            return
+        self._command_no_feedback(cmd, settle=0.0)
 
 
 class CanCanableTransport:
