@@ -575,10 +575,14 @@ class CanCanableTransport:
                     )
                 return payload
 
-    def rpc(self, method: str, params: object | None = None, *, timeout: float = DEFAULT_TIMEOUT) -> dict:
+    def rpc(self, method: str, params: object | None = None, *,
+            timeout: float = DEFAULT_TIMEOUT,
+            post_send_delay: float = 0.0) -> dict:
         rpc_id = self._next_id()
         payload = build_request(method, params, rpc_id)
         self.send_payload(payload)
+        if post_send_delay > 0:
+            time.sleep(post_send_delay)
         return self._rpc_await_response(rpc_id, timeout)
 
     def _rpc_await_response(self, rpc_id: int, timeout: float) -> dict:

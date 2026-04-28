@@ -50,7 +50,8 @@ class Transport(Protocol):
     def __exit__(self, exc_type, exc, tb) -> None: ...
 
     def rpc(self, method: str, params: object | None = None,
-            *, timeout: float = 5.0) -> dict: ...
+            *, timeout: float = 5.0,
+            post_send_delay: float = 0.0) -> dict: ...
 
     def set_notification_handler(self, handler) -> None:
         """Install a persistent notification handler.
