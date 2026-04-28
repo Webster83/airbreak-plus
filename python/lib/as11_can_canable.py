@@ -25,7 +25,13 @@ from as11_can_common import (
 from as11_rpc import FramingError, TransportError, build_request
 
 
-SERIAL_BAUD_DEFAULT = 115_200
+SERIAL_BAUD_DEFAULT = 2_000_000
+SERIAL_BAUD_CANDIDATES = (
+    2_000_000,
+    1_000_000,
+    460_800,
+    115_200,
+)
 DEFAULT_TIMEOUT = 5.0
 
 ELMUE_BITRATE_CODES = {
@@ -166,7 +172,7 @@ class _CanableConfig:
     port: str
     bitrate: int = 1_000_000
     mode: str = "normal"
-    serial_baud: int = SERIAL_BAUD_DEFAULT
+    serial_bauds: tuple[int, ...] = SERIAL_BAUD_CANDIDATES
     tx_id: int = DEFAULT_RPC_TX_ID
     rx_id: int = DEFAULT_RPC_RX_ID
     frame_interval: float = 0.002
@@ -394,7 +400,7 @@ class CanCanableTransport:
     DEFAULT_TIMEOUT = DEFAULT_TIMEOUT
 
     def __init__(self, port: str, *, bitrate: int = 1_000_000,
-                 mode: str = "normal", serial_baud: int = SERIAL_BAUD_DEFAULT,
+                 mode: str = "normal", serial_bauds: tuple[int, ...] = SERIAL_BAUD_CANDIDATES,
                  tx_id: int = DEFAULT_RPC_TX_ID, rx_id: int = DEFAULT_RPC_RX_ID,
                  frame_interval: float = 0.002, reset_buffers: bool = True,
                  dtr: bool | None = None, rts: bool | None = None,
@@ -403,7 +409,7 @@ class CanCanableTransport:
             port=port,
             bitrate=bitrate,
             mode=mode,
-            serial_baud=serial_baud,
+            serial_bauds=tuple(serial_bauds),
             tx_id=tx_id,
             rx_id=rx_id,
             frame_interval=frame_interval,
@@ -420,12 +426,15 @@ class CanCanableTransport:
 
     @classmethod
     def from_args(cls, target: str, args: argparse.Namespace) -> "CanCanableTransport":
-        serial_baud = getattr(args, "serial_baud", SERIAL_BAUD_DEFAULT)
+        if hasattr(args, "serial_baud"):
+            serial_bauds = (int(args.serial_baud),)
+        else:
+            serial_bauds = SERIAL_BAUD_CANDIDATES
         return cls(
             port=target,
             bitrate=getattr(args, "bitrate", 1_000_000),
             mode=getattr(args, "mode", "normal"),
-            serial_baud=serial_baud,
+            serial_bauds=serial_bauds,
             tx_id=getattr(args, "tx_id", DEFAULT_RPC_TX_ID),
             rx_id=getattr(args, "rx_id", DEFAULT_RPC_RX_ID),
             frame_interval=getattr(args, "frame_interval", 0.002),
@@ -453,22 +462,39 @@ class CanCanableTransport:
         if self._dev is not None:
             return
         cfg = self._cfg
-        dev = _CanableSlcan(
-            port=cfg.port,
-            serial_baud=cfg.serial_baud,
-            timeout=0.05,
-            open_delay=0.05,
-            dtr=cfg.dtr,
-            rts=cfg.rts,
-            reset_buffers=cfg.reset_buffers,
-            debug=cfg.debug,
-        )
-        dev.configure(cfg.bitrate, cfg.mode)
+        errors: list[str] = []
+        for serial_baud in cfg.serial_bauds:
+            dev: _CanableSlcan | None = None
+            try:
+                if cfg.debug and len(cfg.serial_bauds) > 1:
+                    _log_can_rpc.debug("probing %s at serial baud %d", cfg.port, serial_baud)
+                dev = _CanableSlcan(
+                    port=cfg.port,
+                    serial_baud=serial_baud,
+                    timeout=0.05,
+                    open_delay=0.05,
+                    dtr=cfg.dtr,
+                    rts=cfg.rts,
+                    reset_buffers=cfg.reset_buffers,
+                    debug=cfg.debug,
+                )
+                dev.configure(cfg.bitrate, cfg.mode)
 
-        time.sleep(0.1)
-        dev.reset_input_buffer()
-        self._dev = dev
-        self._rx_codec = CanDatagramCodec()
+                time.sleep(0.1)
+                dev.reset_input_buffer()
+                self._dev = dev
+                self._rx_codec = CanDatagramCodec()
+                return
+            except Exception as exc:
+                errors.append(f"{serial_baud}: {exc}")
+                if dev is not None:
+                    try:
+                        dev.close()
+                    except Exception:
+                        pass
+        tried = ", ".join(str(v) for v in cfg.serial_bauds)
+        detail = "; ".join(errors) if errors else "no usable serial baud found"
+        raise TransportError(f"CANable open failed on {cfg.port} after trying {tried}: {detail}")
 
     def close(self) -> None:
         if self._dev is not None:
@@ -615,5 +641,6 @@ class CanCanableTransport:
 
 __all__ = [
     "CanCanableTransport",
+    "SERIAL_BAUD_CANDIDATES",
     "SERIAL_BAUD_DEFAULT",
 ]
