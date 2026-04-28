@@ -12,7 +12,7 @@ from dataclasses import dataclass as _dataclass
 
 try:
     import serial
-except Exception:  # pragma: no cover - dependency may be absent on dev hosts
+except Exception:  # pragma: no cover
     serial = None
 
 from as11_can_common import (
@@ -464,6 +464,9 @@ class CanCanableTransport:
             debug=cfg.debug,
         )
         dev.configure(cfg.bitrate, cfg.mode)
+
+        time.sleep(0.1)
+        dev.reset_input_buffer()
         self._dev = dev
         self._rx_codec = CanDatagramCodec()
 

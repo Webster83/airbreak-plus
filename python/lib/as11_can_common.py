@@ -96,12 +96,14 @@ class CanDatagramCodec:
             return None
         if flag == 0x00:
             if not self._parts:
-                raise ValueError("CAN datagram middle frame without start")
+                # ignore orphan middle fragments and wait for the next
+                # start frame instead of failing the whole transport.
+                return None
             self._parts.append(bytes(data[1:]))
             return None
         if flag == self.FLAG_MULTI_END:
             if not self._parts:
-                raise ValueError("CAN datagram end frame without start")
+                return None
             self._parts.append(bytes(data[1:]))
             payload = b"".join(self._parts)
             expected = self._expected_crc
