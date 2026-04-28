@@ -11,6 +11,7 @@ from as11_can_common import DEFAULT_RPC_RX_ID, DEFAULT_RPC_TX_ID, parse_int
 CAN_TRANSPORTS = {
     "waveshare": ("as11_can_waveshare", "CanWaveshareTransport"),
     "canable": ("as11_can_canable", "CanCanableTransport"),
+    "socketcan": ("as11_can_socketcan", "CanSocketcanTransport"),
 }
 
 
