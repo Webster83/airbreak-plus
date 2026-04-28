@@ -28,6 +28,7 @@ PATCHES=(
     patch-unlock-languages
     patch-defaults
     patch-rpc-json-profile-visibility
+    patch-edf-superset
     patch-motor-nagscreen
     patch-ble-permissions
 )
