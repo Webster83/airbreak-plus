@@ -76,11 +76,30 @@ as11_config.py -d ble:as11 session
 
 Receive live NDJSON notifications from the device.
 
+Without `--data-ids` or `--edf`, `stream` requests all EDF alias data IDs
+(`BRP`, `PLD`, `SA2`) at the fastest accepted interval:
+`sampleIntervalMs=10`, `reportIntervalMs=50`.
+
 ```
 as11_config.py -d ble:as11 stream
+as11_config.py -d can:can0 stream --duration 60
+as11_config.py -d can:can0 stream --edf BRP
+as11_config.py -d can:can0 stream --edf BRP,PLD --sample-ms 40
 as11_config.py -d ble:as11 stream --data-ids Leak-50hz,RespiratoryRate-50hz --duration 60
 as11_config.py -d ble:as11 subscribe --duration 60
 ```
+
+EDF stream aliases:
+
+| Alias | Data IDs |
+|-------|----------|
+| `BRP` | `PatientFlow-100hz`, `MaskPressure-100hz` |
+| `PLD` | `MaskPressure-TwoSecond`, `InspiratoryPressure-TwoSecond`, `ExpiratoryPressure-TwoSecond`, `Leak-50hz`, `RespiratoryRate-50hz`, `TidalVolume-50hz`, `MinuteVentilation-50hz`, `TargetMinuteVentilation`, `IeRatio`, `SnoreIndex-50hz`, `FlowLimitation-50hz`, `InspiratoryDuration` |
+| `SA2` | `HeartRate`, `SpO2` |
+
+StartStream interval limits verified so far: minimum sample interval is `10 ms`,
+intervals are rounded down to a `10 ms` boundary, and `reportIntervalMs` must
+not exceed `sampleIntervalMs * 5`.
 
 ### spool
 
@@ -102,8 +121,13 @@ as11_config.py known
 as11_config.py known vars
 as11_config.py known vars groups
 as11_config.py known streams
+as11_config.py known streams BRP
+as11_config.py known streams BRP,SA2
+as11_config.py known edf
 as11_config.py known spools
 ```
+
+`known streams <EDF>` prints the data IDs behind an EDF stream alias.
 
 ### devices
 
@@ -115,4 +139,3 @@ as11_config.py -d ble:AA:BB:CC:DD:EE:FF devices pair
 as11_config.py devices alias AA:BB:CC:DD:EE:FF bedroom
 as11_config.py devices list
 ```
-

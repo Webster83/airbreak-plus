@@ -287,21 +287,155 @@ SPOOL_TYPES: list[str] = [
     "InspiratoryPressure0p5Hz",
     "Leak0p5Hz",
 ]
-STREAM_DATA_IDS = [
-    "AmbientHumidity-Estimated", "AmbientTemperature-Estimated",
-    "ApneaTreatmentPressure-50hz", "AutoSetTreatmentPressure-50hz",
-    "BlowerFlow-100hz", "BlowerPressure-100hz", "BlowerPressure-OneMinute",
-    "ExpiratoryPressure-50hz", "ExpiratoryPressure-TwoSecond",
-    "FlowLimitation-50hz", "FlowLimitationTreatmentPressure-50hz",
-    "InspiratoryPressure-50hz", "InspiratoryPressure-OneMinute",
-    "InspiratoryPressure-TwoSecond",
-    "Leak-50hz",
-    "MaskPressure-100hz", "MaskPressure-OneMinute", "MaskPressure-TwoSecond",
-    "MinuteVentilation-50hz", "PatientFlow-100hz",
-    "RawLeak-50hz", "RemainingRampTime-50hz",
-    "RespiratoryRate-50hz", "SetPressure-100hz",
-    "SnoreIndex-50hz", "SnoreTreatmentPressure-50hz", "TidalVolume-50hz",
+# Direct StartStream names embedded in the 15.8.4 APPL image.
+STREAM_DIRECT_GROUPS = [
+    ("live waveform/control data IDs", [
+        "PatientFlow-100hz",
+        "MaskPressure-100hz",
+        "BlowerFlow-100hz",
+        "BlowerPressure-100hz",
+        "SetPressure-100hz",
+    ]),
+    ("therapy/respiratory data IDs", [
+        "InspiratoryPressure-50hz",
+        "ExpiratoryPressure-50hz",
+        "ApneaTreatmentPressure-50hz",
+        "AutoSetTreatmentPressure-50hz",
+        "FlowLimitationTreatmentPressure-50hz",
+        "FlowLimitation-50hz",
+        "Leak-50hz",
+        "RawLeak-50hz",
+        "MinuteVentilation-50hz",
+        "TargetMinuteVentilation",
+        "IeRatio",
+        "InspiratoryDuration",
+        "RespiratoryRate-50hz",
+        "TidalVolume-50hz",
+        "SnoreIndex-50hz",
+        "SnoreTreatmentPressure-50hz",
+        "RemainingRampTime-50hz",
+    ]),
+    ("oximetry data IDs", [
+        "HeartRate",
+        "SpO2",
+    ]),
+    ("downsampled/estimated live data IDs", [
+        "MaskPressure-TwoSecond",
+        "InspiratoryPressure-TwoSecond",
+        "ExpiratoryPressure-TwoSecond",
+        "MaskPressure-OneMinute",
+        "InspiratoryPressure-OneMinute",
+        "BlowerPressure-OneMinute",
+        "AmbientHumidity-Estimated",
+        "AmbientTemperature-Estimated",
+    ]),
 ]
+
+STREAM_DIRECT_DATA_IDS = [
+    item for _title, group_items in STREAM_DIRECT_GROUPS
+    for item in group_items
+]
+
+# Summary data IDs are accepted by StartStream too. They are session/statistic
+# values rather than waveform signals, but valid:true on the device.
+STREAM_SUMMARY_DATA_IDS = [
+    "Summary-AmbientHumidity-50",
+    "Summary-ApneaHypopneaIndex",
+    "Summary-ApneaIndex",
+    "Summary-BlowerFlow-50",
+    "Summary-BlowerPressure-5",
+    "Summary-BlowerPressure-95",
+    "Summary-CentralApneaIndex",
+    "Summary-ExpiratoryPressure-100",
+    "Summary-ExpiratoryPressure-50",
+    "Summary-ExpiratoryPressure-95",
+    "Summary-HeartRate-100",
+    "Summary-HeartRate-50",
+    "Summary-HeartRate-95",
+    "Summary-HeatedTubePower-50",
+    "Summary-HeatedTubeTemperature-50",
+    "Summary-HumidifierConnected",
+    "Summary-HumidifierPower-50",
+    "Summary-HumidifierTemperature-50",
+    "Summary-HypopneaIndex",
+    "Summary-IeRatio-100",
+    "Summary-IeRatio-50",
+    "Summary-IeRatio-95",
+    "Summary-InspiratoryDuration-100",
+    "Summary-InspiratoryDuration-50",
+    "Summary-InspiratoryDuration-95",
+    "Summary-InspiratoryPressure-100",
+    "Summary-InspiratoryPressure-50",
+    "Summary-InspiratoryPressure-95",
+    "Summary-Leak-100",
+    "Summary-Leak-50",
+    "Summary-Leak-75",
+    "Summary-Leak-95",
+    "Summary-MeanMaskPressure-100",
+    "Summary-MeanMaskPressure-50",
+    "Summary-MeanMaskPressure-95",
+    "Summary-MinuteVentilation-100",
+    "Summary-MinuteVentilation-50",
+    "Summary-MinuteVentilation-95",
+    "Summary-ObstructiveApneaIndex",
+    "Summary-ReraIndex",
+    "Summary-RespiratoryFlow-5",
+    "Summary-RespiratoryFlow-95",
+    "Summary-RespiratoryRate-100",
+    "Summary-RespiratoryRate-50",
+    "Summary-RespiratoryRate-95",
+    "Summary-SpO2-100",
+    "Summary-SpO2-50",
+    "Summary-SpO2-95",
+    "Summary-SpontCyclePercentage",
+    "Summary-SpontTriggerPercentage",
+    "Summary-TargetMinuteVentilation-100",
+    "Summary-TargetMinuteVentilation-50",
+    "Summary-TargetMinuteVentilation-95",
+    "Summary-TidalVolume-100",
+    "Summary-TidalVolume-50",
+    "Summary-TidalVolume-95",
+    "Summary-TubeConnected",
+    "Summary-UnknownApneaIndex",
+]
+
+STREAM_DATA_IDS = sorted(set(STREAM_DIRECT_DATA_IDS + STREAM_SUMMARY_DATA_IDS))
+
+STREAM_GROUPS = STREAM_DIRECT_GROUPS + [
+    ("summary/statistic data IDs", STREAM_SUMMARY_DATA_IDS),
+]
+
+# Convenience groups that mirror the generated live EDF files.
+STREAM_EDF_ALIASES: dict[str, tuple[str, ...]] = {
+    "BRP": (
+        "PatientFlow-100hz",
+        "MaskPressure-100hz",
+    ),
+    "PLD": (
+        "MaskPressure-TwoSecond",
+        "InspiratoryPressure-TwoSecond",
+        "ExpiratoryPressure-TwoSecond",
+        "Leak-50hz",
+        "RespiratoryRate-50hz",
+        "TidalVolume-50hz",
+        "MinuteVentilation-50hz",
+        "TargetMinuteVentilation",
+        "IeRatio",
+        "SnoreIndex-50hz",
+        "FlowLimitation-50hz",
+        "InspiratoryDuration",
+    ),
+    "SA2": (
+        "HeartRate",
+        "SpO2",
+    ),
+}
+
+STREAM_EDF_SAMPLE_MS: dict[str, int] = {
+    "BRP": 40,
+    "PLD": 2000,
+    "SA2": 1000,
+}
 
 EVENT_IDS = [
     # mask / therapy lifecycle
@@ -858,6 +992,7 @@ REGISTRIES = {
                  "aggregate `get` targets (whole-subtree names, verified)"),
 #    "reserved": (VAR_RESERVED,               "reserved `_NAME` specials"),
     "streams":  (STREAM_DATA_IDS,            "stream data IDs (for `stream --data-ids`)"),
+    "edf":      (sorted(STREAM_EDF_ALIASES),  "EDF stream aliases (for `stream --edf`)"),
     "events":   (EVENT_IDS,                  "event IDs (for `subscribe --events`)"),
     "spools":   (SPOOL_TYPES,                "spool types (for `spool`)"),
 }

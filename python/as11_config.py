@@ -48,7 +48,8 @@ from as11_rpc import (  # noqa: E402
 )
 from as11_rpc_vars import (  # noqa: E402
     VAR_GROUPS, expand_groups, resolve_group, SPOOL_TYPES,
-    VAR_NAMES, VAR_SUBTREES,
+    VAR_NAMES, VAR_SUBTREES, STREAM_EDF_ALIASES, STREAM_EDF_SAMPLE_MS,
+    STREAM_GROUPS,
     REGISTRIES,
     filter_vars, var_groups_summary, print_var_pairs,
 )
@@ -325,18 +326,88 @@ def cmd_session(args: argparse.Namespace) -> int:
     return 0
 
 
+def split_csv(text: str | None) -> list[str]:
+    if not text:
+        return []
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def unique_ordered(items: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def expand_edf_stream_aliases(spec: str | None) -> tuple[list[str], list[int]]:
+    data_ids: list[str] = []
+    sample_ms: list[int] = []
+    for alias in split_csv(spec):
+        key = alias.upper()
+        if key not in STREAM_EDF_ALIASES:
+            known = ", ".join(sorted(STREAM_EDF_ALIASES))
+            raise SystemExit(f"stream: unknown EDF alias {alias!r}; known: {known}")
+        data_ids.extend(STREAM_EDF_ALIASES[key])
+        sample_ms.append(STREAM_EDF_SAMPLE_MS[key])
+    return data_ids, sample_ms
+
+
+def normalize_stream_intervals(sample_ms: int, report_ms: int) -> tuple[int, int]:
+    if sample_ms < 10 or sample_ms > 65000:
+        raise SystemExit("stream: sample interval must be 10..65000 ms")
+    if report_ms < 10 or report_ms > 300000:
+        raise SystemExit("stream: report interval must be 10..300000 ms")
+
+    norm_sample = (sample_ms // 10) * 10
+    norm_report = (report_ms // 10) * 10
+    if norm_sample != sample_ms:
+        eprint(f"stream: sample interval rounded down to {norm_sample} ms")
+    if norm_report != report_ms:
+        eprint(f"stream: report interval rounded down to {norm_report} ms")
+
+    if norm_report < norm_sample:
+        raise SystemExit("stream: report interval must be at least sample interval")
+    if norm_report > norm_sample * 5:
+        raise SystemExit("stream: report interval must not exceed 5 * sample interval")
+    return norm_sample, norm_report
+
+
 def cmd_stream(args: argparse.Namespace) -> int:
     """Start a real-time data stream; emit NDJSON, one notification per line.
        On exit, calls `StartStream` with dataIds=[] to disarm.
     """
-    default_ids = [
-        "InspiratoryPressure-50hz", "Leak-TwoSecond", "RemainingRampTime",
-    ]
-    data_ids = args.data_ids.split(",") if args.data_ids else default_ids
+    edf_ids, edf_sample_ms = expand_edf_stream_aliases(args.edf)
+    data_ids = unique_ordered(edf_ids + split_csv(args.data_ids))
+    defaulting_to_edf = False
+    if not data_ids:
+        defaulting_to_edf = True
+        data_ids = unique_ordered([
+            item for alias in sorted(STREAM_EDF_ALIASES)
+            for item in STREAM_EDF_ALIASES[alias]
+        ])
+
+    if len(data_ids) > 30:
+        raise SystemExit("stream: firmware accepts at most 30 dataIds")
+
+    if args.sample_ms is not None:
+        sample_ms = args.sample_ms
+    elif defaulting_to_edf:
+        sample_ms = 10
+    elif edf_sample_ms and not args.data_ids:
+        sample_ms = min(edf_sample_ms)
+    else:
+        sample_ms = 200
+    report_ms = args.report_ms if args.report_ms is not None else sample_ms * 5
+    sample_ms, report_ms = normalize_stream_intervals(sample_ms, report_ms)
+
     params = {
         "dataIds": data_ids,
-        "sampleIntervalMs": args.sample_ms,
-        "reportIntervalMs": args.report_ms,
+        "sampleIntervalMs": sample_ms,
+        "reportIntervalMs": report_ms,
     }
 
     def handler(msg: dict):
@@ -527,6 +598,29 @@ def cmd_known(args: argparse.Namespace) -> int:
                 width = max(len(n) for n in sub_hits)
                 for name in sorted(sub_hits, key=str.lower):
                     print(f"{name:<{width}}  ~subtree")
+        return 0
+
+    if action == "streams":
+        key = pat.lower()
+        aliases = [alias.upper().removesuffix(".EDF")
+                   for alias in split_csv(pat)]
+        if aliases and all(alias in STREAM_EDF_ALIASES for alias in aliases):
+            for alias in aliases:
+                print(f"EDF {alias} data IDs:")
+                for item in STREAM_EDF_ALIASES[alias]:
+                    print(f"  {item}")
+                print()
+            return 0
+
+        for title, group_items in STREAM_GROUPS:
+            hits = [item for item in group_items
+                    if not key or key in item.lower()]
+            if not hits:
+                continue
+            print(f"{title}:")
+            for item in hits:
+                print(f"  {item}")
+            print()
         return 0
 
     if action not in REGISTRIES:
@@ -792,6 +886,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="examples:\n"
                "  stream\n"
                "  stream --data-ids Leak-50hz,RespiratoryRate-50hz\n"
+               "  stream --edf BRP\n"
+               "  stream --edf BRP,PLD --sample-ms 40\n"
                "  stream --sample-ms 100 --report-ms 500\n"
                "  stream --duration 60                 # stop after 60s",
         formatter_class=raw_fmt,
@@ -799,11 +895,15 @@ def build_parser() -> argparse.ArgumentParser:
     add_rpc_args(stream)
     stream.add_argument("--data-ids", default=None,
                         help="comma-separated data IDs to stream "
-                             "(default: a small sample)")
-    stream.add_argument("--sample-ms", type=int, default=200,
-                        help="sample interval ms")
-    stream.add_argument("--report-ms", type=int, default=1000,
-                        help="report interval ms")
+                             "(default: all EDF aliases)")
+    stream.add_argument("--edf", default=None,
+                        help="comma-separated EDF aliases to stream "
+                             "(BRP, PLD, SA2)")
+    stream.add_argument("--sample-ms", type=int, default=None,
+                        help="sample interval ms (default: 10 for plain "
+                             "stream, alias natural period for --edf, or 200)")
+    stream.add_argument("--report-ms", type=int, default=None,
+                        help="report interval ms (default: 5 * sample)")
     stream.add_argument("--duration", type=float, default=None,
                         help="stop after N seconds (default: until Ctrl-C)")
     stream.set_defaults(func=cmd_stream)
@@ -864,6 +964,8 @@ def build_parser() -> argparse.ArgumentParser:
                "  known vars Pressure        substring filter\n"
                "  known vars TherapyMode     list members of a subtree group\n"
                "  known streams              valid `stream --data-ids`\n"
+               "  known streams BRP          data IDs behind an EDF stream alias\n"
+               "  known edf                  valid `stream --edf` aliases\n"
                "  known events               valid `subscribe --events`\n"
                "  known spools               valid `spool` types",
         formatter_class=raw_fmt,

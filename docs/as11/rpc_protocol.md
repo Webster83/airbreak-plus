@@ -211,12 +211,24 @@ Observed constraints:
 |------------|-------|
 | Minimum interval | 10 ms |
 | Interval granularity | 10 ms |
-| Maximum report interval | about 300000 ms |
+| Maximum sample interval | 65000 ms |
+| Maximum report interval | 300000 ms |
 | `reportIntervalMs` | must not exceed `sampleIntervalMs * 5` |
-| Maximum `dataIds` | 29 |
+| Maximum `dataIds` | 30 |
+
+The firmware rounds both intervals down to the nearest 10 ms. The shortest
+accepted sample interval observed in the request parser is therefore 10 ms.
+
+The response contains a `streamId` plus a `dataIds` array. Each requested item
+is echoed as an object with `dataId` and `valid`, so clients can probe stream
+names without guessing from the final data notifications.
 
 Stream payloads are returned as notifications, usually with method
-`StreamData`.
+`StreamData`. Accepted names include direct signal names such as `Leak-50hz`,
+`PatientFlow-100hz`, `MaskPressure-TwoSecond`, `HeartRate`, and `SpO2`, plus
+summary/statistic names such as `Summary-Leak-50`.
+The [EDF reference](edf_signals.md) maps the generated EDF signals to useful
+direct stream names where a direct name exists.
 
 ## Spool RPC
 
@@ -328,4 +340,3 @@ Observed errors:
 | `-11306` | `UpgradeFileAuthenticationFailure` | OTA HMAC/authentication mismatch |
 | `-11308` | `UpgradeFileIncompatible` | OTA format/component/target rejected |
 | `-11309` | `UpgradeFileInvalid` | OTA container invalid |
-
