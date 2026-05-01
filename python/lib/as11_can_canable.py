@@ -122,20 +122,21 @@ def _format_slcan_frame(can_id: int, data: bytes, *, extended: bool, remote: boo
     return f"{kind}{can_text}{len(data):X}{data.hex().upper()}"
 
 
-def _parse_slcan_frame(line: str) -> CanFrame | None:
-    if not line:
-        return None
+def _parse_slcan_frame_prefix(text: str) -> tuple[CanFrame | None, int]:
+    if not text:
+        return None, 0
 
     channel_prefix = ""
-    if line[0] in "&$":
-        channel_prefix = line[0]
-        line = line[1:]
-    if not line:
-        return None
+    offset = 0
+    if text[0] in "&$":
+        channel_prefix = text[0]
+        offset = 1
+    if len(text) <= offset:
+        return None, 0
 
-    frame_type = line[0]
+    frame_type = text[offset]
     if frame_type not in "tTrRdDbB":
-        return None
+        return None, 0
 
     extended = frame_type in "TDRB"
     remote = frame_type in "Rr"
@@ -143,22 +144,34 @@ def _parse_slcan_frame(line: str) -> CanFrame | None:
     if is_fd:
         # AS11 uses classic CAN with 8-byte payloads; the backend does not
         # need CAN FD support right now.
-        return None
+        return None, 0
 
     id_len = 8 if extended else 3
-    if len(line) < 1 + id_len + 1:
-        return None
+    header_end = offset + 1 + id_len + 1
+    if len(text) < header_end:
+        return None, 0
 
-    can_id = int(line[1:1 + id_len], 16)
-    dlc = int(line[1 + id_len], 16)
-    data_start = 1 + id_len + 1
+    try:
+        can_id = int(text[offset + 1:offset + 1 + id_len], 16)
+        dlc = int(text[offset + 1 + id_len], 16)
+    except ValueError:
+        return None, 0
+    if dlc > 8:
+        return None, 0
+
+    data_start = header_end
     data_end = data_start + (0 if remote else dlc * 2)
-    if len(line) < data_end:
-        return None
+    if len(text) < data_end:
+        return None, 0
 
-    data_hex = line[data_start:data_end]
-    data = b"" if remote else bytes.fromhex(data_hex)
-    raw = (channel_prefix + line).encode("ascii", errors="replace") + b"\r"
+    data_hex = text[data_start:data_end]
+    try:
+        data = b"" if remote else bytes.fromhex(data_hex)
+    except ValueError:
+        return None, 0
+
+    raw_text = text[:data_end]
+    raw = raw_text.encode("ascii", errors="replace") + b"\r"
     return CanFrame(
         timestamp=time.time(),
         can_id=can_id,
@@ -166,7 +179,30 @@ def _parse_slcan_frame(line: str) -> CanFrame | None:
         remote=remote,
         data=data,
         raw=raw,
-    )
+    ), data_end
+
+
+def _parse_slcan_frame(line: str) -> CanFrame | None:
+    frame, consumed = _parse_slcan_frame_prefix(line)
+    if frame is None or consumed != len(line):
+        return None
+    return frame
+
+
+def _parse_slcan_frames(line: str) -> list[CanFrame]:
+    """Parse a line as either one exact frame or a concatenation of exact
+    frames with missing CR separators. If any trailing text is not itself a
+    valid frame, reject the whole line instead of silently accepting a prefix.
+    """
+    frames: list[CanFrame] = []
+    text = line
+    while text:
+        frame, consumed = _parse_slcan_frame_prefix(text)
+        if frame is None or consumed <= 0:
+            return []
+        frames.append(frame)
+        text = text[consumed:]
+    return frames
 
 
 @_dataclass
@@ -280,9 +316,14 @@ class _CanableSlcan:
             buf.append(byte)
 
     def _queue_or_ignore(self, line: str) -> None:
-        frame = _parse_slcan_frame(line)
-        if frame is not None:
-            self._rx_frames.append(frame)
+        frames = _parse_slcan_frames(line)
+        if frames:
+            if self.debug and len(frames) > 1:
+                _log_can_rpc.debug(
+                    "serial <<< recovered %d concatenated SLCAN frames",
+                    len(frames),
+                )
+            self._rx_frames.extend(frames)
             return
         if self.debug:
             _log_can_rpc.debug("serial event <<< %s", line)
@@ -292,9 +333,14 @@ class _CanableSlcan:
             line = self._read_line(deadline=deadline)
             if line is None:
                 return None
-            frame = _parse_slcan_frame(line)
-            if frame is not None:
-                self._rx_frames.append(frame)
+            frames = _parse_slcan_frames(line)
+            if frames:
+                if self.debug and len(frames) > 1:
+                    _log_can_rpc.debug(
+                        "serial <<< recovered %d concatenated SLCAN frames",
+                        len(frames),
+                    )
+                self._rx_frames.extend(frames)
                 continue
             return line
 
@@ -381,9 +427,15 @@ class _CanableSlcan:
             line = self._read_line(deadline=deadline)
             if line is None:
                 return None
-            frame = _parse_slcan_frame(line)
-            if frame is not None:
-                return frame
+            frames = _parse_slcan_frames(line)
+            if frames:
+                if self.debug and len(frames) > 1:
+                    _log_can_rpc.debug(
+                        "serial <<< recovered %d concatenated SLCAN frames",
+                        len(frames),
+                    )
+                self._rx_frames.extend(frames[1:])
+                return frames[0]
             if self.debug:
                 _log_can_rpc.debug("serial event <<< %s", line)
         return None
