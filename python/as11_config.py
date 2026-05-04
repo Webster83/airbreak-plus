@@ -70,6 +70,44 @@ def eprint(*a, **kw):
     print(*a, file=sys.stderr, **kw)
 
 
+def normalize_ota_key_hex(text: str, *, source: str) -> str:
+    clean = "".join(text.split())
+    try:
+        raw = bytes.fromhex(clean)
+    except ValueError as exc:
+        raise SystemExit(f"{source}: OTA key must be hex: {exc}") from exc
+    if len(raw) != 32:
+        raise SystemExit(
+            f"{source}: OTA key must be exactly 32 bytes, got {len(raw)}"
+        )
+    return raw.hex().upper()
+
+
+def load_ota_key_hex(*, key_hex: str | None, key_file: str | None) -> str:
+    if key_hex and key_file:
+        raise SystemExit("pass only one of OTA key hex or --key-file")
+    if key_hex:
+        return normalize_ota_key_hex(key_hex, source="ota-key")
+    if key_file:
+        data = Path(key_file).read_bytes()
+        if len(data) == 32:
+            return data.hex().upper()
+        return normalize_ota_key_hex(
+            data.decode("ascii"), source=f"--key-file {key_file}"
+        )
+    raise SystemExit("ota-key: pass a key, --key, --key-file, or --clear")
+
+
+def find_paired_device_key(creds: dict, target: str) -> str | None:
+    target_upper = target.upper()
+    for addr, data in creds.items():
+        if addr.upper() == target_upper:
+            return addr
+        if data.get("alias") == target:
+            return addr
+    return None
+
+
 def resolve_device_spec(args: argparse.Namespace) -> str:
     """Turn --device / --addr / --port / env into a canonical spec string.
 
@@ -853,12 +891,13 @@ def cmd_devices(args: argparse.Namespace) -> int:
         if not creds:
             print("No paired devices.")
             return 0
-        print(f"{'address':<20}  {'alias':<16}  {'clientId':<12}")
-        print(f"{'-'*20:<20}  {'-'*16:<16}  {'-'*12:<12}")
+        print(f"{'address':<20}  {'alias':<16}  {'clientId':<12}  {'otaKey':<6}")
+        print(f"{'-'*20:<20}  {'-'*16:<16}  {'-'*12:<12}  {'-'*6:<6}")
         for addr, data in sorted(creds.items()):
             alias = data.get("alias", "") or ""
             cid = (data.get("clientId", "") or "")[:12]
-            print(f"{addr:<20}  {alias:<16}  {cid:<12}")
+            ota = "yes" if data.get("otaKey") else ""
+            print(f"{addr:<20}  {alias:<16}  {cid:<12}  {ota:<6}")
         return 0
 
     if action == "pair":
@@ -883,15 +922,7 @@ def cmd_devices(args: argparse.Namespace) -> int:
         new_alias = args.name
         creds = load_all_credentials()
         # Resolve target: MAC, UUID, or existing alias
-        key = None
-        target_upper = target.upper()
-        for addr in creds:
-            if addr.upper() == target_upper:
-                key = addr
-                break
-            if creds[addr].get("alias") == target:
-                key = addr
-                break
+        key = find_paired_device_key(creds, target)
         if key is None:
             raise SystemExit(
                 f"alias: {target!r} not found among paired devices"
@@ -917,6 +948,40 @@ def cmd_devices(args: argparse.Namespace) -> int:
             raise SystemExit(f"unalias: no alias named {name!r}")
         save_all_credentials(creds)
         print(f"removed alias {name}")
+        return 0
+
+    if action == "ota-key":
+        target = args.target
+        creds = load_all_credentials()
+        key = find_paired_device_key(creds, target)
+        if key is None:
+            raise SystemExit(
+                f"ota-key: {target!r} not found among paired devices"
+            )
+
+        if args.clear:
+            if args.key or args.key_hex or args.key_file:
+                raise SystemExit("ota-key: pass --clear without a key")
+            removed = creds[key].pop("otaKey", None) is not None
+            save_all_credentials(creds)
+            print(("removed" if removed else "no") + f" OTA key for {target}")
+            return 0
+
+        if args.key and args.key_hex:
+            raise SystemExit("ota-key: pass only one of positional key or --key")
+
+        key_hex = args.key_hex or args.key
+
+        if not key_hex and not args.key_file:
+            state = "configured" if creds[key].get("otaKey") else "not configured"
+            print(f"OTA key for {target}: {state}")
+            return 0
+
+        creds[key]["otaKey"] = load_ota_key_hex(
+            key_hex=key_hex, key_file=args.key_file
+        )
+        save_all_credentials(creds)
+        print(f"stored OTA key for {target}")
         return 0
 
     raise SystemExit(f"unknown devices action: {action!r}")
@@ -1224,6 +1289,20 @@ def build_parser() -> argparse.ArgumentParser:
     dev_alias = dev_sub.add_parser("alias", help="assign an alias")
     dev_alias.add_argument("target", help="MAC/UUID/existing alias")
     dev_alias.add_argument("name", help="new alias")
+
+    dev_key = dev_sub.add_parser(
+        "ota-key",
+        help="store/clear default OTA key for a paired BLE alias/device",
+    )
+    dev_key.add_argument("target", help="MAC/UUID/existing alias")
+    dev_key.add_argument("key", nargs="?",
+                         help="OTA key as 64 hex chars")
+    dev_key.add_argument("--key", dest="key_hex", metavar="HEX32",
+                         help="OTA key as 64 hex chars")
+    dev_key.add_argument("--key-file", metavar="PATH",
+                         help="OTA key as a 32-byte binary file or hex text")
+    dev_key.add_argument("--clear", action="store_true",
+                         help="remove stored OTA key")
 
     dev_unalias = dev_sub.add_parser("unalias", help="remove an alias")
     dev_unalias.add_argument("name", help="alias to remove")

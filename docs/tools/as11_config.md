@@ -182,11 +182,19 @@ as11_config.py known spools
 
 ### devices
 
-BLE device management: scan, pair, list, alias, and unalias.
+BLE device management: scan, pair, list, alias, unalias, and default OTA-key
+storage for paired devices.
 
 ```
 as11_config.py devices scan
 as11_config.py -d ble:AA:BB:CC:DD:EE:FF devices pair
 as11_config.py devices alias AA:BB:CC:DD:EE:FF bedroom
+as11_config.py devices ota-key bedroom --key HEXSTR
+as11_config.py devices ota-key bedroom --key-file ota-key.hex
+as11_config.py devices ota-key bedroom --clear
 as11_config.py devices list
 ```
+
+`devices ota-key` stores the key in the existing BLE credential record. The
+normal device list only shows whether an OTA key is configured; it does not
+print the key.
