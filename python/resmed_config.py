@@ -50,7 +50,7 @@ GROUP_ALIASES = {
 
 GROUP_DESC = {
     'AGL': 'AutoSet params',
-    'BGL': 'Board/identity',
+    'BGL': 'Board/identity/calibration',
     'CGL': 'CPAP params',
     'DGL': 'Bilevel timing',
     'EGL': 'EPR params',
@@ -121,6 +121,7 @@ VAR_DESC = {
     'MXI': 'VAuto Max IPAP',
     'MXS': 'ASV Max PS',
     'NMF': 'Non-Vent Mask',
+    'PBR': 'Calibration Serial Parameter',
     'PHI': 'Height',
     'PHT': 'Height',
     'PRD': 'Pressure Units',
@@ -178,6 +179,10 @@ VAR_DESC = {
     'AET': 'Apnea Event Type',
     'BLL': 'Jump to Bootloader',
     'BLS': 'Bootloader Status',
+    'CAL': 'Calibration Service Select',
+    'DRX': 'Calibration Serial RX',
+    'DTX': 'Calibration Serial TX',
+    'ETR': 'EEPROM Transfer Request',
     'CSR': 'CSR Event Type',
     'HCM': 'Humidifier Operating Mode',
     'HOS': 'Humidifier Operating State',
@@ -188,6 +193,8 @@ VAR_DESC = {
     'QGI': 'Module Group',
     'QNC': 'Network Connection',
     'ROP': 'Run Mode Request',
+    'ROT': 'Rotary Encoder Position',
+    'RSS': 'Calibration Serial Request/Reply',
     'ZRM': 'Run Mode',
     'ZRP': 'Is Ramping',
 
@@ -214,6 +221,7 @@ VAR_DESC = {
     'ATP': 'AutoSet Pressure',
     'BP5': 'Blower Pressure P5',
     'BP9': 'Blower Pressure P95',
+    'CPR': 'Calibration Pressure Setpoint',
     'HDR': 'Hose Drop',
     'MAP': 'Avg Mask Pressure',
     'MKE': 'EPR Pressure',
@@ -327,11 +335,10 @@ VAR_DESC = {
     'QTI': 'Module Type',
     'QVI': 'Module SW Version',
 
-    'SNB': 'Motor calibration something? PWM freq?',
-    'FLZ': 'Flow calibration something?',
-    'FLG': 'Flow calibration something?',
-    'PZH': 'Pressure calibration something?',
-    'PSH': 'Pressure calibration something?',
+    'FLZ': 'Flow Zero',
+    'FLG': 'Flow Gain',
+    'PZH': 'Pressure Zero',
+    'PSH': 'Pressure Gain',
 
     'AIE': 'Avg I:E Ratio [%]',
     'IER': 'I:E Ratio [%]',
@@ -381,6 +388,7 @@ VAR_SCALE = {
     'AEP': (50, 1, 'cmH2O'), 'AIP': (50, 1, 'cmH2O'), 'HDR': (50, 1, 'cmH2O'),
     'MSP': (50, 1, 'cmH2O'), 'PM9': (50, 1, 'cmH2O'), 'PMA': (50, 1, 'cmH2O'),
     'BP5': (50, 1, 'cmH2O'), 'BP9': (50, 1, 'cmH2O'),
+    'BPR': (50, 1, 'cmH2O'), 'CPR': (50, 1, 'cmH2O'),
     'PI9': (50, 1, 'cmH2O'), 'PIA': (50, 1, 'cmH2O'), 'PIM': (50, 1, 'cmH2O'),
     'PE9': (50, 1, 'cmH2O'), 'PEA': (50, 1, 'cmH2O'), 'PEM': (50, 1, 'cmH2O'),
     'EPR': (50, 0, 'cmH2O'),
@@ -392,7 +400,9 @@ VAR_SCALE = {
     'HTT': (10, 0, '°C'), 'HTM': (10, 0, '°C'),
     # Flow: raw / 500
     'RFL': (500, 2, 'L/s'), 'BFF': (500, 2, 'L/s'), 'DFL': (500, 2, 'L/s'),
-    'RF9': (500, 2, 'L/s'), 'RF5': (500, 2, 'L/s'),
+    'RF9': (500, 2, 'L/s'), 'RF5': (500, 2, 'L/s'), 'BFL': (500, 2, 'L/s'),
+    # Calibration gains
+    'PSH': (4096, 4, ''), 'FLG': (4095, 4, ''),
     # Leak: raw / 50
     'LK9': (50, 2, 'L/s'), 'LKF': (50, 2, 'L/s'), 'LKM': (50, 2, 'L/s'),
     'LKP': (50, 2, 'L/s'), 'LMX': (50, 2, 'L/s'), 'LYK': (50, 2, 'L/s'),
@@ -428,7 +438,8 @@ VAR_SCALE = {
     'VA9': (8, 1, 'L/min'), 'VAA': (8, 1, 'L/min'), 'VAM': (8, 1, 'L/min'),
 }
 
-# Enum option labels from ResScan metadata (M36 V39)
+# Enum option labels from ResScan metadata (M36 V39), plus firmware-traced
+# service selectors where noted.
 # Values are {int_value: 'label'}
 ENUM_OPTIONS = {
     'MOP': {0: 'CPAP', 1: 'AutoSet', 2: 'APAP', 3: 'S', 4: 'ST', 5: 'T',
@@ -465,6 +476,24 @@ ENUM_OPTIONS = {
             8: 'Power Save', 9: 'Learn Target', 10: 'Upgrade', 11: 'Upgrade Prep'},
     'ROP': {0: 'Standby', 1: 'Normal', 2: 'Power Recovery', 3: 'Power Save',
             4: 'Calibration', 5: 'Upgrade'},
+    # Firmware-traced CAL service selectors. Only identified values are listed.
+    'CAL': {0x0001: 'Pressure Controller',
+            0x0005: 'LCD/display test',
+            0x0006: 'Pressure loop + unidentified KPD/KPT controls',
+            0x0007: 'Pressure controller + ROT status',
+            0x000A: 'SDT status bit collector',
+            0x000B: 'EEPROM/SD maintenance',
+            0x000C: 'RSS transport test',
+            0x0010: 'SD card read/write self-test',
+            0x0012: 'Serial/comm test'},
+    # Firmware-traced CAL=000B command selector.
+    'ETR': {0x0000: 'Idle',
+            0x0001: 'Zero EEPROM logical pages',
+            0x0002: 'Enable/check eep:0 backend',
+            0x0003: 'Backup raw EEPROM to SD EEPROM.dat',
+            0x0004: 'Restore raw EEPROM from SD EEPROM.dat',
+            0x0005: 'Copy eep:0 tree to SD',
+            0x0006: 'Copy SD EEPROM table to eep:0'},
     'BLL': {0: 'Application', 1: 'Bootloader'},
     'BLS': {0: 'In Application', 1: 'In Bootloader', 2: 'In BL (Invalid App)'},
     'AET': {0: 'None', 1: 'Hypopnea', 2: 'Central', 3: 'Obstructive', 4: 'Apnea', 5: 'Arousal'},
@@ -528,7 +557,12 @@ def encode_value(name, user_str):
         for val, label in ENUM_OPTIONS[name].items():
             if label.lower() == lower:
                 return f'{val:04X}'
-        valid = ', '.join(ENUM_OPTIONS[name].values())
+        raw_hex = lower[2:] if lower.startswith('0x') else lower
+        if raw_hex and all(c in '0123456789abcdef' for c in raw_hex):
+            val = int(raw_hex, 16)
+            if val in ENUM_OPTIONS[name]:
+                return f'{val:04X}'
+        valid = ', '.join(f'{val:04X}={label}' for val, label in ENUM_OPTIONS[name].items())
         raise ValueError(f"unknown option '{user_str}' for {name} (valid: {valid})")
 
     if name in VAR_SCALE:
