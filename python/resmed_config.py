@@ -489,7 +489,7 @@ ENUM_OPTIONS = {
     # Firmware-traced CAL=000B command selector.
     'ETR': {0x0000: 'Idle',
             0x0001: 'Zero EEPROM logical pages',
-            0x0002: 'Request eep:0 backend service via ERE',
+            0x0002: 'Format eep:0 FAT filesystem',
             0x0003: 'Backup raw EEPROM to SD EEPROM.dat',
             0x0004: 'Restore raw EEPROM from SD EEPROM.dat',
             0x0005: 'Copy eep:0 tree to SD',
@@ -518,12 +518,16 @@ CALIBRATION_ZRM = '0006'
 EEPROM_CAL = '000B'
 
 EEPROM_ACTIONS = {
-    'service-backend': {
+    'format-eep-fat': {
         'etr': '0002',
-        'label': 'request eep:0 backend service via ERE handshake',
-        'paths': [],
-        'requires_yes': False,
-        'requires_really': False,
+        'label': 'format eep:0 FAT filesystem via ERE backend service',
+        'paths': ['eep:0:'],
+        'requires_yes': True,
+        'requires_really': True,
+        'confirm_message': 'formats/reinitializes the EEPROM-backed eep:0 FAT filesystem',
+        'warnings': [
+            'operation destroys unit specific data (serial, calbration...)',
+        ],
     },
     'sd-backup-raw': {
         'etr': '0003',
@@ -531,6 +535,7 @@ EEPROM_ACTIONS = {
         'paths': ['mmc:0:EEPROM\\EEPROM.dat'],
         'requires_yes': False,
         'requires_really': False,
+        'warnings': [],
     },
     'sd-restore-raw': {
         'etr': '0004',
@@ -538,6 +543,8 @@ EEPROM_ACTIONS = {
         'paths': ['mmc:0:EEPROM\\EEPROM.dat'],
         'requires_yes': True,
         'requires_really': False,
+        'confirm_message': 'writes raw EEPROM from mmc:0:EEPROM\\EEPROM.dat',
+        'warnings': [],
     },
     'sd-export-tree': {
         'etr': '0005',
@@ -545,6 +552,7 @@ EEPROM_ACTIONS = {
         'paths': ['eep:0:', 'mmc:0:EEPROM'],
         'requires_yes': False,
         'requires_really': False,
+        'warnings': [],
     },
     'sd-import-tree': {
         'etr': '0006',
@@ -557,6 +565,8 @@ EEPROM_ACTIONS = {
         ],
         'requires_yes': True,
         'requires_really': False,
+        'confirm_message': 'writes fixed mmc:0:EEPROM paths back to eep:0',
+        'warnings': [],
     },
     'erase-logical-pages': {
         'etr': '0001',
@@ -564,6 +574,10 @@ EEPROM_ACTIONS = {
         'paths': [],
         'requires_yes': True,
         'requires_really': True,
+        'confirm_message': 'zeroes EEPROM logical pages',
+        'warnings': [
+            'operation destroys unit specific data (serial, calbration...)',
+        ],
     },
 }
 
@@ -908,24 +922,11 @@ def check_eeprom_confirmations(action, yes=False, really=False):
     if spec is None:
         print(f"[!] Unknown EEPROM action: {action}")
         return False
-    if spec['requires_yes'] and not yes:
-        print(f"[!] {action} writes to EEPROM/device storage. Re-run with --yes to confirm.")
-        return False
-    if spec['requires_really'] and not really:
-        print(f"[!] {action} zeroes EEPROM logical pages. Re-run with --yes --really to confirm.")
+    if (spec['requires_yes'] and not yes) or (spec['requires_really'] and not really):
+        flag_text = '--yes --really' if spec['requires_really'] and yes else '--yes'
+        print(f"[!] {action} {spec['confirm_message']}. Re-run with {flag_text} to confirm.")
         return False
     return True
-
-
-def print_eeprom_ere(ser, spec):
-    ft, ere = get_var(ser, 'ERE')
-    if ft == 'R' and ere is not None:
-        ere = ere.strip().upper()
-        if spec['etr'] == '0002':
-            print(f"  immediate ERE={ere}")
-            print("  note: ETR=0002 requests eep:0 backend service via ERE")
-        else:
-            print(f"  post-command ERE={ere}")
 
 
 def resolve_groups(group_names):
@@ -1202,6 +1203,8 @@ def cmd_calibration_eeprom(ser, action, timeout):
 
     print(f"[*] EEPROM action: {action} -> ETR={spec['etr']} ({spec['label']})")
     print("[*] Using stock firmware CAL=000B service; SD paths are device-side.")
+    for warning in spec['warnings']:
+        print(f"[!] {warning}")
     if spec['paths']:
         print("[*] Fixed firmware paths:")
         for path in spec['paths']:
@@ -1235,11 +1238,9 @@ def cmd_calibration_eeprom(ser, action, timeout):
         ok, last = wait_var_value(ser, 'ETR', '0000', timeout, interval=1.0)
         if not ok:
             print(f"[!] Timed out waiting for ETR=0000; last ETR state was {last}")
-            print_eeprom_ere(ser, spec)
         else:
             safe_to_restore = True
             print(f"[+] EEPROM action complete: {action}")
-            print_eeprom_ere(ser, spec)
             success = True
 
     except RuntimeError as exc:
@@ -1320,7 +1321,7 @@ Examples:
   %(prog)s list --groups MGL DGL
   %(prog)s -p /dev/ttyACM0 caps MGL
   %(prog)s -p /dev/ttyACM0 caps IPC MOP EPR
-  %(prog)s -p /dev/ttyACM0 calibration eeprom service-backend
+  %(prog)s -p /dev/ttyACM0 calibration eeprom format-eep-fat --yes --really
   %(prog)s -p /dev/ttyACM0 calibration eeprom sd-backup-raw
   %(prog)s -p /dev/ttyACM0 calibration eeprom sd-restore-raw --yes
 """)
@@ -1379,7 +1380,7 @@ Examples:
     p_cal_eeprom.add_argument('--yes', action='store_true',
                               help='Confirm EEPROM/device-storage writes')
     p_cal_eeprom.add_argument('--really', action='store_true',
-                              help='Extra confirmation for erase-logical-pages')
+                              help='Extra confirmation for destructive EEPROM actions')
     p_cal_eeprom.add_argument('--timeout', type=float, default=300.0,
                               help='Seconds to wait for ETR to return to 0000')
 
