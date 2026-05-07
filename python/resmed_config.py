@@ -12,6 +12,8 @@ import argparse
 import time
 import sys
 import json
+import zlib
+from pathlib import Path
 
 
 GROUPS = {
@@ -790,9 +792,94 @@ def negotiate_best_baud(ser):
     return ser.baudrate
 
 
+class EcpFileDevice:
+    """Settings.ecp file backend used as a writeable pseudo-device."""
+
+    ecp_file = True
+
+    def __init__(self, portspec):
+        self.path = self._resolve_path(portspec)
+        self.crc_path = self.path.with_name('Settings.crc')
+        self.dirty = False
+
+    @staticmethod
+    def _resolve_path(portspec):
+        raw = portspec[4:]
+        if not raw:
+            raise ValueError("ecp: path is empty")
+        path = Path(raw)
+        if path.exists() and path.is_file():
+            return path
+        return path / 'Settings.ecp'
+
+    def _read_bytes(self):
+        if not self.path.exists():
+            return b''
+        return self.path.read_bytes()
+
+    def _read_assignments(self):
+        values = {}
+        text = self._read_bytes().decode('ascii', errors='replace')
+        for line in text.splitlines():
+            parts = line.strip().split(None, 3)
+            if len(parts) != 4:
+                continue
+            if parts[0].upper() != 'P' or parts[1].upper() != 'S':
+                continue
+            if not parts[2].startswith('#'):
+                continue
+            values[parts[2][1:].upper()] = parts[3].strip()
+        return values
+
+    def get_var(self, name):
+        value = self._read_assignments().get(name.upper())
+        if value is None:
+            return None, None
+        return 'R', value
+
+    def set_var(self, name, value):
+        if '\r' in value or '\n' in value:
+            return 'E', 'newline in value'
+        line = f"P S #{name.upper()} {value}"
+        try:
+            encoded = line.encode('ascii')
+        except UnicodeEncodeError:
+            return 'E', 'non-ascii value'
+
+        data = bytearray(self._read_bytes())
+        if data and not (data.endswith(b'\n') or data.endswith(b'\r')):
+            data.extend(b'\r\n')
+        data.extend(encoded)
+        data.extend(b'\r\n')
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_bytes(bytes(data))
+        self.dirty = True
+        return 'R', value
+
+    def update_crc(self):
+        if not self.path.exists():
+            return
+        self.crc_path.write_bytes(
+            (zlib.crc32(self.path.read_bytes()) & 0xFFFFFFFF).to_bytes(4, 'little'))
+        self.dirty = False
+
+    def close(self):
+        if self.dirty:
+            self.update_crc()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
 def get_var(ser, name):
     """Read a single variable. Returns (frame_type, value_str).
     R-frame: ('R', value).  E-frame: ('E', error_code).  No response: (None, None)."""
+    if getattr(ser, 'ecp_file', False):
+        return ser.get_var(name)
     _, resp = send_cmd(ser, f"G S #{name}", timeout=1, quiet=True)
     for r in resp:
         payload = r['payload'].decode('ascii', errors='replace')
@@ -803,6 +890,8 @@ def get_var(ser, name):
 def set_var(ser, name, value):
     """Write a single variable. Returns (frame_type, value_str).
     R-frame: ('R', echo_value).  E-frame: ('E', error_code).  No response: (None, None)."""
+    if getattr(ser, 'ecp_file', False):
+        return ser.set_var(name, value)
     _, resp = send_cmd(ser, f"P S #{name} {value}", timeout=0.5, quiet=True)
     for r in resp:
         payload = r['payload'].decode('ascii', errors='replace')
@@ -812,6 +901,8 @@ def set_var(ser, name, value):
 
 def get_var_caps(ser, name):
     """Read variable capabilities. Returns (frame_type, value_str)."""
+    if getattr(ser, 'ecp_file', False):
+        return None, None
     _, resp = send_cmd(ser, f"G C #{name}", timeout=0.5, quiet=True)
     for r in resp:
         payload = r['payload'].decode('ascii', errors='replace')
@@ -961,6 +1052,12 @@ def exclude_vars(var_names, exclude_groups=None, exclude_vars_list=None):
     return [v for v in var_names if v not in excluded]
 
 
+def parse_name_value_pairs(items, command):
+    if len(items) % 2:
+        raise ValueError(f"{command} expects VAR VALUE pairs")
+    return list(zip(items[0::2], items[1::2]))
+
+
 def cmd_info(ser, verbose=False):
     print("[*] Device info:")
     for var in INFO_VARS:
@@ -995,49 +1092,58 @@ def cmd_get(ser, targets, verbose=False):
             print(f"  [{grp}] {name:4s} = # NO-RESPONSE {desc_str}")
     return 0
 
-def cmd_set(ser, var_name, value):
-    """Set a single variable (raw hex value)."""
-    name = var_name.upper()
-    grp = VAR_TO_GROUP.get(name, '-')
-    _, old_val = get_var(ser, name)
-    print(f"  [{grp}] {name} = {old_val} -> {value}")
-    ft, resp = set_var(ser, name, value)
-    if ft == 'R':
-        _, new_val = get_var(ser, name)
-        print(f"  [{grp}] {name} = {new_val} (confirmed)")
-        return 0
-    elif ft == 'E':
-        print(f"  [!] {name} = {resp} # ERROR")
-        return 1
-    else:
-        print(f"  [!] {name} = # NO-RESPONSE")
-        return 1
+def cmd_set(ser, pairs):
+    """Set one or more variables using raw protocol values."""
+    errors = 0
+    for var_name, value in pairs:
+        name = var_name.upper()
+        grp = VAR_TO_GROUP.get(name, '-')
+        _, old_val = get_var(ser, name)
+        print(f"  [{grp}] {name} = {old_val} -> {value}")
+        ft, resp = set_var(ser, name, value)
+        if ft == 'R':
+            _, new_val = get_var(ser, name)
+            print(f"  [{grp}] {name} = {new_val} (confirmed)")
+        elif ft == 'E':
+            print(f"  [!] {name} = {resp} # ERROR")
+            errors += 1
+        else:
+            print(f"  [!] {name} = # NO-RESPONSE")
+            errors += 1
+    return 0 if errors == 0 else 1
 
-def cmd_setv(ser, var_name, value):
-    """Set a variable using scaled/human-readable value (e.g. 10.0 for cmH2O, AutoSet for mode)."""
-    name = var_name.upper()
-    grp = VAR_TO_GROUP.get(name, '-')
-    raw = encode_value(name, value)
-    if raw is None:
-        print(f"  [!] {name}: no known scaling or enum — use 'set' with raw hex")
-        return 1
-    oft, old_val = get_var(ser, name)
-    old_ann = format_value(name, old_val) if oft == 'R' else None
-    old_str = f"{old_val} ({old_ann})" if old_ann else str(old_val)
-    print(f"  [{grp}] {name}: {value} -> {raw}")
-    ft, resp = set_var(ser, name, raw)
-    if ft == 'R':
-        _, new_val = get_var(ser, name)
-        new_ann = format_value(name, new_val)
-        new_str = f"{new_val} ({new_ann})" if new_ann else str(new_val)
-        print(f"  [{grp}] {name} = {old_str} -> {new_str}")
-        return 0
-    elif ft == 'E':
-        print(f"  [!] {name} = {resp} # ERROR")
-        return 1
-    else:
-        print(f"  [!] {name} = # NO-RESPONSE")
-        return 1
+
+def cmd_setv(ser, pairs):
+    """Set one or more variables using scaled/human-readable values."""
+    encoded = []
+    for var_name, value in pairs:
+        name = var_name.upper()
+        raw = encode_value(name, value)
+        if raw is None:
+            print(f"  [!] {name}: no known scaling or enum; use 'set' with raw value")
+            return 1
+        encoded.append((name, value, raw))
+
+    errors = 0
+    for name, value, raw in encoded:
+        grp = VAR_TO_GROUP.get(name, '-')
+        oft, old_val = get_var(ser, name)
+        old_ann = format_value(name, old_val) if oft == 'R' else None
+        old_str = f"{old_val} ({old_ann})" if old_ann else str(old_val)
+        print(f"  [{grp}] {name}: {value} -> {raw}")
+        ft, resp = set_var(ser, name, raw)
+        if ft == 'R':
+            _, new_val = get_var(ser, name)
+            new_ann = format_value(name, new_val)
+            new_str = f"{new_val} ({new_ann})" if new_ann else str(new_val)
+            print(f"  [{grp}] {name} = {old_str} -> {new_str}")
+        elif ft == 'E':
+            print(f"  [!] {name} = {resp} # ERROR")
+            errors += 1
+        else:
+            print(f"  [!] {name} = # NO-RESPONSE")
+            errors += 1
+    return 0 if errors == 0 else 1
 
 def cmd_dump(ser, groups=None, exclude_groups=None, exclude_vars_list=None):
     """Dump variables to dict. Returns {group: {var: value}}."""
@@ -1260,6 +1366,9 @@ def cmd_calibration_eeprom(ser, action, timeout):
 
 def connect(ser, baud_arg):
     """Connect and probe or set baud rate. Returns True on success."""
+    if getattr(ser, 'ecp_file', False):
+        # ECP backend: nothing to connect to.
+        return True
     if getattr(ser, 'text_mode', False):
         # Text mode: arbiter handles baud, just verify device responds
         print("[*] Verifying device (text mode)...")
@@ -1297,7 +1406,7 @@ def main():
 Commands:
   info                          Show device identity
   get <var|group|all>           Read variables
-  set <var> <value>             Write a variable
+  set <var> <value> [...]       Write one or more variables
   dump                          Dump all variables to JSON
   restore                       Restore variables from JSON
   list                          List known variables and descriptions (offline)
@@ -1311,8 +1420,10 @@ Examples:
   %(prog)s -p /dev/ttyACM0 get MGL
   %(prog)s -p /dev/ttyACM0 get SPT
   %(prog)s -p /dev/ttyACM0 set SPT 0001
+  %(prog)s -p /dev/ttyACM0 set SPT 0001 EPR 0002
   %(prog)s -p /dev/ttyACM0 setv IPC 10.0            # 10.0 cmH2O -> 01F4
   %(prog)s -p /dev/ttyACM0 setv MOP AutoSet          # enum label -> 0001
+  %(prog)s -p ecp:/media/RESMED/SETTINGS set PNA AirSense_10_airbreak
   %(prog)s -p /dev/ttyACM0 dump -o config.json
   %(prog)s -p /dev/ttyACM0 dump --groups MGL EGL -o therapy.json
   %(prog)s -p /dev/ttyACM0 restore -i config.json
@@ -1326,7 +1437,7 @@ Examples:
   %(prog)s -p /dev/ttyACM0 calibration eeprom sd-restore-raw --yes
 """)
 
-    parser.add_argument('-p', '--port', help='Serial port or tcp:host[:port] (required for device commands)')
+    parser.add_argument('-p', '--port', help='Serial port, tcp:host[:port], or ecp:path (required for device commands)')
     parser.add_argument('--tcp-mode', choices=['raw', 'transparent', 'text'], default='text',
                         help='TCP mode: text (arbiter, default), transparent (raw Q-frames via AirBridge), raw (dumb proxy)')
     parser.add_argument('--baud', default='auto', help='Baud rate: auto, 57600, 115200, 460800')
@@ -1339,13 +1450,13 @@ Examples:
     p_get = sub.add_parser('get', help='Read variables')
     p_get.add_argument('targets', nargs='+', help='Variable names, group names, or "all"')
 
-    p_set = sub.add_parser('set', help='Write a variable')
-    p_set.add_argument('var', help='Variable name (3 chars)')
-    p_set.add_argument('value', help='Value to set (hex string)')
+    p_set = sub.add_parser('set', help='Write variable(s)')
+    p_set.add_argument('pairs', nargs='+', metavar='VAR VALUE',
+                       help='One or more VAR VALUE pairs')
 
-    p_setv = sub.add_parser('setv', help='Write a variable (scaled/human value)')
-    p_setv.add_argument('var', help='Variable name (3 chars)')
-    p_setv.add_argument('value', help='Scaled value (e.g. 10.0 for cmH2O) or enum label (e.g. AutoSet)')
+    p_setv = sub.add_parser('setv', help='Write variable(s) (scaled/human value)')
+    p_setv.add_argument('pairs', nargs='+', metavar='VAR VALUE',
+                        help='One or more VAR VALUE pairs')
 
     p_dump = sub.add_parser('dump', help='Dump variables to JSON')
     p_dump.add_argument('-o', '--output', required=True, help='Output JSON file')
@@ -1400,12 +1511,25 @@ Examples:
             print("[!] --timeout must be greater than zero")
             return 1
 
-    # All other commands need a serial port
+    if args.command in ('set', 'setv'):
+        try:
+            args.pairs = parse_name_value_pairs(args.pairs, args.command)
+        except ValueError as e:
+            print(f"[!] {e}")
+            return 1
+
+    # All other commands need a live device or Settings.ecp backend.
     if not args.port:
         print("[!] --port is required for this command")
         return 1
 
-    if args.port.startswith('tcp:'):
+    if args.port.startswith('ecp:'):
+        try:
+            ser = EcpFileDevice(args.port)
+        except ValueError as e:
+            print(f"[!] {e}")
+            return 1
+    elif args.port.startswith('tcp:'):
         from tcp_serial import open_tcp
         ser = open_tcp(args.port, args.tcp_mode, timeout=1.0)
     else:
@@ -1422,11 +1546,11 @@ Examples:
             return cmd_get(ser, args.targets, verbose=args.verbose)
 
         elif args.command == 'set':
-            return cmd_set(ser, args.var, args.value)
+            return cmd_set(ser, args.pairs)
 
         elif args.command == 'setv':
             try:
-                return cmd_setv(ser, args.var, args.value)
+                return cmd_setv(ser, args.pairs)
             except ValueError as e:
                 print(f"  [!] {e}")
                 return 1
@@ -1446,6 +1570,9 @@ Examples:
             return cmd_restore(ser, data, args.exclude_groups, args.exclude_vars, args.dry_run)
 
         elif args.command == 'raw':
+            if getattr(ser, 'ecp_file', False):
+                print("[!] raw is not supported for ecp: backend")
+                return 1
             cmd_str = ' '.join(args.cmd)
             send_cmd(ser, cmd_str, timeout=1.0)
             return 0
@@ -1454,6 +1581,9 @@ Examples:
             return cmd_caps(ser, args.targets, verbose=args.verbose)
 
         elif args.command == 'calibration':
+            if getattr(ser, 'ecp_file', False):
+                print("[!] calibration commands require a live device")
+                return 1
             if args.calibration_command == 'eeprom':
                 return cmd_calibration_eeprom(
                     ser, args.action, timeout=args.timeout)

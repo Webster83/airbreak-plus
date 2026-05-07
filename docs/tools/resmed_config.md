@@ -2,14 +2,23 @@
 
 UART configuration tool for ResMed Air 10 / s9 series
 
-Read, write, dump, and restore device variables over the serial port. Works with direct serial, and TCP via AirBridge.
+Read, write, dump, and restore device variables over the serial port. Works with direct serial, TCP via AirBridge, and offline by writing a `Settings.ecp` file to an SD card for the device to consume on next mount.
 
 ## Connection
 
 ```
-resmed_config.py -p /dev/ttyACM0 ...
-resmed_config.py -p tcp:airbridge-host ...
+resmed_config.py -p /dev/ttyACM0 ...                 # direct serial
+resmed_config.py -p tcp:airbridge-host ...           # AirBridge TCP
+resmed_config.py -p ecp:/sdcard/SETTINGS/ ...        # SD-card Settings.ecp (offline)
 ```
+
+### `ecp:` backend
+
+Instead of talking to a live device, prepare a `Settings.ecp` file to be put into `SETTINGS` directory on SD card.
+When the SD card is inserted, the device reads `Settings.ecp` and applies the listed setting changes automatically.
+
+Required `Settings.crc` file is written automatically whenever `Settings.ecp` is updated.
+
 
 ## Commands
 
@@ -33,12 +42,14 @@ resmed_config.py -p /dev/ttyACM0 get all
 
 ### set / setv
 
-Write a variable. `set` takes a raw hex value, `setv` takes a human-readable value with automatic scaling.
+Write one or more variables. `set` takes raw hex values, `setv` takes human-readable values with automatic scaling. Multiple `VAR VALUE` pairs may be passed in a single invocation.
 
 ```
 resmed_config.py -p /dev/ttyACM0 set IPC 01F4
+resmed_config.py -p /dev/ttyACM0 set SPT 0001 EPR 0002
 resmed_config.py -p /dev/ttyACM0 setv IPC 10.0
 resmed_config.py -p /dev/ttyACM0 setv MOP AutoSet
+resmed_config.py -p ecp:/media/RESMED set PNA AirSense_10_airbreak
 ```
 
 ### dump / restore
