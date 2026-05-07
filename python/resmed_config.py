@@ -489,7 +489,7 @@ ENUM_OPTIONS = {
     # Firmware-traced CAL=000B command selector.
     'ETR': {0x0000: 'Idle',
             0x0001: 'Zero EEPROM logical pages',
-            0x0002: 'Enable/check eep:0 backend',
+            0x0002: 'Request eep:0 backend service via ERE',
             0x0003: 'Backup raw EEPROM to SD EEPROM.dat',
             0x0004: 'Restore raw EEPROM from SD EEPROM.dat',
             0x0005: 'Copy eep:0 tree to SD',
@@ -510,6 +510,61 @@ ENUM_OPTIONS = {
     'TCV': {0: 'None', 1: 'Spont Trig', 2: 'TeMax Trig', 3: 'TeMin Trig',
             4: 'Timed Trig', 5: 'Spont Cycle', 6: 'TiMax Cycle', 7: 'TiMin Cycle',
             8: 'Timed Cycle'},
+}
+
+
+CALIBRATION_ROP = '0004'
+CALIBRATION_ZRM = '0006'
+EEPROM_CAL = '000B'
+
+EEPROM_ACTIONS = {
+    'service-backend': {
+        'etr': '0002',
+        'label': 'request eep:0 backend service via ERE handshake',
+        'paths': [],
+        'requires_yes': False,
+        'requires_really': False,
+    },
+    'sd-backup-raw': {
+        'etr': '0003',
+        'label': 'backup raw EEPROM to SD EEPROM.dat',
+        'paths': ['mmc:0:EEPROM\\EEPROM.dat'],
+        'requires_yes': False,
+        'requires_really': False,
+    },
+    'sd-restore-raw': {
+        'etr': '0004',
+        'label': 'restore raw EEPROM from SD EEPROM.dat',
+        'paths': ['mmc:0:EEPROM\\EEPROM.dat'],
+        'requires_yes': True,
+        'requires_really': False,
+    },
+    'sd-export-tree': {
+        'etr': '0005',
+        'label': 'copy eep:0 tree to SD',
+        'paths': ['eep:0:', 'mmc:0:EEPROM'],
+        'requires_yes': False,
+        'requires_really': False,
+    },
+    'sd-import-tree': {
+        'etr': '0006',
+        'label': 'copy fixed SD EEPROM tree paths to eep:0',
+        'paths': [
+            'mmc:0:EEPROM -> eep:0:',
+            'mmc:0:EEPROM\\DATALOG -> eep:0:DATALOG',
+            'mmc:0:EEPROM\\ERRORLOG -> eep:0:ERRORLOG',
+            'mmc:0:EEPROM\\SETTINGS -> eep:0:SETTINGS',
+        ],
+        'requires_yes': True,
+        'requires_really': False,
+    },
+    'erase-logical-pages': {
+        'etr': '0001',
+        'label': 'zero EEPROM logical pages',
+        'paths': [],
+        'requires_yes': True,
+        'requires_really': True,
+    },
 }
 
 
@@ -749,6 +804,128 @@ def get_var_caps(ser, name):
         if '=' in payload:
             return (r['type'], payload.split('=', 1)[1].strip())
     return (None, None)
+
+
+def require_var_result(name, frame_type, value, action):
+    """Return an uppercase R-frame value or raise RuntimeError."""
+    if frame_type == 'R' and value is not None:
+        return value.strip().upper()
+    if frame_type == 'E':
+        raise RuntimeError(f"{name}: device returned error {value} while {action}")
+    raise RuntimeError(f"{name}: no response while {action}")
+
+
+def wait_var_value(ser, name, expected, timeout, interval=0.5):
+    """Poll a variable until it reaches expected. Returns (ok, last_value)."""
+    expected = expected.upper()
+    deadline = time.time() + timeout
+    last = None
+    tty = sys.stdout.isatty()
+    last_status_len = 0
+    while True:
+        ft, val = get_var(ser, name)
+        if ft == 'R' and val is not None:
+            last = val.strip().upper()
+            if last == expected:
+                msg = f"  {name}={expected} confirmed."
+                if tty:
+                    padding = ' ' * max(0, last_status_len - len(msg))
+                    sys.stdout.write(f"\r{msg}{padding}\n")
+                    sys.stdout.flush()
+                else:
+                    print(msg)
+                return True, last
+        elif ft == 'E':
+            last = f"ERROR {val}"
+        else:
+            last = "no response"
+
+        msg = f"  Waiting for {name}={expected}; current {last}..."
+        if tty:
+            padding = ' ' * max(0, last_status_len - len(msg))
+            sys.stdout.write(f"\r{msg}{padding}")
+            sys.stdout.flush()
+            last_status_len = len(msg)
+        else:
+            print(msg)
+
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            if tty:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            return False, last
+        time.sleep(min(interval, remaining))
+
+
+def enter_calibration_mode(ser, timeout):
+    """Request calibration run mode and wait for ZRM=0006."""
+    zrm = require_var_result('ZRM', *get_var(ser, 'ZRM'), 'reading')
+    if zrm == CALIBRATION_ZRM:
+        print(f"[*] Already in calibration mode: ZRM={zrm}")
+        return
+
+    ann = format_value('ZRM', zrm)
+    ann_str = f" ({ann})" if ann else ""
+    print(f"[*] Current run mode: ZRM={zrm}{ann_str}")
+    print(f"[*] Requesting calibration mode: ROP={CALIBRATION_ROP}")
+    require_var_result('ROP', *set_var(ser, 'ROP', CALIBRATION_ROP),
+                       f'writing {CALIBRATION_ROP}')
+    ok, last = wait_var_value(ser, 'ZRM', CALIBRATION_ZRM, timeout)
+    if not ok:
+        raise RuntimeError(f"ZRM did not reach {CALIBRATION_ZRM}; last value was {last}")
+
+
+def restore_calibration_state(ser, original_cal, original_rop):
+    """Best-effort restore of selector variables saved before calibration utilities."""
+    print(f"[*] Restoring CAL={original_cal}, ROP={original_rop}")
+    errors = 0
+    try:
+        require_var_result('CAL', *set_var(ser, 'CAL', original_cal),
+                           f'writing {original_cal}')
+    except RuntimeError as exc:
+        print(f"  [!] Failed to restore CAL: {exc}")
+        errors += 1
+    try:
+        require_var_result('ROP', *set_var(ser, 'ROP', original_rop),
+                           f'writing {original_rop}')
+    except RuntimeError as exc:
+        print(f"  [!] Failed to restore ROP: {exc}")
+        errors += 1
+
+    ft, zrm = get_var(ser, 'ZRM')
+    if ft == 'R' and zrm is not None:
+        zrm = zrm.strip().upper()
+        ann = format_value('ZRM', zrm)
+        ann_str = f" ({ann})" if ann else ""
+        print(f"  ZRM={zrm}{ann_str}")
+    return errors == 0
+
+
+def check_eeprom_confirmations(action, yes=False, really=False):
+    """Validate EEPROM action confirmation flags before opening or writing."""
+    spec = EEPROM_ACTIONS.get(action)
+    if spec is None:
+        print(f"[!] Unknown EEPROM action: {action}")
+        return False
+    if spec['requires_yes'] and not yes:
+        print(f"[!] {action} writes to EEPROM/device storage. Re-run with --yes to confirm.")
+        return False
+    if spec['requires_really'] and not really:
+        print(f"[!] {action} zeroes EEPROM logical pages. Re-run with --yes --really to confirm.")
+        return False
+    return True
+
+
+def print_eeprom_ere(ser, spec):
+    ft, ere = get_var(ser, 'ERE')
+    if ft == 'R' and ere is not None:
+        ere = ere.strip().upper()
+        if spec['etr'] == '0002':
+            print(f"  immediate ERE={ere}")
+            print("  note: ETR=0002 requests eep:0 backend service via ERE")
+        else:
+            print(f"  post-command ERE={ere}")
 
 
 def resolve_groups(group_names):
@@ -1019,6 +1196,67 @@ def cmd_caps(ser, targets=None, verbose=False):
     return 0
 
 
+def cmd_calibration_eeprom(ser, action, timeout):
+    """Run stock-firmware EEPROM/SD maintenance commands via CAL=000B and ETR."""
+    spec = EEPROM_ACTIONS.get(action)
+
+    print(f"[*] EEPROM action: {action} -> ETR={spec['etr']} ({spec['label']})")
+    print("[*] Using stock firmware CAL=000B service; SD paths are device-side.")
+    if spec['paths']:
+        print("[*] Fixed firmware paths:")
+        for path in spec['paths']:
+            print(f"  {path}")
+
+    original_cal = None
+    original_rop = None
+    safe_to_restore = True
+    success = False
+
+    try:
+        original_cal = require_var_result('CAL', *get_var(ser, 'CAL'), 'reading')
+        original_rop = require_var_result('ROP', *get_var(ser, 'ROP'), 'reading')
+        print(f"[*] Saved CAL={original_cal}, ROP={original_rop}")
+
+        enter_calibration_mode(ser, timeout)
+
+        print(f"[*] Selecting EEPROM/SD maintenance service: CAL={EEPROM_CAL}")
+        require_var_result('CAL', *set_var(ser, 'CAL', EEPROM_CAL),
+                           f'writing {EEPROM_CAL}')
+
+        etr = require_var_result('ETR', *get_var(ser, 'ETR'), 'reading')
+        if etr != '0000':
+            raise RuntimeError(f"ETR is {etr}, not idle; refusing to start another command")
+
+        print(f"[*] Starting EEPROM command: ETR={spec['etr']}")
+        require_var_result('ETR', *set_var(ser, 'ETR', spec['etr']),
+                           f"writing {spec['etr']}")
+        safe_to_restore = False
+
+        ok, last = wait_var_value(ser, 'ETR', '0000', timeout, interval=1.0)
+        if not ok:
+            print(f"[!] Timed out waiting for ETR=0000; last ETR state was {last}")
+            print_eeprom_ere(ser, spec)
+        else:
+            safe_to_restore = True
+            print(f"[+] EEPROM action complete: {action}")
+            print_eeprom_ere(ser, spec)
+            success = True
+
+    except RuntimeError as exc:
+        print(f"[!] EEPROM action failed: {exc}")
+
+    finally:
+        if original_cal is not None and original_rop is not None:
+            if safe_to_restore:
+                if not restore_calibration_state(ser, original_cal, original_rop):
+                    success = False
+            else:
+                print("[!] ETR did not return to 0000; leaving CAL/ROP unchanged.")
+                print("    Inspect ETR/ERE before starting another EEPROM action.")
+
+    return 0 if success else 1
+
+
 def connect(ser, baud_arg):
     """Connect and probe or set baud rate. Returns True on success."""
     if getattr(ser, 'text_mode', False):
@@ -1063,6 +1301,7 @@ Commands:
   restore                       Restore variables from JSON
   list                          List known variables and descriptions (offline)
   caps                          Query variable limits from device
+  calibration eeprom            Run stock-firmware EEPROM/SD maintenance
 
 Groups: """ + ', '.join(sorted(GROUPS.keys())) + """
 
@@ -1081,6 +1320,9 @@ Examples:
   %(prog)s list --groups MGL DGL
   %(prog)s -p /dev/ttyACM0 caps MGL
   %(prog)s -p /dev/ttyACM0 caps IPC MOP EPR
+  %(prog)s -p /dev/ttyACM0 calibration eeprom service-backend
+  %(prog)s -p /dev/ttyACM0 calibration eeprom sd-backup-raw
+  %(prog)s -p /dev/ttyACM0 calibration eeprom sd-restore-raw --yes
 """)
 
     parser.add_argument('-p', '--port', help='Serial port or tcp:host[:port] (required for device commands)')
@@ -1125,6 +1367,22 @@ Examples:
     p_caps = sub.add_parser('caps', help='Query variable values and limits from device')
     p_caps.add_argument('targets', nargs='*', help='Variable names, group names, or "all" (default: all)')
 
+    p_cal = sub.add_parser('calibration', help='Calibration/service utilities')
+    cal_sub = p_cal.add_subparsers(dest='calibration_command', help='Calibration command')
+    cal_sub.required = True
+
+    p_cal_eeprom = cal_sub.add_parser(
+        'eeprom',
+        help='Run stock-firmware EEPROM/SD maintenance via CAL=000B')
+    p_cal_eeprom.add_argument('action', choices=sorted(EEPROM_ACTIONS),
+                              help='EEPROM/SD maintenance action')
+    p_cal_eeprom.add_argument('--yes', action='store_true',
+                              help='Confirm EEPROM/device-storage writes')
+    p_cal_eeprom.add_argument('--really', action='store_true',
+                              help='Extra confirmation for erase-logical-pages')
+    p_cal_eeprom.add_argument('--timeout', type=float, default=300.0,
+                              help='Seconds to wait for ETR to return to 0000')
+
     args = parser.parse_args()
 
     if not args.command:
@@ -1133,6 +1391,13 @@ Examples:
 
     if args.command == 'list':
         return cmd_list(args.groups)
+
+    if args.command == 'calibration' and args.calibration_command == 'eeprom':
+        if not check_eeprom_confirmations(args.action, args.yes, args.really):
+            return 1
+        if args.timeout <= 0:
+            print("[!] --timeout must be greater than zero")
+            return 1
 
     # All other commands need a serial port
     if not args.port:
@@ -1186,6 +1451,11 @@ Examples:
 
         elif args.command == 'caps':
             return cmd_caps(ser, args.targets, verbose=args.verbose)
+
+        elif args.command == 'calibration':
+            if args.calibration_command == 'eeprom':
+                return cmd_calibration_eeprom(
+                    ser, args.action, timeout=args.timeout)
 
     finally:
         ser.close()

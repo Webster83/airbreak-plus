@@ -69,6 +69,35 @@ Query variable values and limits from the device.
 resmed_config.py -p /dev/ttyACM0 caps IPC MOP EPR
 ```
 
+### calibration eeprom
+
+Run the stock firmware EEPROM/SD maintenance service (`CAL=000B`) from the
+normal UART variable protocol. These commands use fixed device-side SD paths;
+they do not read or write host files directly.
+
+```
+resmed_config.py -p /dev/ttyACM0 calibration eeprom service-backend
+resmed_config.py -p /dev/ttyACM0 calibration eeprom sd-backup-raw
+resmed_config.py -p /dev/ttyACM0 calibration eeprom sd-export-tree
+resmed_config.py -p /dev/ttyACM0 calibration eeprom sd-restore-raw --yes
+resmed_config.py -p /dev/ttyACM0 calibration eeprom sd-import-tree --yes
+resmed_config.py -p /dev/ttyACM0 calibration eeprom erase-logical-pages --yes --really
+```
+
+The command enters calibration mode with `ROP=0004`, selects `CAL=000B`, starts
+the selected `ETR` command, polls until `ETR=0000`, then restores the original
+`CAL` and `ROP` values. If `ETR` does not return to `0000`, it does not clear
+`ETR` blindly.
+
+| Action | `ETR` | Firmware behavior |
+|--------|-------|-------------------|
+| `service-backend` | `0002` | request `eep:0` backend service via `ERE` handshake; firmware backend path can clear `ERE` |
+| `sd-backup-raw` | `0003` | raw EEPROM to `mmc:0:EEPROM\EEPROM.dat` |
+| `sd-restore-raw` | `0004` | `mmc:0:EEPROM\EEPROM.dat` to raw EEPROM |
+| `sd-export-tree` | `0005` | copy `eep:0:` tree to `mmc:0:EEPROM` |
+| `sd-import-tree` | `0006` | copy fixed `mmc:0:EEPROM` paths back to `eep:0:` |
+| `erase-logical-pages` | `0001` | zero EEPROM logical pages |
+
 ## Variable groups
 
 | Group | Content |

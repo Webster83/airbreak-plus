@@ -642,8 +642,8 @@ var_id	uart	edf_signal	resmed_name	notes
 0x0280	ZCR			
 0x0281	CYM			
 0x0282	ERC			
-0x0283	ERE				eep:0 backend status/control; CAL=000B ETR=0002 writes ERE=0001 and verifies it reads nonzero
-0x0284	ETR				CAL=000B EEPROM/SD command; values: 0000=idle/reset, 0001=zero EEPROM logical pages, 0002=request/verify eep:0 backend enable: if backend is available, write ERE=0001, then read ERE; ETR clears only when ERE reads nonzero, 0003=raw EEPROM to SD EEPROM.dat, 0004=SD EEPROM.dat to raw EEPROM, 0005=eep:0 tree to mmc:0:EEPROM, 0006=mmc:0:EEPROM fixed table to eep:0; EEPROM Transfer Request
+0x0283	ERE				eep:0 backend status/control variable; CAL=000B ETR=0002 writes ERE=0001 and then checks it; backend service path can clear it to 0000
+0x0284	ETR				CAL=000B EEPROM/SD command; values: 0000=idle/reset, 0001=zero EEPROM logical pages, 0002=request eep:0 backend service via ERE handshake (writes ERE=0001, verifies nonzero; backend service can clear), 0003=raw EEPROM to SD EEPROM.dat, 0004=SD EEPROM.dat to raw EEPROM, 0005=eep:0 tree to mmc:0:EEPROM, 0006=mmc:0:EEPROM fixed table to eep:0; EEPROM Transfer Request
 0x0285	FON			
 0x0286	KPM			
 0x0287	CMS			
