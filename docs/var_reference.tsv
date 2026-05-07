@@ -17,9 +17,9 @@ var_id	uart	edf_signal	resmed_name	notes
 0x000F	FSN			
 0x0010	HID		HEIGHT_UNIT	
 0x0011	MDB			
-0x0012	RSS				CAL 0012 serial request/reply buffer; Calibration Serial Request/Reply
-0x0013	DRX				CAL 0012 raw serial RX buffer; Calibration Serial RX
-0x0014	DTX				CAL 0012 raw serial TX buffer; Calibration Serial TX
+0x0012	RSS			CAL 0012 serial request/reply buffer; Calibration Serial Request/Reply
+0x0013	DRX			CAL 0012 raw serial RX buffer; Calibration Serial RX
+0x0014	DTX			CAL 0012 raw serial TX buffer; Calibration Serial TX
 0x0015	EXW			
 0x0016	EXR			
 0x0017	CRX			
@@ -592,8 +592,8 @@ var_id	uart	edf_signal	resmed_name	notes
 0x024E	LCD			
 0x024F	LET		AVG_EXP_TIME	
 0x0250	RES		RESISTANCE	
-0x0251	ROT				Rotary encoder value exported by CAL 0007; Rotary Encoder Position
-0x0252	PBR				CAL 0012 raw serial parameter/buffer; Calibration Serial Parameter
+0x0251	ROT			Rotary encoder value exported by CAL 0007; Rotary Encoder Position
+0x0252	PBR			CAL 0012 raw serial parameter/buffer; Calibration Serial Parameter
 0x0253	CDS			
 0x0254	SDC			
 0x0255	SCS			
@@ -642,8 +642,8 @@ var_id	uart	edf_signal	resmed_name	notes
 0x0280	ZCR			
 0x0281	CYM			
 0x0282	ERC			
-0x0283	ERE				eep:0 formatting status/control variable
-0x0284	ETR				CAL=000B EEPROM/SD command; values: 0000=idle/reset, 0001=zero EEPROM logical pages, 0002=format/reinitialize eep:0 FAT filesystem, 0003=raw EEPROM to SD EEPROM.dat, 0004=SD EEPROM.dat to raw EEPROM, 0005=eep:0 tree to mmc:0:EEPROM, 0006=mmc:0:EEPROM fixed table to eep:0; EEPROM Transfer Request
+0x0283	ERE			eep:0 formatting status/control variable
+0x0284	ETR			CAL=000B EEPROM/SD command; values: 0000=idle/reset, 0001=zero EEPROM logical pages, 0002=format/reinitialize eep:0 FAT filesystem, 0003=raw EEPROM to SD EEPROM.dat, 0004=SD EEPROM.dat to raw EEPROM, 0005=eep:0 tree to mmc:0:EEPROM, 0006=mmc:0:EEPROM fixed table to eep:0; EEPROM Transfer Request
 0x0285	FON			
 0x0286	KPM			
 0x0287	CMS			
