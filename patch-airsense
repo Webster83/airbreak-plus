@@ -559,9 +559,8 @@ unlock_languages() {
     local addr=$(find_g6_var 0x0204)
     # make variable read only to prevent overwriting with eeprom data
     printf '\x06' | patch $addr
-    # set bits for languages 1-19 except reserved (5,7) and
-    # jp (13,19), cn (16,17) (enabling them breaks system font)
-    printf '\x5f\xdf\x04\x00' | patch $(( addr + 0x08 ))
+    # 0x007fffff, except font-reserved bits jp (13,19) and cn (16,17).
+    printf '\xff\xdf\x74\x00' | patch $(( addr + 0x08 ))
 }
 
 
