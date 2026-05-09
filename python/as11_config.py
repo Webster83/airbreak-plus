@@ -18,6 +18,7 @@ Compat aliases:
 from __future__ import annotations
 
 import argparse
+import atexit
 import base64
 import hashlib
 import json
@@ -68,6 +69,88 @@ log = logging.getLogger("as11.config")
 
 def eprint(*a, **kw):
     print(*a, file=sys.stderr, **kw)
+
+
+SESSION_COMMANDS = (
+    "get", "set", "gettime", "settime", "rpc",
+    "quit", "exit", "q", "help",
+)
+
+
+def session_history_path() -> Path:
+    env = os.environ.get("AS11_SESSION_HISTORY")
+    if env:
+        return Path(env).expanduser()
+    state_home = os.environ.get("XDG_STATE_HOME")
+    if state_home:
+        return Path(state_home).expanduser() / "airsense11" / "as11_config_history"
+    return Path.home() / ".as11_config_history"
+
+
+def setup_session_readline() -> None:
+    """Enable persistent history and tab completion for the interactive REPL."""
+    if not sys.stdin.isatty():
+        return
+    try:
+        import readline  # type: ignore
+    except ImportError:
+        return
+
+    history = session_history_path()
+    try:
+        history.parent.mkdir(parents=True, exist_ok=True)
+        readline.read_history_file(str(history))
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+    def save_history() -> None:
+        try:
+            readline.write_history_file(str(history))
+        except OSError:
+            pass
+
+    atexit.register(save_history)
+
+    try:
+        readline.set_history_length(1000)
+    except AttributeError:
+        pass
+
+    def completion_names(items):
+        for item in items:
+            if isinstance(item, str):
+                yield item
+            elif isinstance(item, (tuple, list)) and item and isinstance(item[0], str):
+                yield item[0]
+
+    completion_words = sorted(
+        set(SESSION_COMMANDS)
+        | set(completion_names(VAR_NAMES))
+        | set(completion_names(VAR_SUBTREES))
+    )
+
+    def completer(text: str, state: int) -> str | None:
+        line = readline.get_line_buffer()
+        begidx = readline.get_begidx()
+        stripped = line.lstrip()
+        if begidx == len(line) - len(stripped):
+            matches = [word + " " for word in SESSION_COMMANDS
+                       if word.startswith(text)]
+        else:
+            matches = [word for word in completion_words
+                       if word.startswith(text)]
+        if state < len(matches):
+            return matches[state]
+        return None
+
+    try:
+        readline.set_completer(completer)
+        readline.set_completer_delims(" \t\n")
+        readline.parse_and_bind("tab: complete")
+    except (AttributeError, OSError):
+        pass
 
 
 def normalize_ota_key_hex(text: str, *, source: str) -> str:
@@ -260,6 +343,7 @@ def cmd_session(args: argparse.Namespace) -> int:
     """Interactive REPL. Keeps the transport open across commands."""
     with connect_transport(args) as t:
         first_call = [True]
+        setup_session_readline()
 
         def do_rpc(method, params):
             if first_call[0]:
@@ -267,14 +351,18 @@ def cmd_session(args: argparse.Namespace) -> int:
                 return call_rpc(t, args, method, params)
             return t.rpc(method, params, timeout=args.timeout)
 
-        if sys.stdin.isatty():
+        def print_session_help() -> None:
             print(f"AS11 session on {t.name}. Commands:")
             print("  get NAME [NAME...]              -> Get RPC")
             print("  set NAME VALUE [--type T] ...   -> Set RPC")
-            print("  gettime                          -> GetDateTime")
+            print("  gettime                         -> GetDateTime")
             print("  settime [ISO]                   -> SetDateTime")
             print("  rpc METHOD [JSON_PARAMS]        -> arbitrary RPC")
-            print("  quit / exit                      -> leave")
+            print("  help                            -> show this help")
+            print("  quit / exit                     -> leave")
+
+        if sys.stdin.isatty():
+            print_session_help()
         while True:
             if sys.stdin.isatty():
                 try:
@@ -294,7 +382,10 @@ def cmd_session(args: argparse.Namespace) -> int:
             try:
                 verb, _, rest = line.partition(" ")
                 verb = verb.lower()
-                if verb == "get":
+                if verb == "help":
+                    print_session_help()
+                    continue
+                elif verb == "get":
                     names = rest.split()
                     if not names:
                         eprint("get: at least one variable name required")
