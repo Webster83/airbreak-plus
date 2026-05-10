@@ -73,7 +73,7 @@ def eprint(*a, **kw):
 
 SESSION_COMMANDS = (
     "get", "set", "gettime", "settime", "rpc",
-    "quit", "exit", "q", "help",
+    "known", "quit", "exit", "q", "help",
 )
 
 
@@ -127,6 +127,7 @@ def setup_session_readline() -> None:
 
     completion_words = sorted(
         set(SESSION_COMMANDS)
+        | set(completion_names(REGISTRIES))
         | set(completion_names(VAR_NAMES))
         | set(completion_names(VAR_SUBTREES))
     )
@@ -358,6 +359,7 @@ def cmd_session(args: argparse.Namespace) -> int:
             print("  gettime                         -> GetDateTime")
             print("  settime [ISO]                   -> SetDateTime")
             print("  rpc METHOD [JSON_PARAMS]        -> arbitrary RPC")
+            print("  known [REGISTRY] [PATTERN]      -> list known names")
             print("  help                            -> show this help")
             print("  quit / exit                     -> leave")
 
@@ -445,6 +447,21 @@ def cmd_session(args: argparse.Namespace) -> int:
                     else:
                         params = None
                     resp = do_rpc(method, params)
+                elif verb == "known":
+                    toks = rest.split()
+                    if len(toks) > 2:
+                        eprint("known: [REGISTRY] [PATTERN]")
+                        continue
+                    action = toks[0] if toks else None
+                    if action and action not in REGISTRIES:
+                        known = ", ".join(REGISTRIES)
+                        eprint(f"known: unknown registry {action!r}; known: {known}")
+                        continue
+                    cmd_known(argparse.Namespace(
+                        known_action=action,
+                        pattern=toks[1] if len(toks) > 1 else None,
+                    ))
+                    continue
                 else:
                     eprint(f"unknown command: {verb}")
                     continue
