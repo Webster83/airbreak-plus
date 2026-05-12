@@ -1256,6 +1256,114 @@ def cmd_list(groups=None):
                 print(f"    {name:4s}  {VAR_DESC[name]}")
     return 0
 
+
+KNOWN_REGISTRIES = {
+    'vars':   'Known variable names with descriptions',
+    'groups': 'Variable group names',
+    'enums':  'Variables that map raw values to human-readable labels',
+}
+
+
+def cmd_known(action, pattern):
+    """List names the tool knows about (offline, no device).
+
+    `known`                  list registries (vars/groups/enums)
+    `known vars [PATTERN]`   list known vars; filter by substring in name or description
+    `known groups [GROUP]`   list all groups; or members of one named group
+    `known enums [VAR]`      list vars with enum mappings; or options for one var
+    """
+    if not action:
+        width = max(len(n) for n in KNOWN_REGISTRIES)
+        for name, desc in KNOWN_REGISTRIES.items():
+            print(f"  {name:<{width}}  {desc}")
+        print()
+        print("  hint: `known vars <substr>` to filter by name or description")
+        print("  hint: `known groups <group>` to list members of one group")
+        print("  hint: `known enums <var>` to show enum options for one var")
+        return 0
+
+    pat = (pattern or '').lower()
+
+    if action == 'vars':
+        names = sorted(set(VAR_DESC) | set(VAR_TO_GROUP))
+        rows = []
+        for name in names:
+            desc = VAR_DESC.get(name, '')
+            grp = VAR_TO_GROUP.get(name, '-')
+            if pat and pat not in name.lower() and pat not in desc.lower():
+                continue
+            rows.append((name, grp, desc))
+        if not rows:
+            print(f"[!] no vars match {pattern!r}")
+            return 1
+        width = max(len(r[0]) for r in rows)
+        for name, grp, desc in rows:
+            line = f"  {name:<{width}}  [{grp}]"
+            if desc:
+                line += f"  {desc}"
+            print(line)
+        return 0
+
+    if action == 'groups':
+        if pattern:
+            grp = pattern.upper()
+            if grp not in GROUPS:
+                print(f"[!] unknown group: {pattern}")
+                print(f"    known groups: {', '.join(sorted(GROUPS))}")
+                return 1
+            desc = GROUP_DESC.get(grp, '')
+            header = f"  {grp}  ({len(GROUPS[grp])} vars)"
+            if desc:
+                header += f" - {desc}"
+            print(header)
+            for name in GROUPS[grp]:
+                vd = VAR_DESC.get(name, '')
+                if vd:
+                    print(f"    {name:4s}  {vd}")
+                else:
+                    print(f"    {name:4s}")
+            return 0
+        # No pattern: list all groups
+        width = max(len(g) for g in GROUPS)
+        for grp in sorted(GROUPS):
+            desc = GROUP_DESC.get(grp, '')
+            line = f"  {grp:<{width}}  ({len(GROUPS[grp])} vars)"
+            if desc:
+                line += f"  - {desc}"
+            print(line)
+        return 0
+
+    if action == 'enums':
+        if pattern:
+            var = pattern.upper()
+            if var not in ENUM_OPTIONS:
+                print(f"[!] no enum mapping for: {pattern}")
+                return 1
+            desc = VAR_DESC.get(var, '')
+            header = f"  {var}"
+            if desc:
+                header += f" - {desc}"
+            print(header)
+            for val, label in sorted(ENUM_OPTIONS[var].items()):
+                print(f"    {val:04X}  {label}")
+            return 0
+        # No pattern: list all vars that have enums
+        width = max(len(v) for v in ENUM_OPTIONS)
+        for var in sorted(ENUM_OPTIONS):
+            desc = VAR_DESC.get(var, '')
+            n = len(ENUM_OPTIONS[var])
+            suffix = 'option' if n == 1 else 'options'
+            line = f"  {var:<{width}}  ({n} {suffix})"
+            if desc:
+                line += f"  - {desc}"
+            print(line)
+        return 0
+
+    print(f"[!] unknown known action: {action}")
+    print(f"    valid actions: {', '.join(KNOWN_REGISTRIES)}")
+    return 1
+
+
 def cmd_caps(ser, targets=None, verbose=False):
     """Query variable limits/capabilities from device (G S # + G C #)."""
     if targets:
@@ -1410,6 +1518,7 @@ Commands:
   dump                          Dump all variables to JSON
   restore                       Restore variables from JSON
   list                          List known variables and descriptions (offline)
+  known [vars|groups|enums]     Quick offline lookup of names the tool knows about
   caps                          Query variable limits from device
   calibration eeprom            Run stock-firmware EEPROM/SD maintenance
 
@@ -1430,6 +1539,10 @@ Examples:
   %(prog)s -p /dev/ttyACM0 restore -i config.json --exclude-groups BGL
   %(prog)s list
   %(prog)s list --groups MGL DGL
+  %(prog)s known
+  %(prog)s known vars EPR
+  %(prog)s known groups MGL
+  %(prog)s known enums MOP
   %(prog)s -p /dev/ttyACM0 caps MGL
   %(prog)s -p /dev/ttyACM0 caps IPC MOP EPR
   %(prog)s -p /dev/ttyACM0 calibration eeprom format-eep-fat --yes --really
@@ -1476,6 +1589,13 @@ Examples:
     p_list = sub.add_parser('list', help='List known variables and descriptions (offline)')
     p_list.add_argument('--groups', nargs='+', help='Only list these groups')
 
+    p_known = sub.add_parser('known',
+                             help='Offline lookup of names the tool knows about')
+    p_known.add_argument('action', nargs='?', choices=list(KNOWN_REGISTRIES),
+                         help='Registry to list (vars/groups/enums)')
+    p_known.add_argument('pattern', nargs='?', default=None,
+                         help='Substring filter (vars) or specific name (groups/enums)')
+
     p_caps = sub.add_parser('caps', help='Query variable values and limits from device')
     p_caps.add_argument('targets', nargs='*', help='Variable names, group names, or "all" (default: all)')
 
@@ -1503,6 +1623,9 @@ Examples:
 
     if args.command == 'list':
         return cmd_list(args.groups)
+
+    if args.command == 'known':
+        return cmd_known(args.action, args.pattern)
 
     if args.command == 'calibration' and args.calibration_command == 'eeprom':
         if not check_eeprom_confirmations(args.action, args.yes, args.really):
