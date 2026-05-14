@@ -16,13 +16,21 @@ Offline subcommands (no device needed):
 
 Device-touching subcommands:
     upload     push a pre-built .abc; verify-only unless --apply / --apply-plain
-    flash      build .abc from firmware, optionally apply
+    flash      build .abc from firmware, upload, and apply by transport default
+    apply      apply a previously uploaded and verified .abc by file or hash
 
-Apply-mode decision:
+Apply-mode flags, highest precedence first:
     --apply-plain          ApplyUpgrade (unauthenticated)
     --apply-authenticated  ApplyAuthenticatedUpgrade (+HMAC)
     --apply                alias for --apply-authenticated
-    (no flag)              verify-only; stop after CheckUpgradeFile
+    --verify-only          stop after CheckUpgradeFile
+
+When no apply-mode flag is given:
+    upload                 verify-only
+    flash on BLE           authenticated apply (uses stored otaKey)
+    flash on CAN           plain ApplyUpgrade
+    apply on BLE           authenticated apply (uses stored otaKey)
+    apply on CAN           plain ApplyUpgrade
 
 Authenticated apply key resolution: --key HEX32, --key-file PATH, $AS11_OTA_KEY,
 or stored BLE device otaKey.
@@ -409,6 +417,77 @@ def resolve_block(raw: str) -> TargetRegion:
                          f"Canonical codes: {', '.join(canon)}. "
                          f"Aliases: {', '.join(aliases)}.")
     return TARGETS[code]
+
+
+INPUT_SOURCE_ARGS = (
+    ("from_full", "--from-full"),
+    ("payload",   "--payload"),
+    ("file",      "-f/--file"),
+)
+
+
+def input_sources(args) -> list[tuple[str, str, str]]:
+    return [(attr, label, value) for attr, label in INPUT_SOURCE_ARGS
+            if (value := getattr(args, attr, None))]
+
+
+def selected_input_source(args) -> tuple[str, str, str]:
+    sources = input_sources(args)
+    if len(sources) == 0:
+        raise SystemExit(
+            "source file required: pass -f/--file, --from-full, or --payload")
+    if len(sources) > 1:
+        raise SystemExit("conflicting source args: %s; pick one" %
+                         ", ".join(label for _attr, label, _path in sources))
+    return sources[0]
+
+
+def infer_target_from_input(args) -> TargetRegion:
+    """Infer a safe non-bootloader target from firmware input size."""
+    if getattr(args, "format", "0005") == "0006":
+        raise SystemExit(
+            "format 0006 is a full-flash shortcut; pass --block full and "
+            "--include-full-flash explicitly")
+
+    source_attr, source_label, path = selected_input_source(args)
+    try:
+        size = Path(path).stat().st_size
+    except OSError as exc:
+        raise SystemExit(f"{path}: {exc}") from exc
+
+    if source_attr == "from_full":
+        code = "APCX"
+        detail = "forced full image"
+    elif source_attr == "file" and size == FULL_FLASH_SIZE:
+        code = "APCX"
+        detail = "full image"
+    elif size == TARGETS["APCX"].size:
+        code = "APCX"
+        detail = "APCX-sized payload"
+    elif size == TARGETS["APPL"].size:
+        code = "APPL"
+        detail = "APPL-sized payload"
+    elif size == TARGETS["CONF"].size:
+        code = "CONF"
+        detail = "CONF-sized payload"
+    else:
+        raise SystemExit(
+            f"{path}: cannot infer --block from {size} bytes. "
+            "Pass --block explicitly.")
+
+    target = TARGETS[code]
+    print(f"[auto] inferred --block {target.code} from {detail} "
+          f"({source_label} {path})")
+    return target
+
+
+def resolve_target_from_args(args) -> TargetRegion:
+    raw = getattr(args, "block", None)
+    if raw:
+        return resolve_block(raw)
+    target = infer_target_from_input(args)
+    args.block = target.code
+    return target
 
 
 def normalize_key_hex(text: str, *, source: str) -> bytes:
@@ -839,22 +918,28 @@ APPLY_PLAIN         = "plain"
 APPLY_AUTHENTICATED = "authenticated"
 
 
-def resolve_apply_mode(args, t: Transport | None = None) -> ApplyMode:
+def resolve_apply_mode(args, *, default: ApplyMode = APPLY_NONE) -> ApplyMode:
     """Pick an apply disposition:
         --apply-plain               -> PLAIN   (ApplyUpgrade)
         --apply / --apply-authenticated -> AUTHENTICATED (ApplyAuthenticatedUpgrade + HMAC)
-        (nothing)                   -> NONE    (verify-only, stop after CheckUpgradeFile)
+        --verify-only               -> NONE    (stop after CheckUpgradeFile)
+        (nothing)                   -> caller-supplied default
     """
     want_auth = bool(getattr(args, "apply", False)
                      or getattr(args, "apply_authenticated", False))
     want_plain = bool(getattr(args, "apply_plain", False))
-    if want_auth and want_plain:
-        raise SystemExit("pass only one of --apply / --apply-authenticated / --apply-plain")
+    want_none = bool(getattr(args, "verify_only", False))
+    if sum(1 for v in (want_auth, want_plain, want_none) if v) > 1:
+        raise SystemExit(
+            "pass only one of --apply / --apply-authenticated / "
+            "--apply-plain / --verify-only")
+    if want_none:
+        return APPLY_NONE
     if want_plain:
         return APPLY_PLAIN
     if want_auth:
         return APPLY_AUTHENTICATED
-    return APPLY_NONE
+    return default
 
 
 def build_transport_for_flash(args) -> Transport:
@@ -901,6 +986,38 @@ def _resolve_device_spec(args) -> str:
         "no device: pass -d/--device ble:<addr> or can:<port>, "
         "--addr <ble>, -p <can-port>, or set AS11_ADDR / AS11_CAN_PORT"
     )
+
+
+def default_device_apply_mode(args) -> ApplyMode:
+    spec = _resolve_device_spec(args)
+    if spec.startswith("ble:"):
+        return APPLY_AUTHENTICATED
+    if spec.startswith("can:"):
+        return APPLY_PLAIN
+    return APPLY_NONE
+
+
+def default_apply_mode_for_command(args) -> ApplyMode:
+    if args.cmd == "flash":
+        if getattr(args, "dry_run", False):
+            return APPLY_NONE
+        return default_device_apply_mode(args)
+    if args.cmd == "apply":
+        return default_device_apply_mode(args)
+    return APPLY_NONE
+
+
+def resolved_apply_mode_for_command(args) -> ApplyMode:
+    return resolve_apply_mode(
+        args, default=default_apply_mode_for_command(args))
+
+
+def validate_reset_settings(args) -> None:
+    if not getattr(args, "reset_settings", False):
+        return
+    if resolved_apply_mode_for_command(args) != APPLY_PLAIN:
+        raise SystemExit(
+            "--reset-settings only applies with plain ApplyUpgrade")
 
 
 def transport_supports_encrypted(t: Transport) -> bool:
@@ -1032,8 +1149,9 @@ def run_upload(t: Transport, abc: bytes, *,
 
     if apply_mode == APPLY_NONE:
         print()
-        print("CheckUpgradeFile succeeded. Not committing (no --apply /")
-        print("--apply-plain). Pass --apply once you're ready to reboot.")
+        print("CheckUpgradeFile succeeded. Not committing.")
+        print("Use `apply -f ... --block ...`,")
+        print("`apply --abc-file`, or `apply --hash` once you're ready to reboot.")
         return 0
 
     phase_apply(t,
@@ -1092,11 +1210,13 @@ def check_and_maybe_fix_hw_crcs(payload: bytes, target: TargetRegion,
 
 
 def _build_container(args, *,
+                     target: TargetRegion | None = None,
                      detected_preset: str | None = None
                      ) -> tuple[bytes, TargetRegion, bytes]:
     """Assemble the .abc container"""
 
-    target = resolve_block(args.block)
+    if target is None:
+        target = resolve_target_from_args(args)
     check_danger_ack(args, target)
     payload = load_payload(args, target)
     payload = check_and_maybe_fix_hw_crcs(
@@ -1125,6 +1245,40 @@ def _build_container(args, *,
     return abc, target, FORMAT_0005
 
 
+def build_container_with_live_defaults(args, t: Transport | None
+                                       ) -> tuple[bytes, TargetRegion, bytes]:
+    target = resolve_target_from_args(args)
+
+    need_detect = (args.desc_preset == "auto"
+                   and _auto_preset_needed(args, target))
+    pci_fetch_needed = (args.format == "0005" and args.pci is None)
+
+    detected_preset = None
+    if need_detect:
+        if t is None:
+            known = "/".join(sorted(DESC_PRESETS))
+            raise SystemExit(
+                f"descriptor auto-detect needs a device. Pass "
+                f"--desc-preset {known} (or --desc2/--desc3) explicitly.")
+        detected_preset = detect_preset_for_descriptor(t)
+
+    if pci_fetch_needed and t is not None:
+        print("[auto] querying device _PCI (and _PRI for context)...")
+        pci_val = fetch_pci(t)
+        if pci_val is None:
+            log.warning("could not read _PCI from device; falling back to 0")
+        else:
+            print(f"[auto] using _PCI=0x{pci_val:08X} in descriptor")
+            args.pci = f"0x{pci_val:08X}"
+
+    abc, target, fmt = _build_container(
+        args, target=target, detected_preset=detected_preset)
+    print(f"Built {fmt.decode('ascii')} container for {target.code}  "
+          f"({target.flash_start:#010x}..{target.flash_end:#010x}, "
+          f"{len(abc)} bytes)")
+    return abc, target, fmt
+
+
 def cmd_targets(_args) -> int:
     print(f"{'Code':5s} {'Range':26s} {'Size':>12s}  Notes")
     for t in TARGETS.values():
@@ -1151,7 +1305,7 @@ def cmd_build(args) -> int:
             f"{tgt.code} needs descriptor preset, and `build` can't query a "
             f"device. Pass --desc-preset {known} (or --desc2/--desc3), or use "
             f"the `flash` subcommand which can auto-detect.")
-    abc, target, fmt = _build_container(args)
+    abc, target, fmt = _build_container(args, target=tgt)
     out = Path(args.output)
     out.write_bytes(abc)
     print(f"Wrote {out} ({len(abc)} bytes, format {fmt.decode('ascii')}, "
@@ -1186,9 +1340,13 @@ def detect_preset_for_descriptor(t: Transport) -> str:
     return detected
 
 
-def _upload_kwargs_from_args(args) -> dict:
+def _upload_kwargs_from_args(args, *,
+                             apply_mode: ApplyMode | None = None,
+                             default_apply_mode: ApplyMode = APPLY_NONE
+                             ) -> dict:
     """Build the keyword args to run_upload() from parsed CLI args."""
-    apply_mode = resolve_apply_mode(args)
+    if apply_mode is None:
+        apply_mode = resolve_apply_mode(args, default=default_apply_mode)
     if apply_mode == APPLY_AUTHENTICATED:
         key = parse_key(getattr(args, "key", None),
                         getattr(args, "key_file", None),
@@ -1202,6 +1360,83 @@ def _upload_kwargs_from_args(args) -> dict:
         block_delay_s=args.block_delay,
         verify_timeout=args.verify_timeout,
     )
+
+
+def parse_upgrade_hash_arg(hash_hex: str) -> tuple[str, bytes]:
+    clean = re.sub(r"[^0-9A-Fa-f]", "", hash_hex or "")
+    if len(clean) != 64:
+        raise SystemExit(
+            f"--hash must be a SHA-256 digest as 64 hex chars, got {len(clean)}"
+        )
+    try:
+        raw = bytes.fromhex(clean)
+    except ValueError as exc:
+        raise SystemExit(f"--hash is not valid hex: {exc}") from exc
+    return clean.upper(), raw
+
+
+def apply_hash_from_args(args) -> tuple[str, bytes]:
+    file_arg = getattr(args, "file", None)
+    has_abc_file = bool(getattr(args, "abc_file", None))
+    has_hash = bool(getattr(args, "hash", None))
+    has_build_input = (
+        bool(getattr(args, "from_full", None))
+        or bool(getattr(args, "payload", None))
+        or bool(file_arg)
+    )
+    if sum(1 for v in (has_abc_file, has_hash, has_build_input) if v) != 1:
+        raise SystemExit(
+            "pass exactly one source: --abc-file, --hash, or firmware input"
+        )
+    if has_hash:
+        return parse_upgrade_hash_arg(args.hash)
+    if has_build_input:
+        resolve_target_from_args(args)
+        return "", b""
+
+    try:
+        data = Path(args.abc_file).read_bytes()
+    except OSError as exc:
+        raise SystemExit(f"{args.abc_file}: {exc}") from exc
+    digest = hashlib.sha256(data).digest()
+    return digest.hex().upper(), digest
+
+
+def _apply_kwargs_from_args(args, *,
+                            apply_mode: ApplyMode | None = None) -> dict:
+    if apply_mode is None:
+        apply_mode = resolved_apply_mode_for_command(args)
+    if apply_mode == APPLY_AUTHENTICATED:
+        key = parse_key(getattr(args, "key", None),
+                        getattr(args, "key_file", None),
+                        stored_key=stored_ota_key_for_device(args))
+    else:
+        key = b""
+    return dict(
+        mode=apply_mode,
+        key=key,
+        reset_settings=bool(getattr(args, "reset_settings", False)),
+        verify_timeout=args.verify_timeout,
+    )
+
+
+def cmd_apply(args) -> int:
+    file_hash, file_hash_bytes = apply_hash_from_args(args)
+    apply_mode = resolved_apply_mode_for_command(args)
+    kwargs = _apply_kwargs_from_args(args, apply_mode=apply_mode)
+
+    t = build_transport_for_flash(args)
+    with t:
+        if not file_hash:
+            abc, _, _ = build_container_with_live_defaults(args, t)
+            file_hash_bytes = hashlib.sha256(abc).digest()
+            file_hash = file_hash_bytes.hex().upper()
+            print(f"Staged file hash: {file_hash}")
+        phase_apply(t,
+                    file_hash=file_hash,
+                    file_hash_bytes=file_hash_bytes,
+                    **kwargs)
+    return 0
 
 
 def cmd_upload(args) -> int:
@@ -1338,23 +1573,17 @@ def cmd_upload(args) -> int:
 
 
 def cmd_flash(args) -> int:
-    # Fail fast on things we can check without hitting the device.
-    resolve_apply_mode(args)
-    target = resolve_block(args.block)
-    check_danger_ack(args, target)
-
-    need_detect = (args.desc_preset == "auto"
-                   and _auto_preset_needed(args, target))
-
     if args.dry_run:
+        target = resolve_target_from_args(args)
+        check_danger_ack(args, target)
         # dry-run can't query the device, so auto-detect isn't possible.
-        if need_detect:
+        if args.desc_preset == "auto" and _auto_preset_needed(args, target):
             known = "/".join(sorted(DESC_PRESETS))
             raise SystemExit(
                 f"--dry-run can't query the device. For auto-detect, remove "
                 f"--dry-run, or pass --desc-preset {known} (or "
                 f"--desc2/--desc3) explicitly.")
-        abc, _, fmt = _build_container(args)
+        abc, _, fmt = _build_container(args, target=target)
         print(f"Built {fmt.decode('ascii')} container for {target.code}  "
               f"({target.flash_start:#010x}..{target.flash_end:#010x}, "
               f"{len(abc)} bytes)")
@@ -1366,37 +1595,12 @@ def cmd_flash(args) -> int:
         return 0
 
     # Live flash path: connect, maybe detect version, build, upload.
-    upload_kwargs = _upload_kwargs_from_args(args)
-
-    # If user didn't supply --pci and we're building a 0005 container,
-    # we'll try to fetch it from the device after connecting. Irrelevant
-    # for 0006 (no secondary descriptor at all).
-    pci_fetch_needed = (args.format == "0005" and args.pci is None)
+    apply_mode = resolved_apply_mode_for_command(args)
+    upload_kwargs = _upload_kwargs_from_args(args, apply_mode=apply_mode)
 
     t = build_transport_for_flash(args)
     try:
-        detected_preset = None
-        if need_detect:
-            detected_preset = detect_preset_for_descriptor(t)
-
-        if pci_fetch_needed:
-            print("[auto] querying device _PCI (and _PRI for context)...")
-            pci_val = fetch_pci(t)
-            if pci_val is None:
-                log.warning("could not read _PCI from device; falling "
-                            "back to 0. If CheckUpgradeFile rejects "
-                            "with -11309 it's likely this device has "
-                            "_PRI=1 and enforces the check. Query "
-                            "manually (e.g. `as11_config.py get _PCI "
-                            "_PRI`) and pass --pci.")
-            else:
-                print(f"[auto] using _PCI=0x{pci_val:08X} in descriptor")
-                args.pci = f"0x{pci_val:08X}"
-
-        abc, _, fmt = _build_container(args, detected_preset=detected_preset)
-        print(f"Built {fmt.decode('ascii')} container for {target.code}  "
-              f"({target.flash_start:#010x}..{target.flash_end:#010x}, "
-              f"{len(abc)} bytes)")
+        abc, _, _ = build_container_with_live_defaults(args, t)
         if args.save_abc:
             Path(args.save_abc).write_bytes(abc)
             print(f"Saved built container to {args.save_abc}")
@@ -1420,12 +1624,18 @@ def _add_input_args(p: argparse.ArgumentParser) -> None:
                         "for the selected block")
 
 
-def _add_build_args(p: argparse.ArgumentParser) -> None:
+def _add_build_args(p: argparse.ArgumentParser, *,
+                    block_required: bool = True) -> None:
     """All build-side options: block, format, descriptor."""
-    p.add_argument("--block", required=True, metavar="NAME",
-                   help="target block (aliases: config, firmware/app, "
-                        "conf+app, bootloader, full/all; or raw codes "
-                        "CONF, APPL, APCX, FGBL, FGCB)")
+    block_help = ("target block (aliases: config, firmware/app, conf+app, "
+                  "bootloader, full/all; or raw codes CONF, APPL, APCX, "
+                  "FGBL, FGCB)")
+    if not block_required:
+        block_help += (". `flash` and `apply -f` can infer a safe "
+                       "non-bootloader target from input size when this "
+                       "is omitted")
+    p.add_argument("--block", required=block_required, metavar="NAME",
+                   help=block_help)
     p.add_argument("--format", default="0005", choices=("0005", "0006"),
                    help="container format (default: 0005). 0006 is only "
                         "valid for --block full and is the PacificFG/AlarmModule "
@@ -1469,6 +1679,9 @@ def _add_build_args(p: argparse.ArgumentParser) -> None:
 
 def _add_upload_args(p: argparse.ArgumentParser) -> None:
     """Upload + apply options."""
+    p.add_argument("--verify-only", action="store_true",
+                   help="stop after CheckUpgradeFile; for `flash`, this "
+                        "overrides the transport default apply step")
     p.add_argument("--apply", action="store_true",
                    help="after CheckUpgradeFile succeeds, call "
                         "ApplyAuthenticatedUpgrade (uses --key, "
@@ -1479,7 +1692,7 @@ def _add_upload_args(p: argparse.ArgumentParser) -> None:
                    help="after CheckUpgradeFile succeeds, call "
                         "unauthenticated ApplyUpgrade.")
     p.add_argument("--reset-settings", action="store_true",
-                   help="send resetSettingsToDefault=true with --apply-plain "
+                   help="send resetSettingsToDefault=true with plain ApplyUpgrade "
                         "(default sends false to preserve settings)")
     p.add_argument("--key", metavar="HEX32",
                    help="K_ota as 64 hex chars")
@@ -1498,6 +1711,30 @@ def _add_upload_args(p: argparse.ArgumentParser) -> None:
                         "do not contact the device")
     p.add_argument("--force", action="store_true",
                    help=_FORCE_HELP)
+
+
+def _add_apply_args(p: argparse.ArgumentParser) -> None:
+    """Apply-only options."""
+    p.add_argument("--apply", action="store_true",
+                   help="call ApplyAuthenticatedUpgrade (uses --key, "
+                        "AS11_OTA_KEY, or stored BLE otaKey)")
+    p.add_argument("--apply-authenticated", action="store_true",
+                   help="synonym for --apply")
+    p.add_argument("--apply-plain", action="store_true",
+                   help="call unauthenticated ApplyUpgrade")
+    p.add_argument("--reset-settings", action="store_true",
+                   help="send resetSettingsToDefault=true with plain ApplyUpgrade "
+                        "(default sends false to preserve settings)")
+    p.add_argument("--key", metavar="HEX32",
+                   help="K_ota as 64 hex chars")
+    p.add_argument("--key-file", metavar="PATH",
+                   help="K_ota as a 32-byte binary file or a hex-text file")
+    p.add_argument("--force", action="store_true",
+                   help=_FORCE_HELP)
+    p.add_argument("--verify-timeout", type=float, default=LONG_RPC_TIMEOUT,
+                   metavar="SECONDS",
+                   help=(f"timeout for Apply* (default: "
+                         f"{int(LONG_RPC_TIMEOUT)})"))
 
 
 def _add_device_args(p: argparse.ArgumentParser) -> None:
@@ -1561,14 +1798,27 @@ def main(argv=None) -> int:
     _add_upload_args(p_u)
     p_u.set_defaults(func=cmd_upload)
 
+    # apply only
+    p_a = sub.add_parser("apply",
+                         help="apply a previously uploaded and verified .abc")
+    _add_device_args(p_a)
+    _add_input_args(p_a)
+    _add_build_args(p_a, block_required=False)
+    p_a.add_argument("--abc-file", metavar="ABC",
+                     help="matching .abc file; SHA-256 is computed locally")
+    p_a.add_argument("--hash", metavar="HEX64",
+                     help="SHA-256 reported by the earlier upload/flash run")
+    _add_apply_args(p_a)
+    p_a.set_defaults(func=cmd_apply)
+
     # flash (build + upload)
     p_f = sub.add_parser("flash",
                          help="build .abc from firmware and upload in one step; "
-                              "CheckUpgradeFile only unless --apply / "
-                              "--apply-plain is given")
+                              "applies by default (BLE authenticated, "
+                              "CAN plain) unless --verify-only is given")
     _add_device_args(p_f)
     _add_input_args(p_f)
-    _add_build_args(p_f)
+    _add_build_args(p_f, block_required=False)
     p_f.add_argument("--save-abc", metavar="PATH",
                      help="also write the built .abc to this path")
     _add_upload_args(p_f)
@@ -1579,8 +1829,7 @@ def main(argv=None) -> int:
     # shared arg validation
     if getattr(args, "block_delay", 0.0) < 0:
         raise SystemExit("--block-delay must be non-negative")
-    if getattr(args, "reset_settings", False) and not getattr(args, "apply_plain", False):
-        raise SystemExit("--reset-settings only applies with --apply-plain")
+    validate_reset_settings(args)
     # apply-mode mutual exclusion is enforced inside resolve_apply_mode() now.
 
     return args.func(args)
