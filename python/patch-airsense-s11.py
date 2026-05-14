@@ -46,10 +46,6 @@ def str2bool(value):
     raise argparse.ArgumentTypeError("Boolean value expected.")
 
 
-def parse_int(value):
-    return int(value, 0)
-
-
 def clean_ascii(data):
     return data.decode("ascii", errors="replace").split("\x00")[0]
 
@@ -91,16 +87,65 @@ DEFAULT_SETTINGS = (
     ("EprType", 1),
 )
 
-# BLE command IDs enabled by default when patch-ble-permissions runs.
-DEFAULT_BLE_UNLOCK_CMDS = (
-    5,   # SetDateTime
-    18,  # ApplyUpgrade
-    # 25,   # GetLedStatus
-    # 31,   # SetNextPowerUpDateTime
-    # 63,   # ResetDevice
-    # 64,   # StoreSecurityData
-    # 70,   # VerifySecurityData
-    # 86,   # ClearAutoConnectList
+# BLE RPC methods enabled by default when patch-ble-permissions runs.
+DEFAULT_BLE_UNLOCK_METHODS = (
+    "SetDateTime",
+    "ApplyUpgrade",
+    # "GetLedStatus",
+    # "SetNextPowerUpDateTime",
+    # "ResetDevice",
+    # "StoreSecurityData",
+    # "VerifySecurityData",
+    # "ClearAutoConnectList",
+)
+
+# RPC method names known from AS11 firmware dispatch tables. Used only to
+# locate the moving method->command-id table; patch defaults live above.
+KNOWN_RPC_METHODS = (
+    "GetVersion",
+    "EnterTherapy",
+    "EnterStandby",
+    "SubscribeEvent",
+    "GetDateTime",
+    "SetDateTime",
+    "EnterMaskFit",
+    "Get",
+    "Set",
+    "GetRtcAndSystemClocks",
+    "StartKeyExchange",
+    "ConfirmKeyExchange",
+    "RequestSession",
+    "CheckSessionIntegrity",
+    "GenerateAuthCode",
+    "ClearAutoConnectList",
+    "StartStream",
+    "DiscardPairKey",
+    "StartSpool",
+    "PullSpoolFragments",
+    "CheckLcdText",
+    "CheckLcdBitmap",
+    "CheckLcdWindow",
+    "CheckLcdRectFilled",
+    "CheckLcdLine",
+    "ShowAllMenuListItems",
+    "GetBitmapInfo",
+    "InsertSdCard",
+    "RemoveSdCard",
+    "InitiateUpgrade",
+    "UpgradeDataBlock",
+    "CheckUpgradeFile",
+    "ApplyUpgrade",
+    "ApplyAuthenticatedUpgrade",
+    "EnterTest",
+    "EnterTestDrive",
+    "EraseData",
+    "ResetDevice",
+    "StoreSecurityData",
+    "VerifySecurityData",
+    "GetLedStatus",
+    "SetNextPowerUpDateTime",
+    "InjectLoggedEvent",
+    "EnableSecurity",
 )
 
 # GUI/config descriptors that must stay hidden even when activating tables.
@@ -680,9 +725,11 @@ class S11Firmware(object):
 class S11FirmwarePatches(object):
     """Patch methods for S11 firmware."""
 
-    def __init__(self, asf, ble_unlock_cmds=None):
+    def __init__(self, asf, ble_unlock_methods=None):
         self.asf = asf
-        self.ble_unlock_cmds = list(ble_unlock_cmds or DEFAULT_BLE_UNLOCK_CMDS)
+        if ble_unlock_methods is None:
+            ble_unlock_methods = DEFAULT_BLE_UNLOCK_METHODS
+        self.ble_unlock_methods = list(ble_unlock_methods or ())
 
     def is_blacklisted_setting(self, row):
         long_name = row["long_name"] or ""
@@ -977,20 +1024,15 @@ class S11FirmwarePatches(object):
                 return False
         return True
 
-    def ble_permissions(self):
-        if not self.ble_unlock_cmds:
-            return
-
+    def find_ble_permission_table(self):
         # Level 3 command permission table: 9-byte entries
         # [cmd_id] [flag0..flag7], flag index 1 = BLE encrypted.
-        #
-        # BLE RPC command IDs are distinct from APPL/RPC JSON node IDs. The
-        # unlock list contains command IDs, not permission-table entry indices.
         #
         # Anchor: cmd_id 4 (GetDateTime) with all 8 flags = 1, APPL region only.
         # Walk the table bounds because command 3 is absent and table length
         # shifts between firmware builds.
-        anchor_off = self.asf.find_bytes(bytes.fromhex("040101010101010101"), self.asf.APPL_OFF)
+        anchor = bytes.fromhex("040101010101010101")
+        anchor_off = self.asf.find_bytes(anchor, self.asf.APPL_OFF)
         base = anchor_off
         cmd = self.asf.u8(base)
         while base - 9 >= self.asf.APPL_OFF:
@@ -1002,23 +1044,89 @@ class S11FirmwarePatches(object):
                 break
             base = prev_off
             cmd = prev_cmd
+        return base
 
-        unlock = set(self.ble_unlock_cmds)
+    def ble_permission_rows(self, base):
+        rows = {}
         prev_cmd = -1
         off = base
-        n = 0
         scanned = 0
         while self.ble_record_flags_are_bits(off):
             cmd = self.asf.u8(off)
             if cmd <= prev_cmd:
                 break
-            if cmd in unlock and self.asf.u8(off + 2) == 0:
-                self.asf.write_u8(off + 2, 1)
-                n += 1
+            rows[cmd] = off
             prev_cmd = cmd
             off += 9
             scanned += 1
-        print("Patching BLE permissions... %d commands unlocked (%d entries scanned)" % (n, scanned))
+        return rows, scanned
+
+    def find_ble_rpc_dispatch_table(self):
+        # APPL method table: [char *method_name, u32 command_id] records.
+        # The table moves between versions, so score candidates by known RPC
+        # method names instead of relying on absolute addresses.
+        known = set(KNOWN_RPC_METHODS)
+        appl_end = self.asf.APPL_OFF + self.asf.APPL_SIZE
+        best = None
+        for start in range(self.asf.APPL_OFF, appl_end - 8, 4):
+            seq = []
+            off = start
+            while off + 8 <= appl_end:
+                name = self.asf.string_at_ptr(self.asf.u32(off))
+                cmd = self.asf.u32(off + 4)
+                if not name or cmd > 0x200:
+                    break
+                seq.append((name, cmd, off))
+                off += 8
+            if len(seq) < 10:
+                continue
+            score = sum(1 for name, _cmd, _off in seq if name in known)
+            if score >= 8 and (best is None or (score, len(seq)) > (best[0], len(best[2]))):
+                best = (score, start, seq)
+        if best is None:
+            raise ValueError("BLE RPC dispatch table not found")
+        return best[1], best[2]
+
+    def ble_method_cmds(self):
+        _base, seq = self.find_ble_rpc_dispatch_table()
+        out = {}
+        for name, cmd, _off in seq:
+            out[name] = cmd
+        return out
+
+    def ble_permissions(self):
+        if not self.ble_unlock_methods:
+            return
+
+        method_cmds = self.ble_method_cmds()
+        unlock_items = []
+        for name in self.ble_unlock_methods:
+            if name not in method_cmds:
+                raise ValueError("ble_permissions: RPC method %r not found" % name)
+            unlock_items.append((name, method_cmds[name]))
+
+        base = self.find_ble_permission_table()
+        rows, scanned = self.ble_permission_rows(base)
+
+        n = 0
+        missing = 0
+        already = 0
+        print("Patching BLE permissions...")
+        for label, cmd in unlock_items:
+            off = rows.get(cmd)
+            if off is None:
+                print("  %s -> id %d: permission row missing" % (label, cmd))
+                missing += 1
+                continue
+            if self.asf.u8(off + 2) == 0:
+                self.asf.write_u8(off + 2, 1)
+                print("  %s -> id %d: enabled" % (label, cmd))
+                n += 1
+            else:
+                print("  %s -> id %d: already enabled" % (label, cmd))
+                already += 1
+        print("Patching BLE permissions... %d enabled, %d already enabled, %d missing (%d entries scanned)" %
+              (n, already, missing, scanned))
 
     def vid_spoof(self):
         """Install the runtime MOP-to-VID hook."""
@@ -1227,11 +1335,10 @@ def build_arg_parser():
     )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite output file if it exists already.")
     parser.add_argument(
-        "--ble-unlock-cmd",
+        "--ble-unlock-method",
         action="append",
-        type=parse_int,
         default=None,
-        help="BLE command id to unlock; repeatable. Default: 5, 18.",
+        help="BLE RPC method name to unlock; repeatable. Default: SetDateTime, ApplyUpgrade.",
     )
     return parser
 
@@ -1248,7 +1355,7 @@ def main(argv=None):
 
     patches = S11FirmwarePatches(
         asf,
-        ble_unlock_cmds=args.ble_unlock_cmd,
+        ble_unlock_methods=args.ble_unlock_method,
     )
 
     for patch in PATCH_LIST:

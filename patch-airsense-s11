@@ -34,16 +34,16 @@ PATCHES=(
     patch-ble-permissions
 )
 
-# BLE command IDs to enable when patch-ble-permissions is selected.
+# BLE RPC method names to enable when patch-ble-permissions is selected.
 BLE_UNLOCK=(
-    5    # SetDateTime
-    18   # ApplyUpgrade
-    # 25   # GetLedStatus
-    # 31   # SetNextPowerUpDateTime
-    # 63   # ResetDevice
-    # 64   # StoreSecurityData
-    # 70   # VerifySecurityData
-    # 86   # ClearAutoConnectList
+    SetDateTime
+    ApplyUpgrade
+    # GetLedStatus
+    # SetNextPowerUpDateTime
+    # ResetDevice
+    # StoreSecurityData
+    # VerifySecurityData
+    # ClearAutoConnectList
 )
 
 args=( "--all-patches" "n" )
@@ -51,8 +51,8 @@ for patch in "${PATCHES[@]}"; do
     args+=( "--$patch" "Y" )
 done
 
-for cmd in "${BLE_UNLOCK[@]}"; do
-    args+=( "--ble-unlock-cmd" "$cmd" )
+for method in "${BLE_UNLOCK[@]}"; do
+    args+=( "--ble-unlock-method" "$method" )
 done
 
 exec "$PYTHON" "$PATCHER" "$IN" "$OUT" PATCH --overwrite "${args[@]}"
