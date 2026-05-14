@@ -85,6 +85,12 @@ DEFAULT_SETTINGS = (
     ("PatientView", 1),
     ("ClinicalConfirmation", 0),
     ("EprType", 1),
+    ("TSS", 0),  # Treatment screen style: Dots, PressureBar, FlowBar
+)
+
+# Standalone enum masks that are useful but not tied to therapy profiles.
+UNLOCKED_ENUM_SETTING_NAMES = (
+    "TSS",  # Treatment screen style: Dots, PressureBar, FlowWave
 )
 
 # BLE RPC methods enabled by default when patch-ble-permissions runs.
@@ -939,6 +945,29 @@ class S11FirmwarePatches(object):
             self.asf.write_u32(row["offset"] + 12, supported_mask)
             n_modes += 1
 
+        n_enum_options = 0
+        n_enum_already = 0
+        n_enum_missing = 0
+        n_enum_skipped = 0
+        for name in UNLOCKED_ENUM_SETTING_NAMES:
+            rows = self.asf.find_descriptors_by_name(name, ("g5",))
+            if not rows:
+                print("  enum option mask %s not found" % name)
+                n_enum_missing += 1
+                continue
+            for row in rows:
+                n_options = row["n_options"]
+                if n_options == 0 or n_options > 31:
+                    n_enum_skipped += 1
+                    continue
+                desired_mask = (1 << n_options) - 1
+                off = row["offset"]
+                if self.asf.u32(off + 12) == desired_mask:
+                    n_enum_already += 1
+                    continue
+                self.asf.write_u32(off + 12, desired_mask)
+                n_enum_options += 1
+
         n_editable = 0
         n_already = 0
         n_skipped = 0
@@ -963,6 +992,9 @@ class S11FirmwarePatches(object):
                 n_hidden_act, n_hidden_masks
             ))
         print("Patching GUI mode gates... %d selectors" % n_modes)
+        print("Patching standalone enum options... %d enabled, %d already enabled, %d missing, %d skipped" % (
+            n_enum_options, n_enum_already, n_enum_missing, n_enum_skipped
+        ))
         print("Patching GUI enum editability... %d/%d masks enabled (%d already enabled, %d skipped)" % (
             n_editable, len(editable_rows), n_already, n_skipped
         ))
