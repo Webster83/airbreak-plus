@@ -60,8 +60,8 @@ With the connectors oriented as shown in the photo:
 | Connector | Pin | Meaning |
 |-----------|-----|---------|
 | AirSense/device side | 1 | `+24V` |
-| AirSense/device side | 2 | `CAN-L` |
-| AirSense/device side | 3 | `CAN-H` |
+| AirSense/device side | 2 | `CAN-H` |
+| AirSense/device side | 3 | `CAN-L` |
 | AirSense/device side | 4 | `GND` |
 | PSU side | 1 | `+24V` |
 | PSU side | 2 | not connected |
