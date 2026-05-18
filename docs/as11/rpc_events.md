@@ -16,34 +16,28 @@ in [AS11 RPC Spool Reference](rpc_spools.md).
   - [System exceptions](#system-exceptions)
   - [Diagnostic exceptions](#diagnostic-exceptions)
   - [Alarm profiles](#alarm-profiles)
-- [Live subscription to spool mapping](#live-subscription-to-spool-mapping)
-- [Open notes](#open-notes)
 
 ## Subscription selectors
 
-Live selectors accepted by `SubscribeEvent.params.dataIds` on 15.8.4.0. Each
-selector targets a single event profile leaf inside
-`FlowGenerator.MeasurementProfiles`. The selector names are singular where the
-profile leaf is singular (`...Event`, `...Error`, `...ErrorLogInfo`); matching
-historical spool names are plural.
+Live selectors accepted by `SubscribeEvent.params.dataIds` on 15.8.4.0.
 
-| Selector | Profile path | Notes |
-|----------|--------------|-------|
-| `UsageEvents-TherapyStatusEvent` | `UsageEvents.TherapyStatusEvents.TherapyStatusEvent` | therapy on/off and mode/status lifecycle |
-| `TherapyEvents-RespiratoryEvent` | `TherapyEvents.RespiratoryEvents.RespiratoryEvent` | respiratory event reporting |
-| `SystemActivityEvents-FrequentActivityEvent` | `SystemActivityEvents.FrequentActivityEvents.FrequentActivityEvent` | frequent system activity events |
-| `SystemActivityEvents-SporadicActivityEvent` | `SystemActivityEvents.SporadicActivityEvents.SporadicActivityEvent` | sporadic system activity events |
-| `SystemExceptionEvents-SystemError` | `SystemExceptionEvents.SystemErrors.SystemError` | system errors |
-| `SystemExceptionEvents-RecoverableError` | `SystemExceptionEvents.RecoverableErrors.RecoverableError` | recoverable errors |
-| `SystemExceptionEvents-HumidifierError` | `SystemExceptionEvents.HumidifierErrors.HumidifierError` | humidifier errors |
-| `SystemExceptionEvents-HeatedTubeError` | `SystemExceptionEvents.HeatedTubeErrors.HeatedTubeError` | heated tube errors |
-| `DiagnosticExceptionEvents-AppError` | `DiagnosticExceptionEvents.AppErrors.AppError` | application diagnostic errors |
-| `DiagnosticExceptionEvents-FatalError` | `DiagnosticExceptionEvents.FatalErrors.FatalError` | fatal diagnostic errors |
-| `DiagnosticExceptionEvents-ResettableError` | `DiagnosticExceptionEvents.ResettableErrors.ResettableError` | resettable diagnostic errors |
-| `DiagnosticExceptionEvents-AlarmAppError` | `DiagnosticExceptionEvents.AlarmAppErrors.AlarmAppError` | alarm application errors |
-| `DiagnosticExceptionEvents-ErrorLogInfo` | `DiagnosticExceptionEvents.ErrorLogInfos.ErrorLogInfo` | error-log info records |
-| `alarmEvents` | `eventProfiles.alarmEvents` | alarm event profile |
-| `alarmDiagnosticEvents` | `eventProfiles.alarmDiagnosticEvents` | alarm diagnostic event profile |
+| Selector | Labels | Notes |
+|----------|--------|-------|
+| `UsageEvents-TherapyStatusEvents` | 10 | therapy on/off and mode/status lifecycle |
+| `TherapyEvents-RespiratoryEvents` | 8 | respiratory event reporting |
+| `SystemActivityEvents-FrequentActivityEvents` | 52 | frequent system activity events |
+| `SystemActivityEvents-SporadicActivityEvents` | 21 | sporadic system activity events |
+| `SystemExceptionEvents-SystemErrors` | 22 | system errors |
+| `SystemExceptionEvents-RecoverableErrors` | 4 | recoverable errors |
+| `SystemExceptionEvents-HumidifierErrors` | 5 | humidifier errors |
+| `SystemExceptionEvents-HeatedTubeErrors` | 9 | heated tube errors |
+| `DiagnosticExceptionEvents-AppErrors` | n/a | application diagnostic errors |
+| `DiagnosticExceptionEvents-FatalErrors` | n/a | fatal diagnostic errors |
+| `DiagnosticExceptionEvents-ResettableErrors` | n/a | resettable diagnostic errors |
+| `DiagnosticExceptionEvents-AlarmAppErrors` | n/a | alarm application errors |
+| `DiagnosticExceptionEvents-ErrorLogInfos` | n/a | error-log info records |
+| `alarmEvents` | 9 | alarm event profile |
+| `alarmDiagnosticEvents` | 26 | alarm diagnostic event profile |
 
 `SubscribeEvent` accepts unknown selector names and reports them as
 `valid: false` in the response. Clients should reject a subscription if every
@@ -53,19 +47,18 @@ requested selector is invalid.
 
 Payload labels listed below come from the 15.8.4.0 firmware formatter tables
 and the decoded historical event spools. They are grouped by the subscription
-selector that delivers them; the matching spool namespace is in
-[Live subscription to spool mapping](#live-subscription-to-spool-mapping).
+selector that delivers them.
 
 ### Therapy and usage
 
-`UsageEvents-TherapyStatusEvent`:
+`UsageEvents-TherapyStatusEvents`:
 
 - `NoUsage`, `MaskOff`, `MaskOn`, `PowerOff`
 - `MaskFitStart`, `MaskFitStop`
 - `TherapyStart`, `TherapyStop`
 - `LearnTargetsStart`, `LearnTargetsStop`
 
-`TherapyEvents-RespiratoryEvent`:
+`TherapyEvents-RespiratoryEvents`:
 
 - `Hypopnea`, `CentralApnea`, `ObstructiveApnea`, `Apnea`
 - `Rera` / `Arousal`
@@ -73,7 +66,7 @@ selector that delivers them; the matching spool namespace is in
 
 ### System activity
 
-`SystemActivityEvents-FrequentActivityEvent`:
+`SystemActivityEvents-FrequentActivityEvents`:
 
 - Lifecycle: `PowerUp`, `PowerDown`, `StandbyStarted`, `TherapyStarted`,
   `MaskfitStarted`, `WarmupStarted`, `WarmupStopped`, `CooldownStarted`,
@@ -101,7 +94,7 @@ selector that delivers them; the matching spool namespace is in
   `SoundcheckAcknowledged`, `CepstrumCalculated`
 - Self-limit: `FrequentEventsFloodingMitigated`
 
-`SystemActivityEvents-SporadicActivityEvent`:
+`SystemActivityEvents-SporadicActivityEvents`:
 
 - `DataResetStarted`, `CalibrationStarted`, `SystemErrorStarted`,
   `UpgradePrepStarted`, `TestDriveStarted`
@@ -115,7 +108,7 @@ selector that delivers them; the matching spool namespace is in
 
 ### System exceptions
 
-`SystemExceptionEvents-SystemError`:
+`SystemExceptionEvents-SystemErrors`:
 
 - `NoError`
 - Motor: `MotorStallHW`, `MotorStallSW`, `MotorHwFault`, `MotorSticky`,
@@ -127,16 +120,16 @@ selector that delivers them; the matching spool namespace is in
   `FaultyHWFaultDetectionCircuitry`
 - Settings: `SettingsReset`, `CalibrationReset`
 
-`SystemExceptionEvents-RecoverableError`:
+`SystemExceptionEvents-RecoverableErrors`:
 
 - `NoError`, `HoseBlocked`, `HoseDisconnected`, `HumidifierTubRemoved`
 
-`SystemExceptionEvents-HumidifierError`:
+`SystemExceptionEvents-HumidifierErrors`:
 
 - `NoError`, `OverCurrent`, `ProtectionFETShortCircuit`,
   `ControlFETShortCircuit`, `OpenCircuit`
 
-`SystemExceptionEvents-HeatedTubeError`:
+`SystemExceptionEvents-HeatedTubeErrors`:
 
 - `NoError`, `OverPower`, `OverTemperature`, `ProtectionFETShortCircuit`,
   `ControlFETShortCircuit`, `HeatingOpenCircuit`, `HeatingNTCOpenCircuit`,
@@ -144,11 +137,11 @@ selector that delivers them; the matching spool namespace is in
 
 ### Diagnostic exceptions
 
-`DiagnosticExceptionEvents-AppError`,
-`DiagnosticExceptionEvents-FatalError`,
-`DiagnosticExceptionEvents-ResettableError`,
-`DiagnosticExceptionEvents-AlarmAppError`,
-`DiagnosticExceptionEvents-ErrorLogInfo`
+`DiagnosticExceptionEvents-AppErrors`,
+`DiagnosticExceptionEvents-FatalErrors`,
+`DiagnosticExceptionEvents-ResettableErrors`,
+`DiagnosticExceptionEvents-AlarmAppErrors`,
+`DiagnosticExceptionEvents-ErrorLogInfos`
 
 The static formatter labels for these selectors use the system-error and alarm-error
 dictionaries listed above.
@@ -181,30 +174,3 @@ dictionaries listed above.
   `AlarmUpgradeFileTransferFailed`, `ApplyAlarmUpgradeRequested`,
   `ApplyAlarmUpgradeCompleted`, `ApplyAlarmUpgradeFailed`
 
-## Live subscription to spool mapping
-
-`SubscribeEvent` selectors are singular leaves; `StartSpool` types are
-plural containers. Both can target the same event family:
-
-| Live subscription selector | Historical spool type |
-|----------------------------|-----------------------|
-| `UsageEvents-TherapyStatusEvent` | `UsageEvents-TherapyStatusEvents` |
-| `TherapyEvents-RespiratoryEvent` | `TherapyEvents-RespiratoryEvents` |
-| `SystemActivityEvents-FrequentActivityEvent` | `SystemActivityEvents-FrequentActivityEvents` |
-| `SystemActivityEvents-SporadicActivityEvent` | `SystemActivityEvents-SporadicActivityEvents` |
-| `SystemExceptionEvents-SystemError` | `SystemExceptionEvents-SystemErrors` |
-| `SystemExceptionEvents-RecoverableError` | `SystemExceptionEvents-RecoverableErrors` |
-| `SystemExceptionEvents-HumidifierError` | `SystemExceptionEvents-HumidifierErrors` |
-| `SystemExceptionEvents-HeatedTubeError` | `SystemExceptionEvents-HeatedTubeErrors` |
-| `DiagnosticExceptionEvents-AppError` | `DiagnosticExceptionEvents-AppErrors` |
-| `DiagnosticExceptionEvents-FatalError` | `DiagnosticExceptionEvents-FatalErrors` |
-| `DiagnosticExceptionEvents-ResettableError` | `DiagnosticExceptionEvents-ResettableErrors` |
-| `DiagnosticExceptionEvents-AlarmAppError` | `DiagnosticExceptionEvents-AlarmAppErrors` |
-| `DiagnosticExceptionEvents-ErrorLogInfo` | `DiagnosticExceptionEvents-ErrorLogInfos` |
-| `alarmEvents` | `alarmEvents` |
-| `alarmDiagnosticEvents` | `alarmDiagnosticEvents` |
-
-Spool inner record shape for these event spools is documented in
-[AS11 RPC Spool Reference](rpc_spools.md#event-records). The same field layout
-is the strongest hint for live `EventNotification.params` decoding but should
-not be treated as the final live schema until confirmed by a wire capture.

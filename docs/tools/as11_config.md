@@ -87,7 +87,7 @@ as11_config.py -d can:can0 stream --edf BRP
 as11_config.py -d can:can0 stream --edf BRP,PLD --sample-ms 40
 as11_config.py -d ble:as11 stream --data-ids Leak-50hz,RespiratoryRate-50hz --duration 60
 as11_config.py -d ble:as11 subscribe --duration 60
-as11_config.py -d ble:as11 subscribe UsageEvents-TherapyStatusEvent --duration 60
+as11_config.py -d ble:as11 subscribe UsageEvents-TherapyStatusEvents --duration 60
 as11_config.py -d ble:as11 subscribe --events PressureStart --duration 60
 ```
 
@@ -97,6 +97,7 @@ Event subscription selectors and payload event families are listed in
 [AS11 RPC Event Reference](../as11/rpc_events.md). Positional `subscribe`
 arguments are exact selectors. `subscribe --events` accepts payload event
 labels and expands them to the selector or selectors that carry those events.
+`--event` is accepted as an alias for `--events`.
 
 StartStream interval limits verified so far: minimum sample interval is `10 ms`,
 intervals are rounded down to a `10 ms` boundary, and `reportIntervalMs` must
@@ -182,15 +183,15 @@ as11_config.py known streams BRP,SA2
 as11_config.py known edf
 as11_config.py known events
 as11_config.py known events PressureStart
-as11_config.py known events --selector SystemActivityEvents-FrequentActivityEvent
+as11_config.py known events --selector SystemActivityEvents-FrequentActivityEvents
 as11_config.py known spools
 ```
 
 `known streams <EDF>` prints the data IDs behind an EDF stream alias.
-`known events` prints `SubscribeEvent` selectors, matching spool names, and
-event label counts. `known events <text>` resolves payload event labels to the
-selector that should be subscribed. `known spools` prints spool types grouped by
-current payload-family hints.
+`known events` prints `SubscribeEvent` selectors and event label counts.
+`known events <text>` resolves payload event labels to the selector that
+should be subscribed. `known spools` prints spool types grouped by current
+payload-family hints.
 
 ### devices
 

@@ -501,42 +501,36 @@ def event_selectors_for_label(label: str) -> list[str]:
         if selector.lower() == key:
             return [selector]
     out = []
-    for selector, info in EVENT_FAMILIES.items():
-        labels = info.get("labels", ())
+    for selector, labels in EVENT_FAMILIES.items():
         if any(name.lower() == key for name in labels):
             out.append(selector)
     return out
 
 
-def event_selector_rows(pattern: str = "") -> tuple[list[tuple[str, str, str]],
-                                                  list[tuple[str, str, int]]]:
+def event_selector_rows(pattern: str = "") -> tuple[list[tuple[str, str]],
+                                                  list[tuple[str, int]]]:
     """Return (label rows, selector rows) matching an event search pattern."""
     key = pattern.lower()
-    label_rows: list[tuple[str, str, str]] = []
-    selector_rows: list[tuple[str, str, int]] = []
-    for selector, info in EVENT_FAMILIES.items():
-        spool = str(info.get("spool", ""))
-        labels = tuple(info.get("labels", ()))
-        selector_hit = bool(key and (key in selector.lower()
-                                     or key in spool.lower()))
+    label_rows: list[tuple[str, str]] = []
+    selector_rows: list[tuple[str, int]] = []
+    for selector, labels in EVENT_FAMILIES.items():
+        selector_hit = bool(key and key in selector.lower())
         matched_labels = [label for label in labels
                           if not key or key in label.lower()]
         for label in matched_labels:
-            label_rows.append((label, selector, spool))
+            label_rows.append((label, selector))
         if selector_hit or (not key and not matched_labels):
-            selector_rows.append((selector, spool, len(labels)))
+            selector_rows.append((selector, len(labels)))
     return label_rows, selector_rows
 
 
 def print_event_lookup(pattern: str = "", *, selector: str | None = None) -> None:
     if selector:
         key = selector.lower()
-        rows = [(sel, info) for sel, info in EVENT_FAMILIES.items()
+        rows = [(sel, labels) for sel, labels in EVENT_FAMILIES.items()
                 if key in sel.lower()]
-        for sel, info in rows:
-            labels = tuple(info.get("labels", ()))
+        for sel, labels in rows:
             print(f"{sel}")
-            print(f"  spool: {info.get('spool', '')}")
             if labels:
                 for label in labels:
                     print(f"  {label}")
@@ -547,16 +541,14 @@ def print_event_lookup(pattern: str = "", *, selector: str | None = None) -> Non
 
     if not pattern:
         rows = [
-            (sel, str(info.get("spool", "")),
-             len(tuple(info.get("labels", ()))))
-            for sel, info in EVENT_FAMILIES.items()
+            (sel, len(labels))
+            for sel, labels in EVENT_FAMILIES.items()
         ]
         w0 = max(len("subscribe selector"), max(len(row[0]) for row in rows))
-        w1 = max(len("spool"), max(len(row[1]) for row in rows))
-        print(f"{'subscribe selector':<{w0}}  {'spool':<{w1}}  labels")
-        for sel, spool, count in sorted(rows, key=lambda r: r[0].lower()):
+        print(f"{'subscribe selector':<{w0}}  labels")
+        for sel, count in sorted(rows, key=lambda r: r[0].lower()):
             label_text = f"{count} labels" if count else "n/a"
-            print(f"{sel:<{w0}}  {spool:<{w1}}  {label_text}")
+            print(f"{sel:<{w0}}  {label_text}")
         return
 
     label_rows, selector_rows = event_selector_rows(pattern)
@@ -564,19 +556,18 @@ def print_event_lookup(pattern: str = "", *, selector: str | None = None) -> Non
         w0 = max(len("event"), max(len(row[0]) for row in label_rows))
         w1 = max(len("subscribe selector"),
                  max(len(row[1]) for row in label_rows))
-        print(f"{'event':<{w0}}  {'subscribe selector':<{w1}}  spool")
-        for label, sel, spool in sorted(label_rows, key=lambda r: r[0].lower()):
-            print(f"{label:<{w0}}  {sel:<{w1}}  {spool}")
+        print(f"{'event':<{w0}}  subscribe selector")
+        for label, sel in sorted(label_rows, key=lambda r: r[0].lower()):
+            print(f"{label:<{w0}}  {sel}")
     if selector_rows:
         if label_rows:
             print()
         w0 = max(len("subscribe selector"),
                  max(len(row[0]) for row in selector_rows))
-        w1 = max(len("spool"), max(len(row[1]) for row in selector_rows))
-        print(f"{'subscribe selector':<{w0}}  {'spool':<{w1}}  labels")
-        for sel, spool, count in sorted(selector_rows, key=lambda r: r[0].lower()):
+        print(f"{'subscribe selector':<{w0}}  labels")
+        for sel, count in sorted(selector_rows, key=lambda r: r[0].lower()):
             label_text = f"{count} labels" if count else "n/a"
-            print(f"{sel:<{w0}}  {spool:<{w1}}  {label_text}")
+            print(f"{sel:<{w0}}  {label_text}")
 
 
 def expand_edf_stream_aliases(spec: str | None) -> tuple[list[str], list[int]]:
@@ -1381,7 +1372,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_rpc_args(sub_p)
     sub_p.add_argument("selectors", nargs="*",
                        help="SubscribeEvent selector names")
-    sub_p.add_argument("--events", default=None,
+    sub_p.add_argument("--events", "--event", default=None,
                        help="comma-separated payload event labels to resolve "
                             "to SubscribeEvent selectors")
     sub_p.add_argument("--duration", type=float, default=None,

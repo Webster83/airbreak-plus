@@ -211,8 +211,8 @@ plus per-selector `valid` flags.
 ```json
 {
   "dataIds": [
-    "UsageEvents-TherapyStatusEvent",
-    "TherapyEvents-RespiratoryEvent"
+    "UsageEvents-TherapyStatusEvents",
+    "TherapyEvents-RespiratoryEvents"
   ]
 }
 ```
