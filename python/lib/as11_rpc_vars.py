@@ -13,7 +13,7 @@ Contents:
     SPOOL_FAMILIES               per-type protobuf family (derived)
     SPOOL_FIELDS                 wire_field -> [spool_type, ...] autodetect (derived)
     STREAM_DATA_IDS              StartStream valid data_ids
-    EVENT_IDS                    SubscribeEvent valid event names
+    EVENT_IDS                    SubscribeEvent selector names
     VAR_NAMES                    [(long_name, short_tag), ...] every known var
     VAR_SUBTREES                 names that Get accepts as aggregate-subtree targets
     VAR_MODE_PREFIXES            human-friendly therapy-mode prefix groupings
@@ -681,47 +681,151 @@ STREAM_EDF_SAMPLE_MS: dict[str, int] = {
     "SA2": 1000,
 }
 
-EVENT_IDS = [
-    # mask / therapy lifecycle
-    "MaskFitStart", "MaskFitStop", "MaskOn", "MaskOff",
-    "MaskReminderAcknowledged",
-    "PressureStart", "PressureStop",
-    "RampDownStarted", "RampDownCompleted",
-    # sensor / hardware anomalies
-    "PressureStuckHigh", "PressureStuckLow", "PressureStuckMid",
-    "PressureSensorDrift", "PressureSensorsPlausibility",
-    "SensorFail",
-    # alarm subsystem
-    "AlarmImageRestored", "AlarmMuteState",
-    "AlarmModuleCommunicationError", "AlarmSelfTestFailure",
-    # upgrade lifecycle
-    "AlarmUpgradeInitiated", "AlarmUpgradeSuccessful", "AlarmUpgradeFailed",
-    "AlarmUpgradeFileTransferRequested",
-    "AlarmUpgradeFileTransferCompleted", "AlarmUpgradeFileTransferFailed",
-    "AlarmUpgradeFileSignatureMismatch",
-    "UpgradePrepStarted",
-    # device check
-    "DeviceCheckInitiated", "DeviceCheckPassed", "DeviceCheckSystemError",
-    "DeviceCheckNotificationDisplayed",
-    # system errors
-    "SystemErrorStarted",
-    "SystemErrorCalibrationReset", "SystemErrorSettingsReset",
-    "SystemErrorFastOverPressure", "SystemErrorSlowOverPressure",
-    "SystemErrorOverTemperature", "SystemErrorOverVoltage",
-    "SystemErrorImplausibleSupplyVoltage",
-    "SystemErrorFaultyHWFaultDetectionCircuitry",
-    "SystemErrorFlowSensorStuckHigh", "SystemErrorFlowSensorStuckLow",
-    "SystemErrorNoFlowData",
-    "SystemErrorPressureSensorDrift", "SystemErrorPressureSensorsPlausibility",
-    "SystemErrorPressureStuckHigh", "SystemErrorPressureStuckLow",
-    "SystemErrorPressureStuckMid",
-    "SystemErrorMotorESD", "SystemErrorMotorFETs",
-    "SystemErrorMotorHwFault", "SystemErrorMotorHwMitigationIC",
-    "SystemErrorMotorStallHW", "SystemErrorMotorStallSW",
-    "SystemErrorMotorSticky",
-    # notifications observed on the wire
-    "SpoolFragment",
-]
+EVENT_FAMILIES: dict[str, dict] = {
+    # SubscribeEvent selector -> matching spool namespace and known payload
+    # labels. Labels are decoded event names, not SubscribeEvent dataIds.
+    "TherapyEvents-RespiratoryEvent": {
+        "spool": "TherapyEvents-RespiratoryEvents",
+        "labels": (
+            "Hypopnea", "CentralApnea", "ObstructiveApnea", "Apnea",
+            "Rera", "Arousal", "CsrStart", "CsrEnd",
+        ),
+    },
+    "UsageEvents-TherapyStatusEvent": {
+        "spool": "UsageEvents-TherapyStatusEvents",
+        "labels": (
+            "NoUsage", "MaskOff", "MaskOn", "PowerOff", "MaskFitStart",
+            "MaskFitStop", "TherapyStart", "TherapyStop",
+            "LearnTargetsStart", "LearnTargetsStop",
+        ),
+    },
+    "alarmEvents": {
+        "spool": "alarmEvents",
+        "labels": (
+            "HighLeakAlarm", "NonVentedMaskAlarm",
+            "LowMinuteVentilationAlarm", "ApneaAlarm",
+            "RecoverableErrorHoseBlockedAlarm",
+            "RecoverableErrorHoseDisconnectedAlarm",
+            "RecoverableErrorHumidifierTubRemovedAlarm",
+            "AlarmModuleCommunicationError", "AlarmMute",
+        ),
+    },
+    "alarmDiagnosticEvents": {
+        "spool": "alarmDiagnosticEvents",
+        "labels": (
+            "IndicatorSelfTestInitiated", "IndicatorSelfTestPass",
+            "IndicatorSelfTestFail", "PrimaryLEDFail", "SecondaryLEDFail",
+            "BuzzerFail", "MuteButtonStuckOn",
+            "SupercapacitorSelfTestInitiated", "SupercapacitorSelfTestPass",
+            "SupercapacitorSelfTestFail", "SupercapacitorVoltage",
+            "SupercapacitorCapacitance", "SupercapacitorESR",
+            "SelfTestInitiated", "AlarmUpgradeInitiated",
+            "AlarmUpgradeSuccessful", "AlarmUpgradeFailed",
+            "InitiateAlarmUpgradeRequested", "InitiateAlarmUpgradeCompleted",
+            "InitiateAlarmUpgradeFailed",
+            "AlarmUpgradeFileTransferRequested",
+            "AlarmUpgradeFileTransferCompleted",
+            "AlarmUpgradeFileTransferFailed", "ApplyAlarmUpgradeRequested",
+            "ApplyAlarmUpgradeCompleted", "ApplyAlarmUpgradeFailed",
+        ),
+    },
+    "SystemActivityEvents-FrequentActivityEvent": {
+        "spool": "SystemActivityEvents-FrequentActivityEvents",
+        "labels": (
+            "AlarmModuleComms", "PressureStart", "PressureStop",
+            "SmartStopped", "SmartStarted", "StandbyStarted",
+            "TherapyStarted", "MaskfitStarted", "PowerDown", "PowerUp",
+            "ButtonPressStartStop", "BluetoothConnected",
+            "BTDisconnected", "RpcStartTherapy", "RpcStopTherapy",
+            "BluetoothSecureSessionEstablished", "BluetoothDiscoverable",
+            "BluetoothApplicationPairingAllowed",
+            "BluetoothApplicationPairingEstablished",
+            "BluetoothApplicationPairingDisallowed", "WarmupStarted",
+            "WarmupStopped", "CooldownStarted", "CooldownStopped",
+            "BackupStarted", "SDCardInserted", "HeatedTubeConnected",
+            "HeatedTubeDisconnected", "MicrophoneStartedRecording",
+            "MicrophoneStoppedRecording", "SoundcheckStarted",
+            "SoundcheckCompleted", "SoundcheckAcknowledged",
+            "MockdownStarted", "MockdownInterrupted", "MockdownFinished",
+            "PowerSupplyACMains90W", "PowerSupplyDCMains90W",
+            "PowerSupply65W", "TxLink2Connected",
+            "BluetoothOximeterConnected", "BluetoothOximeterPairingFailed",
+            "BluetoothOximeterDisconnected", "FrequentEventsFloodingMitigated",
+            "CepstrumCalculated", "HeatedTubeFailed", "AmalfiTubeConnected",
+            "TherapyStopConfirmed", "RampDownStarted", "RampDownCompleted",
+            "EnterClinicalMenu", "ExitClinicalMenu",
+        ),
+    },
+    "SystemActivityEvents-SporadicActivityEvent": {
+        "spool": "SystemActivityEvents-SporadicActivityEvents",
+        "labels": (
+            "DataResetStarted", "CalibrationStarted", "SystemErrorStarted",
+            "UpgradePrepStarted", "TestDriveStarted", "FlightModeOn",
+            "FlightModeOff", "RpcComplianceEraseRequest",
+            "RpcComplianceEraseRequestFailure", "RpcEraseData",
+            "RpcEraseDataFailure", "RpcError", "FlashFormattedSettings",
+            "FlashFormattedData", "FlashFormattedUpgrade",
+            "ComplianceEraseComplete", "EventLogsEraseComplete",
+            "ResetToDefaultsComplete", "EraseMediaComplete",
+            "RPCResetRequest", "RPCInitiateUpgradeRequest",
+        ),
+    },
+    "SystemExceptionEvents-SystemError": {
+        "spool": "SystemExceptionEvents-SystemErrors",
+        "labels": (
+            "NoError", "MotorStallHW", "FastOverPressure",
+            "OverTemperature", "OverVoltage", "MotorStallSW",
+            "MotorHwFault", "MotorSticky", "MotorFETs",
+            "MotorHwMitigationIC", "NoFlowData", "SettingsReset",
+            "CalibrationReset", "PressureStuckHigh", "PressureStuckLow",
+            "PressureStuckMid", "PressureSensorDrift",
+            "PressureSensorsPlausibility", "FlowSensorStuckLow",
+            "FlowSensorStuckHigh", "ImplausibleSupplyVoltage",
+            "FaultyHWFaultDetectionCircuitry",
+        ),
+    },
+    "SystemExceptionEvents-RecoverableError": {
+        "spool": "SystemExceptionEvents-RecoverableErrors",
+        "labels": ("NoError", "HoseBlocked", "HoseDisconnected",
+                   "HumidifierTubRemoved"),
+    },
+    "SystemExceptionEvents-HumidifierError": {
+        "spool": "SystemExceptionEvents-HumidifierErrors",
+        "labels": ("NoError", "OverCurrent", "ProtectionFETShortCircuit",
+                   "ControlFETShortCircuit", "OpenCircuit"),
+    },
+    "SystemExceptionEvents-HeatedTubeError": {
+        "spool": "SystemExceptionEvents-HeatedTubeErrors",
+        "labels": (
+            "NoError", "OverPower", "OverTemperature",
+            "ProtectionFETShortCircuit", "ControlFETShortCircuit",
+            "HeatingOpenCircuit", "HeatingNTCOpenCircuit", "SensorFail",
+            "OverCurrent",
+        ),
+    },
+    "DiagnosticExceptionEvents-AppError": {
+        "spool": "DiagnosticExceptionEvents-AppErrors",
+        "labels": (),
+    },
+    "DiagnosticExceptionEvents-FatalError": {
+        "spool": "DiagnosticExceptionEvents-FatalErrors",
+        "labels": (),
+    },
+    "DiagnosticExceptionEvents-ResettableError": {
+        "spool": "DiagnosticExceptionEvents-ResettableErrors",
+        "labels": (),
+    },
+    "DiagnosticExceptionEvents-AlarmAppError": {
+        "spool": "DiagnosticExceptionEvents-AlarmAppErrors",
+        "labels": (),
+    },
+    "DiagnosticExceptionEvents-ErrorLogInfo": {
+        "spool": "DiagnosticExceptionEvents-ErrorLogInfos",
+        "labels": (),
+    },
+}
+
+EVENT_IDS = list(EVENT_FAMILIES)
 
 # Names the device's `Get` RPC accepts as aggregate-subtree targets
 # passing one of these returns the whole subtree in one call.
@@ -1237,7 +1341,7 @@ REGISTRIES = {
 #    "reserved": (VAR_RESERVED,               "reserved `_NAME` specials"),
     "streams":  (STREAM_DATA_IDS,            "stream data IDs (for `stream --data-ids`)"),
     "edf":      (sorted(STREAM_EDF_ALIASES),  "EDF stream aliases (for `stream --edf`)"),
-    "events":   (EVENT_IDS,                  "event IDs (for `subscribe --events`)"),
+    "events":   (EVENT_IDS,                  "event selectors and labels (for `subscribe`)"),
     "spools":   (SPOOL_TYPES,                "spool types (for `spool`)"),
 }
 

@@ -13,6 +13,7 @@ covered separately in `bluetooth_protocol.md` and `can_protocol.md`.
 - [GetVersion](#getversion)
 - [Get and Set](#get-and-set)
 - [Notifications](#notifications)
+- [Event RPC](#event-rpc)
 - [Stream RPC](#stream-rpc)
 - [Spool RPC](#spool-rpc)
 - [Method sets](#method-sets)
@@ -192,6 +193,32 @@ Device-initiated messages have a `method` and no `id`:
 Notifications can arrive while a request is waiting for its response. A
 transport implementation must skip notifications until the response with the
 matching `id` is received.
+
+Known notification-producing RPC families are:
+
+| RPC family | Notification method | Reference |
+|------------|---------------------|-----------|
+| `SubscribeEvent` | `EventNotification` | [AS11 RPC Event Reference](rpc_events.md) |
+| `StartStream` | `StreamData` | [AS11 RPC Stream Reference](rpc_streams.md) |
+| `PullSpoolFragments` | `SpoolFragment` | [AS11 RPC Spool Reference](rpc_spools.md) |
+
+## Event RPC
+
+`SubscribeEvent` subscribes to live event profile notifications. It takes a
+`dataIds` array of event-profile selectors and returns a `subscriptionId`
+plus per-selector `valid` flags.
+
+```json
+{
+  "dataIds": [
+    "UsageEvents-TherapyStatusEvent",
+    "TherapyEvents-RespiratoryEvent"
+  ]
+}
+```
+
+Event profile selectors and payload event families are listed in
+[AS11 RPC Event Reference](rpc_events.md).
 
 ## Stream RPC
 

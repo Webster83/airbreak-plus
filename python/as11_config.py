@@ -51,7 +51,7 @@ from as11_rpc_vars import (  # noqa: E402
     VAR_GROUPS, expand_groups, resolve_group,
     SPOOL_GROUPS, SPOOL_TYPES, SPOOL_FORMATS, SPOOL_REGISTRY,
     VAR_NAMES, VAR_SUBTREES, STREAM_EDF_ALIASES, STREAM_EDF_SAMPLE_MS,
-    STREAM_GROUPS,
+    STREAM_GROUPS, EVENT_FAMILIES,
     REGISTRIES,
     filter_vars, var_groups_summary, print_var_pairs,
 )
@@ -492,6 +492,93 @@ def unique_ordered(items: list[str]) -> list[str]:
     return out
 
 
+def event_selectors_for_label(label: str) -> list[str]:
+    """Resolve one payload event label to SubscribeEvent selector names."""
+    key = label.strip().lower()
+    if not key:
+        return []
+    for selector in EVENT_FAMILIES:
+        if selector.lower() == key:
+            return [selector]
+    out = []
+    for selector, info in EVENT_FAMILIES.items():
+        labels = info.get("labels", ())
+        if any(name.lower() == key for name in labels):
+            out.append(selector)
+    return out
+
+
+def event_selector_rows(pattern: str = "") -> tuple[list[tuple[str, str, str]],
+                                                  list[tuple[str, str, int]]]:
+    """Return (label rows, selector rows) matching an event search pattern."""
+    key = pattern.lower()
+    label_rows: list[tuple[str, str, str]] = []
+    selector_rows: list[tuple[str, str, int]] = []
+    for selector, info in EVENT_FAMILIES.items():
+        spool = str(info.get("spool", ""))
+        labels = tuple(info.get("labels", ()))
+        selector_hit = bool(key and (key in selector.lower()
+                                     or key in spool.lower()))
+        matched_labels = [label for label in labels
+                          if not key or key in label.lower()]
+        for label in matched_labels:
+            label_rows.append((label, selector, spool))
+        if selector_hit or (not key and not matched_labels):
+            selector_rows.append((selector, spool, len(labels)))
+    return label_rows, selector_rows
+
+
+def print_event_lookup(pattern: str = "", *, selector: str | None = None) -> None:
+    if selector:
+        key = selector.lower()
+        rows = [(sel, info) for sel, info in EVENT_FAMILIES.items()
+                if key in sel.lower()]
+        for sel, info in rows:
+            labels = tuple(info.get("labels", ()))
+            print(f"{sel}")
+            print(f"  spool: {info.get('spool', '')}")
+            if labels:
+                for label in labels:
+                    print(f"  {label}")
+            else:
+                print("  labels: n/a")
+            print()
+        return
+
+    if not pattern:
+        rows = [
+            (sel, str(info.get("spool", "")),
+             len(tuple(info.get("labels", ()))))
+            for sel, info in EVENT_FAMILIES.items()
+        ]
+        w0 = max(len("subscribe selector"), max(len(row[0]) for row in rows))
+        w1 = max(len("spool"), max(len(row[1]) for row in rows))
+        print(f"{'subscribe selector':<{w0}}  {'spool':<{w1}}  labels")
+        for sel, spool, count in sorted(rows, key=lambda r: r[0].lower()):
+            label_text = f"{count} labels" if count else "n/a"
+            print(f"{sel:<{w0}}  {spool:<{w1}}  {label_text}")
+        return
+
+    label_rows, selector_rows = event_selector_rows(pattern)
+    if label_rows:
+        w0 = max(len("event"), max(len(row[0]) for row in label_rows))
+        w1 = max(len("subscribe selector"),
+                 max(len(row[1]) for row in label_rows))
+        print(f"{'event':<{w0}}  {'subscribe selector':<{w1}}  spool")
+        for label, sel, spool in sorted(label_rows, key=lambda r: r[0].lower()):
+            print(f"{label:<{w0}}  {sel:<{w1}}  {spool}")
+    if selector_rows:
+        if label_rows:
+            print()
+        w0 = max(len("subscribe selector"),
+                 max(len(row[0]) for row in selector_rows))
+        w1 = max(len("spool"), max(len(row[1]) for row in selector_rows))
+        print(f"{'subscribe selector':<{w0}}  {'spool':<{w1}}  labels")
+        for sel, spool, count in sorted(selector_rows, key=lambda r: r[0].lower()):
+            label_text = f"{count} labels" if count else "n/a"
+            print(f"{sel:<{w0}}  {spool:<{w1}}  {label_text}")
+
+
 def expand_edf_stream_aliases(spec: str | None) -> tuple[list[str], list[int]]:
     data_ids: list[str] = []
     sample_ms: list[int] = []
@@ -767,8 +854,18 @@ def cmd_stream(args: argparse.Namespace) -> int:
 
 def cmd_subscribe(args: argparse.Namespace) -> int:
     """Subscribe to device events; emit NDJSON, one notification per line."""
-    event_ids = args.events.split(",") if args.events else []
-    params = {"dataIds": event_ids}
+    selector_ids = list(getattr(args, "selectors", []) or [])
+    for label in split_csv(args.events):
+        matches = event_selectors_for_label(label)
+        if not matches:
+            raise SystemExit(
+                f"subscribe: no event label {label!r}; "
+                f"use `known events {label}` to browse"
+            )
+        for selector in matches:
+            eprint(f"subscribe: {label} -> {selector}")
+        selector_ids.extend(matches)
+    params = {"dataIds": unique_ordered(selector_ids)}
 
     def handler(msg: dict):
         print(json.dumps(msg, separators=(",", ":")), flush=True)
@@ -959,6 +1056,10 @@ def cmd_known(args: argparse.Namespace) -> int:
 
     if action == "spools":
         print_spool_types(pat)
+        return 0
+
+    if action == "events":
+        print_event_lookup(pat, selector=getattr(args, "selector", None))
         return 0
 
     if action not in REGISTRIES:
@@ -1278,8 +1379,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="subscribe to device events (NDJSON to stdout)",
     )
     add_rpc_args(sub_p)
+    sub_p.add_argument("selectors", nargs="*",
+                       help="SubscribeEvent selector names")
     sub_p.add_argument("--events", default=None,
-                       help="comma-separated event IDs")
+                       help="comma-separated payload event labels to resolve "
+                            "to SubscribeEvent selectors")
     sub_p.add_argument("--duration", type=float, default=None,
                        help="stop after N seconds (default: until Ctrl-C)")
     sub_p.set_defaults(func=cmd_subscribe)
@@ -1368,7 +1472,8 @@ def build_parser() -> argparse.ArgumentParser:
                "  known streams              valid `stream --data-ids`\n"
                "  known streams BRP          data IDs behind an EDF stream alias\n"
                "  known edf                  valid `stream --edf` aliases\n"
-               "  known events               valid `subscribe --events`\n"
+               "  known events PressureStart event label -> selector lookup\n"
+               "  known events --selector SystemActivity list selector labels\n"
                "  known spools               valid `spool` types",
         formatter_class=raw_fmt,
     )
@@ -1376,6 +1481,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="registry to list")
     kn.add_argument("pattern", nargs="?", default=None,
                     help="optional filter or sub-action")
+    kn.add_argument("--selector", default=None,
+                    help="for known events: list labels under selectors "
+                         "matching this text")
     kn.set_defaults(func=cmd_known)
 
     dev = sub.add_parser(
