@@ -26,7 +26,7 @@ Live selectors accepted by `SubscribeEvent.params.dataIds` on 15.8.4.0.
 | `UsageEvents-TherapyStatusEvents` | 10 | therapy on/off and mode/status lifecycle |
 | `TherapyEvents-RespiratoryEvents` | 8 | respiratory event reporting |
 | `SystemActivityEvents-FrequentActivityEvents` | 52 | frequent system activity events |
-| `SystemActivityEvents-SporadicActivityEvents` | 21 | sporadic system activity events |
+| `SystemActivityEvents-SporadicActivityEvents` | 76 | sporadic system activity events |
 | `SystemExceptionEvents-SystemErrors` | 22 | system errors |
 | `SystemExceptionEvents-RecoverableErrors` | 4 | recoverable errors |
 | `SystemExceptionEvents-HumidifierErrors` | 5 | humidifier errors |
@@ -101,10 +101,40 @@ selector that delivers them.
 - `FlightModeOn`, `FlightModeOff`
 - RPC echoes: `RpcComplianceEraseRequest`,
   `RpcComplianceEraseRequestFailure`, `RpcEraseData`, `RpcEraseDataFailure`,
-  `RpcError`, `RPCResetRequest`, `RPCInitiateUpgradeRequest`
+  `RpcError`, `RPCResetRequest`, `RPCInitiateUpgradeRequest`,
+  `RPCApplyUpgradeSuccessfulResponse`, `RPCApplyUpgradeFailureResponse`,
+  `RPCAuthenticatedApplyUpgradeSuccessfulResponse`,
+  `RPCAuthenticatedApplyUpgradeFailureResponse`
 - Storage: `FlashFormattedSettings`, `FlashFormattedData`,
   `FlashFormattedUpgrade`, `ComplianceEraseComplete`,
-  `EventLogsEraseComplete`, `ResetToDefaultsComplete`, `EraseMediaComplete`
+  `EventLogsEraseComplete`, `ResetToDefaultsComplete`, `EraseMediaComplete`,
+  `SDCardFormatted`, `SDCardRemoved`, `SDCardReadError`,
+  `SDCardWriteError`, `SDReadOnlyCardInserted`, `DataIntegrityFailure`,
+  `EventLogDataError`, `SDCardFull`
+- Bluetooth/security: `BluetoothSecureCodeInvalid`,
+  `BTIncorrectAuthenticationResponse`, `BTOutOfSequenceMessage`,
+  `BluetoothDataCorruption`, `BTSecureRPCOnInsecureChannel`,
+  `BluetoothPeripheralScanningAvailableDevices`, `BluetoothOximeterFound`,
+  `BluetoothOximeterJustWorksPairingEstablished`,
+  `BluetoothOximeterIncompatibleDevice`, `BluetoothOximeterForgotten`
+- Upgrade/signature failures: `IncorrectUpgradeType`,
+  `UpgradeFileIntegrityFailure`, `FgUpgradeFileFingerprintMismatch`,
+  `FgUpgradeFileSignatureMismatch`, `AlarmUpgradeFileSignatureMismatch`,
+  `InvalidUpdaterSoftware`
+- Hardware/UI: `BlockedOutlet`, `BlockedInlet`, `EndcapConnected`,
+  `EndcapDisconnected`, `LimpModeOn`, `LimpModeOff`,
+  `TouchScreenI2CError`, `TubRemovedDuringSoundcheck`,
+  `MotorEndOfLifeReached`
+- Data mode: `DataModeSilent`, `DataModeActive`
+- Learn targets/device checks: `LearnTargetsStarted`,
+  `LearnTargetsStopped`, `LearnTargetsFailed`, `LearnTargetsCompleted`,
+  `LearnTargetsAccepted`, `DeviceCheckInitiated`, `DeviceCheckPassed`,
+  `DeviceCheckSystemError`, `DeviceCheckNotificationDisplayed`
+- Reminders/test drive: `MaskReminderAcknowledged`,
+  `TubingReminderAcknowledged`, `FilterReminderAcknowledged`,
+  `HumidifierReminderAcknowledged`, `TestDriveTimedOut`
+- Self-limit/setup: `SporadicEventsFloodingMitigated`,
+  `SetupExperienceBypassed`
 
 ### System exceptions
 
@@ -173,4 +203,3 @@ dictionaries listed above.
   `AlarmUpgradeFileTransferCompleted`,
   `AlarmUpgradeFileTransferFailed`, `ApplyAlarmUpgradeRequested`,
   `ApplyAlarmUpgradeCompleted`, `ApplyAlarmUpgradeFailed`
-
