@@ -6,12 +6,12 @@ transport from -d/--device:
 
     -d ble:<mac|alias>          BLE (via bleak + SRP pairing)
     -d can:<target>             CAN adapter target (Waveshare, CANable SLCAN, SocketCAN)
-    -d tcp:<host>:<port>        TCP airbridge (future)
+    -d tcp:<host>[:<port>]      AirCANnect TCP bridge (default port 39011)
 
 Compat aliases:
     --addr <ble-target>         same as -d ble:<ble-target>
     -p/--port <can-target>      same as -d can:<can-target>
-    $AS11_ADDR / $AS11_CAN_PORT env fallbacks
+    $AS11_ADDR / $AS11_CAN_PORT / $AS11_AIRCANNECT env fallbacks
 
 """
 
@@ -38,6 +38,14 @@ try:  # optional: only used to register CAN-specific CLI args
 except ModuleNotFoundError as exc:  # pragma: no cover - dev setups may omit CAN support
     if exc.name == "as11_can_transport":
         _can_transport = None
+    else:
+        raise
+
+try:  # optional: AirCANnect TCP bridge
+    import as11_aircannect as _aircannect_transport  # noqa: E402
+except ModuleNotFoundError as exc:  # pragma: no cover
+    if exc.name == "as11_aircannect":
+        _aircannect_transport = None
     else:
         raise
 
@@ -198,7 +206,7 @@ def resolve_device_spec(args: argparse.Namespace) -> str:
     Returns one of:
         "ble:<addr-or-alias>"
         "can:<port>"
-        "tcp:<host>:<port>"
+        "tcp:<host>[:<port>]"
     """
     if getattr(args, "device", None):
         return args.device
@@ -210,9 +218,12 @@ def resolve_device_spec(args: argparse.Namespace) -> str:
         return f"ble:{os.environ['AS11_ADDR']}"
     if os.environ.get("AS11_CAN_PORT"):
         return f"can:{os.environ['AS11_CAN_PORT']}"
+    if os.environ.get("AS11_AIRCANNECT"):
+        return f"tcp:{os.environ['AS11_AIRCANNECT']}"
     raise SystemExit(
-        "no device: pass -d/--device ble:<mac|alias> or can:<port>, "
-        "or set AS11_ADDR / AS11_CAN_PORT"
+        "no device: pass -d/--device ble:<mac|alias>, can:<port>, or "
+        "tcp:<host>[:<port>]; or set AS11_ADDR / AS11_CAN_PORT / "
+        "AS11_AIRCANNECT"
     )
 
 
@@ -238,11 +249,17 @@ def build_transport(args: argparse.Namespace) -> Transport:
         return can_transport_from_args(target, args)
 
     if spec.startswith("tcp:"):
-        raise SystemExit("tcp: transport not implemented yet")
+        target = spec[4:]
+        if not target:
+            raise SystemExit("tcp: spec needs host[:port]")
+        if _aircannect_transport is not None:
+            return _aircannect_transport.from_args(target, args)
+        from as11_aircannect import from_args as aircannect_from_args
+        return aircannect_from_args(target, args)
 
     raise SystemExit(
         f"unrecognised device spec {spec!r}; "
-        "expected ble:<addr>, can:<port>, or tcp:<host:port>"
+        "expected ble:<addr>, can:<port>, or tcp:<host>[:<port>]"
     )
 
 
@@ -1226,6 +1243,8 @@ def _apply_common_defaults(args: argparse.Namespace) -> None:
 def add_rpc_args(p: argparse.ArgumentParser) -> None:
     if _can_transport is not None:
         _can_transport.add_args(p)
+    if _aircannect_transport is not None:
+        _aircannect_transport.add_args(p)
     p.add_argument("--timeout", type=float, default=5.0,
                    help="RPC response timeout (seconds)")
 

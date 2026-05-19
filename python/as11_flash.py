@@ -2,12 +2,14 @@
 """AS11 Flash / OTA Tool.
 
 Build, upload and apply firmware images on AirSense 11 / AirCurve 11
-devices. Works over BLE and CAN; transport selected with -d/--device:
+devices. Works over BLE, CAN, and AirCANnect TCP; transport selected with
+-d/--device:
 
-    -d ble:<mac|alias>     BLE
-    -d can:<target>        CAN adapter target (Waveshare, CANable SLCAN, SocketCAN)
-    --addr <x>             same as -d ble:<x>
-    -p/--port <x>          same as -d can:<target>
+    -d ble:<mac|alias>          BLE
+    -d can:<target>             CAN adapter target (Waveshare, CANable SLCAN, SocketCAN)
+    -d tcp:<host>[:<port>]      AirCANnect TCP bridge (default port 39011)
+    --addr <x>                  same as -d ble:<x>
+    -p/--port <x>               same as -d can:<target>
 
 Offline subcommands (no device needed):
     targets    list known block regions
@@ -28,9 +30,9 @@ Apply-mode flags, highest precedence first:
 When no apply-mode flag is given:
     upload                 verify-only
     flash on BLE           authenticated apply (uses stored otaKey)
-    flash on CAN           plain ApplyUpgrade
+    flash on CAN / TCP     plain ApplyUpgrade
     apply on BLE           authenticated apply (uses stored otaKey)
-    apply on CAN           plain ApplyUpgrade
+    apply on CAN / TCP     plain ApplyUpgrade
 
 Authenticated apply key resolution: --key HEX32, --key-file PATH, $AS11_OTA_KEY,
 or stored BLE device otaKey.
@@ -62,6 +64,14 @@ try:  # optional: only used to register CAN-specific CLI args
 except ModuleNotFoundError as exc:  # pragma: no cover - dev setups may omit CAN support
     if exc.name == "as11_can_transport":
         _can_transport = None
+    else:
+        raise
+
+try:  # optional: AirCANnect TCP bridge
+    import as11_aircannect as _aircannect_transport  # noqa: E402
+except ModuleNotFoundError as exc:  # pragma: no cover
+    if exc.name == "as11_aircannect":
+        _aircannect_transport = None
     else:
         raise
 
@@ -966,8 +976,21 @@ def build_transport_for_flash(args) -> Transport:
         t.connect()
         return t
 
+    if spec.startswith("tcp:"):
+        target = spec[4:]
+        if not target:
+            raise SystemExit("tcp: spec needs host[:port]")
+        if _aircannect_transport is not None:
+            t = _aircannect_transport.from_args(target, args)
+        else:
+            from as11_aircannect import from_args as aircannect_from_args
+            t = aircannect_from_args(target, args)
+        t.connect()
+        return t
+
     raise SystemExit(
-        f"unrecognised device spec {spec!r}; expected ble:<addr> or can:<port>"
+        f"unrecognised device spec {spec!r}; "
+        "expected ble:<addr>, can:<port>, or tcp:<host>[:<port>]"
     )
 
 
@@ -982,9 +1005,12 @@ def _resolve_device_spec(args) -> str:
         return f"ble:{os.environ['AS11_ADDR']}"
     if os.environ.get("AS11_CAN_PORT"):
         return f"can:{os.environ['AS11_CAN_PORT']}"
+    if os.environ.get("AS11_AIRCANNECT"):
+        return f"tcp:{os.environ['AS11_AIRCANNECT']}"
     raise SystemExit(
-        "no device: pass -d/--device ble:<addr> or can:<port>, "
-        "--addr <ble>, -p <can-port>, or set AS11_ADDR / AS11_CAN_PORT"
+        "no device: pass -d/--device ble:<addr>, can:<port>, or "
+        "tcp:<host>[:<port>]; or --addr <ble>, -p <can-port>, "
+        "or set AS11_ADDR / AS11_CAN_PORT / AS11_AIRCANNECT"
     )
 
 
@@ -993,6 +1019,9 @@ def default_device_apply_mode(args) -> ApplyMode:
     if spec.startswith("ble:"):
         return APPLY_AUTHENTICATED
     if spec.startswith("can:"):
+        return APPLY_PLAIN
+    if spec.startswith("tcp:"):
+        # AirCANnect bridges over CAN; same security policy as plaintext CAN.
         return APPLY_PLAIN
     return APPLY_NONE
 
@@ -1742,7 +1771,8 @@ def _add_device_args(p: argparse.ArgumentParser) -> None:
     suppr = argparse.SUPPRESS
     g = p.add_argument_group("device selection")
     g.add_argument("-d", "--device", default=suppr,
-                   help="device spec: ble:<mac|alias>, can:<port>")
+                   help="device spec: ble:<mac|alias>, can:<port>, "
+                        "tcp:<host>[:<port>]")
     g.add_argument("--addr", default=suppr,
                    help="BLE target (compat for -d ble:<x>; env: AS11_ADDR)")
     g.add_argument("-p", "--port", default=suppr,
@@ -1750,6 +1780,8 @@ def _add_device_args(p: argparse.ArgumentParser) -> None:
                         "env: AS11_CAN_PORT)")
     if _can_transport is not None:
         _can_transport.add_args(p)
+    if _aircannect_transport is not None:
+        _aircannect_transport.add_args(p)
 
 
 def main(argv=None) -> int:
