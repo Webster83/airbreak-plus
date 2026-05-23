@@ -559,6 +559,23 @@ extra_modes() {
     printf '\xff\xff' | patch $(( $(find_var MOP) + G8_BITMASK )) || die failed
 }
 
+unlock_option_masks() {
+    echo "Unlocking option masks"
+
+    local G8_BITMASK=0x0C
+    local masks=(
+        "TBT 0x00000007" # Tube: SlimLine, Standard, 3m
+        "RMA 0x00000007" # Ramp: Off, On, Auto
+    )
+
+    local entry name mask
+    for entry in "${masks[@]}"; do
+        read -r name mask <<< "$entry"
+        perl -e 'print pack("V", oct($ARGV[0]))' "$mask" | \
+            patch $(( $(find_var "$name") + G8_BITMASK )) || die failed
+    done
+}
+
 # Try enabling extra menu items
 extra_menu() {
     deprecated "gui_config now sets ACT flags on all menu variables." \
@@ -910,6 +927,7 @@ extra_modes
 # extra_menu
 # all_menu
 gui_config
+unlock_option_masks
 motor_nagscreen
 unlock_languages
 patch_past_date

@@ -424,6 +424,17 @@ class ASFirmwarePatches(object):
         G8_BITMASK = 0x0C
         self.asf.patch(b'\xff\xff', self.asf.find_var('MOP') + G8_BITMASK, clobber=True)
 
+    def unlock_option_masks(self):
+        G8_BITMASK = 0x0C
+        masks = {
+            'TBT': 0x00000007,  # Tube: SlimLine, Standard, 3m
+            'RMA': 0x00000007,  # Ramp: Off, On, Auto
+        }
+        for name, mask in masks.items():
+            self.asf.patch(struct.pack('<I', mask),
+                           self.asf.find_var(name) + G8_BITMASK,
+                           clobber=True)
+
     def extra_menu(self):
         #try enabling extra menu items
         cdx_patches = {
@@ -851,6 +862,7 @@ if __name__ == "__main__":
         {'arg':"patch-unlock-languages",'desc':"Unlock all built-in languages",                         'default':True,  'function':'unlock_languages'},
         {'arg':"patch-extra-debug",     'desc':"Add extra debug to display.",                           'default':True,  'function':'extra_debug'},
         {'arg':"patch-extra-modes",     'desc':"Add all modes.",                                        'default':True,  'function':'extra_modes'},
+        {'arg':"patch-unlock-options",  'desc':"Unlock additional enum option masks.",                  'default':True,  'function':'unlock_option_masks'},
         {'arg':"patch-extra-menu",      'desc':"Try enabling extra menu items.",                        'default':False,  'function':'extra_menu',
                                         'deprecated': "gui_config now sets ACT flags on all menu variables. "
                                                       "If you believe some items are still missing, please file a bug report. "
