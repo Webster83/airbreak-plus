@@ -372,24 +372,24 @@ class ASFirmwarePatches(object):
         G4_MAX = 0x0C
 
         vars = [
-            0x0024, # Set Pressure (CPAP)
-            0x0025, # Max Pressure (AutoSet, APAP, AfH)
-            0x0026, # IPAP (S, ST, T, PAC)
-            0x01D2, # Start Pressure (CPAP)
-            0x01D3, # Min Pressure (AutoSet, APAP, AfH)
-            0x01D4, # Start Pressure (AutoSet, APAP, AfH)
-            0x01D5, # Min EPAP (VAuto)
-            0x01D6, # Max IPAP (VAuto)
-            0x01D8, # Start EPAP (VAuto)
-            0x01D9, # EPAP (S, ST)
-            0x01DA, # Start EPAP (S, ST, PAC)
-            0x01E0, # EPAP (ASV)
-            0x01E3, # Start EPAP (ASV)
-            0x01E4, # Max EPAP (ASVAuto)
-            0x01E5, # Min EPAP (ASVAuto)
-            0x01E8, # Start EPAP (ASVAuto)
-            0x01E9, # EPAP (iVAPS)
-            0x01EE, # Start EPAP (iVAPS)
+            'IPC', # Set Pressure (CPAP)
+            'MPA', # Max Pressure (AutoSet, APAP, AfH)
+            'IPP', # IPAP (S, ST, T, PAC)
+            'STP', # Start Pressure (CPAP)
+            'MPI', # Min Pressure (AutoSet, APAP, AfH)
+            'STU', # Start Pressure (AutoSet, APAP, AfH)
+            'MNE', # Min EPAP (VAuto)
+            'MXI', # Max IPAP (VAuto)
+            'STV', # Start EPAP (VAuto)
+            'EPP', # EPAP (S, ST)
+            'EPS', # Start EPAP (S, ST, PAC)
+            'EEP', # EPAP (ASV)
+            'STE', # Start EPAP (ASV)
+            'EAX', # Max EPAP (ASVAuto)
+            'EAI', # Min EPAP (ASVAuto)
+            'EAS', # Start EPAP (ASVAuto)
+            'EPI', # EPAP (iVAPS)
+            'IVS', # Start EPAP (iVAPS)
         ]
 
         for var in vars:
@@ -405,7 +405,7 @@ class ASFirmwarePatches(object):
             var_value_addr = $var_bitmask_addr + 8
             but hardcoded offset works for almost all firmwares...
         """
-        addr = self.asf.find_var(0x0204)
+        addr = self.asf.find_var('LNC')
         # make variable read only to prevent overwriting with eeprom data
         self.asf.patch(b'\x06', addr, clobber=True)
         # 0x007fffff, except font-reserved bits jp (13,19) and cn (16,17).
@@ -415,14 +415,14 @@ class ASFirmwarePatches(object):
         # set config variable 0xc value to 4 == enable more debugging data on display
         # if you set it to \x0f it will enable four separate display pages of info in sleep report mode
         G6_DEFAULT = 0x08
-        self.asf.patch(b'\x04', self.asf.find_var(0x0209) + G6_DEFAULT, clobber=True)
+        self.asf.patch(b'\x04', self.asf.find_var('TSS') + G6_DEFAULT, clobber=True)
 
     def extra_modes(self):
         # add more mode entries, set config 0x0 mask to all bits high
         # default is 0x3, which only enables mode 1 (CPAP) and 2 (AutoSet)
         # ---> This is the real magic <---
         G8_BITMASK = 0x0C
-        self.asf.patch(b'\xff\xff', self.asf.find_var(0x020D) + G8_BITMASK, clobber=True)
+        self.asf.patch(b'\xff\xff', self.asf.find_var('MOP') + G8_BITMASK, clobber=True)
 
     def extra_menu(self):
         #try enabling extra menu items
@@ -487,8 +487,8 @@ class ASFirmwarePatches(object):
 
         # Update variable config to allow Max PS to be set below 5
         G4_MIN = 0x10
-        self.asf.patch(b'\x00', self.asf.find_var(0x01E2) + G4_MIN, clobber=True) # Max PS (ASV)
-        self.asf.patch(b'\x00', self.asf.find_var(0x01E7) + G4_MIN, clobber=True) # Max PS (ASVAuto)
+        self.asf.patch(b'\x00', self.asf.find_var('MXS') + G4_MIN, clobber=True) # Max PS (ASV)
+        self.asf.patch(b'\x00', self.asf.find_var('AXS') + G4_MIN, clobber=True) # Max PS (ASVAuto)
 
     def gui_config (self):
         # enable editable options in clinical settings menu
@@ -496,19 +496,19 @@ class ASFirmwarePatches(object):
 
         vars = [
             # gui_create_menus->menu_floatvar_create
-            0x0024, 0x0025, 0x0026, 0x002F,
-            0x0070, 0x01D2, 0x01D3, 0x01D4, 0x01D5, 0x01D6, 0x01D7, 0x01D8, 0x01D9, 0x01DA, 0x01DC, 0x01DD, 0x01DE, 0x01DF,
-            0x01E0, 0x01E1, 0x01E2, 0x01E3, 0x01E4, 0x01E5, 0x01E6, 0x01E7, 0x01E8, 0x01E9, 0x01EA, 0x01EB, 0x01EC, 0x01ED, 0x01EE,
+            'IPC', 'MPA', 'IPP', 'PHT',
+            'EPR', 'STP', 'MPI', 'STU', 'MNE', 'MXI', 'SPT', 'STV', 'EPP', 'EPS', 'ITN', 'ITX', 'RRT', 'ITT',
+            'EEP', 'MNS', 'MXS', 'STE', 'EAX', 'EAI', 'ANS', 'AXS', 'EAS', 'EPI', 'WPM', 'WPA', 'IBR', 'WMV', 'IVS',
 
             # gui_create_menus->menu_create_text_or_float
-            0x0217, 0x021B, 0x0221, 0x0222, 0x022B, 0x0232, 0x0233, 0x0234, 0x0245, 0x0246,
-            0x0218, 0x0247, 'CYI', 'TRI',
+            'EBE', 'BRE', 'AFC', 'ALR', 'HME', 'EPA', 'EPX', 'EPT', 'VCS', 'VTS',
+            'RSC', 'CSR', 'CYI', 'TRI',
 
             # gui_create_menus->menu_create_item_type_0x29_maybe
-            0x0029, 0x00EC, 0x00F0, 0x00F1, 0x00F2, 0x00F3, 0x00F4, 0x00F5, 0x00F6, 0x00FA, 0x0156,
+            'MTT', 'ZAE', 'ZAM', 'ZAR', 'ZAZ', 'ZA2', 'ZA3', 'ZAY', 'ZAS', 'CRD', 'ZAV',
 
             # gui_create_menus->gui_infobox_create
-            0x002A, 0x0055, 0x0082, 0x0084, 0x014B, 0x01DC, 0x01DD,
+            'TGT', 'AAV', 'IER', 'IN5', 'ZMA', 'ITN', 'ITX',
         ]
 
         count = 0
@@ -521,15 +521,15 @@ class ASFirmwarePatches(object):
 
     def patch_defaults(self):
         # language (eng)
-        self.asf.patch(b'\x00', self.asf.find_var(0x0212) + 0x08, clobber=True)
+        self.asf.patch(b'\x00', self.asf.find_var('LAN') + 0x08, clobber=True)
         # press. units: 0=cmH2O 1=hPa
         self.asf.patch(b'\x00', self.asf.find_var('PRD') + 0x08, clobber=True)
         # mask: 0=Pillows 1=Full 2=Nasal 3=Pediatric
-        self.asf.patch(b'\x00', self.asf.find_var(0x0213) + 0x08, clobber=True)
+        self.asf.patch(b'\x00', self.asf.find_var('MSK') + 0x08, clobber=True)
         # tube: SlimLine, Standard, 3m
-        self.asf.patch(b'\x00', self.asf.find_var(0x0214) + 0x08, clobber=True)
+        self.asf.patch(b'\x00', self.asf.find_var('TBT') + 0x08, clobber=True)
         # Essentials: Plus, On
-        self.asf.patch(b'\x00', self.asf.find_var(0x0216) + 0x08, clobber=True)
+        self.asf.patch(b'\x00', self.asf.find_var('ACC') + 0x08, clobber=True)
 
     def patch_logos(self):
 
@@ -745,9 +745,9 @@ class ASFirmwarePatches(object):
 
         # tune defaults
         G4_DEFAULT = 0x08
-        self.asf.patch(b'\x20', self.asf.find_var(0x00FE) + G4_DEFAULT, clobber=True)  # LBL = 32
-        self.asf.patch(b'\x50', self.asf.find_var(0x0100) + G4_DEFAULT, clobber=True)  # LBH = 80
-        self.asf.patch(struct.pack('<I', 590), self.asf.find_var(0x00FD) + G4_DEFAULT, clobber=True)  # ATH = 590
+        self.asf.patch(b'\x20', self.asf.find_var('LBL') + G4_DEFAULT, clobber=True)  # LBL = 32
+        self.asf.patch(b'\x50', self.asf.find_var('LBH') + G4_DEFAULT, clobber=True)  # LBH = 80
+        self.asf.patch(struct.pack('<I', 590), self.asf.find_var('ATH') + G4_DEFAULT, clobber=True)  # ATH = 590
 
         print("  backlight_adapt: %dB at 0x%X" % (len(data), BACKLIGHT_OFFSET))
 
