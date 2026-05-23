@@ -53,6 +53,7 @@ class ASFirmware(object):
         self.fw = file.read()
         self.fw = list(self.fw)
         self.crcfunc = crc_func = crcmod.predefined.mkCrcFun('crc-ccitt-false')
+        self.var_by_name = None
         
         self.validate()
 
@@ -62,15 +63,57 @@ class ASFirmware(object):
         ptr = struct.unpack_from('<I', bytes(self.fw[off:off+4]))[0]
         return ptr - self.FLASH_BASE
 
-    def find_var(self, var_id):
+    def find_var_id(self, var_id):
         """Return file offset of descriptor record for var_id"""
         if   var_id < 0x1E:                          gidx = 3
         elif var_id >= 0x1E  and var_id < 0x1E + 0x1DF: gidx = 4
         elif var_id >= 0x1FD and var_id < 0x1FD + 0x10:  gidx = 6
         elif var_id >= 0x20D and var_id < 0x20D + 0xA5:  gidx = 8
-        else: raise ValueError("find_var: var_id 0x%04X not in known tables" % var_id)
+        else: raise ValueError("find_var_id: var_id 0x%04X not in known tables" % var_id)
         tbl = self.TABLES[gidx]
         return self.globals_offset(gidx) + (var_id - tbl['id_base']) * tbl['stride']
+
+    def _flash_ptr_offset(self, ptr):
+        off = ptr - self.FLASH_BASE
+        if off < 0 or off >= len(self.fw):
+            return None
+        return off
+
+    def _load_uart_names(self):
+        if self.var_by_name is not None:
+            return
+
+        fw = bytes(self.fw)
+        self.var_by_name = {}
+        g23 = self.globals_offset(23)
+
+        # globals[23] is a 26-bucket UART-name lookup table:
+        # each bucket points to {char2, char3, var_id} entries for one first letter.
+        for letter_idx in range(26):
+            off = g23 + letter_idx * 8
+            if off < 0 or off + 8 > len(fw):
+                continue
+            sub_ptr, count = struct.unpack_from('<II', fw, off)
+            sub_off = self._flash_ptr_offset(sub_ptr)
+            if sub_off is None or count > 200 or sub_off + count * 4 > len(fw):
+                continue
+            for j in range(count):
+                c2, c3, var_id = struct.unpack_from('<BBH', fw, sub_off + j * 4)
+                name = chr(ord('A') + letter_idx) + chr(c2) + chr(c3)
+                self.var_by_name[name] = var_id
+
+    def find_var_name(self, name):
+        """Return file offset of descriptor record for a UART variable name."""
+        self._load_uart_names()
+        var_id = self.var_by_name.get(name.upper())
+        if var_id is None:
+            raise ValueError("unknown UART variable name: %s" % name)
+        return self.find_var_id(var_id)
+
+    def find_var(self, var):
+        if isinstance(var, str):
+            return self.find_var_name(var)
+        return self.find_var_id(var)
         
     def validate(self):
         """Validate the input file looks OK and populate information"""
@@ -459,7 +502,7 @@ class ASFirmwarePatches(object):
 
             # gui_create_menus->menu_create_text_or_float
             0x0217, 0x021B, 0x0221, 0x0222, 0x022B, 0x0232, 0x0233, 0x0234, 0x0245, 0x0246,
-            0x0218, 0x0247, 0x0270, 0x0271,
+            0x0218, 0x0247, 'CYI', 'TRI',
 
             # gui_create_menus->menu_create_item_type_0x29_maybe
             0x0029, 0x00EC, 0x00F0, 0x00F1, 0x00F2, 0x00F3, 0x00F4, 0x00F5, 0x00F6, 0x00FA, 0x0156,
@@ -480,7 +523,7 @@ class ASFirmwarePatches(object):
         # language (eng)
         self.asf.patch(b'\x00', self.asf.find_var(0x0212) + 0x08, clobber=True)
         # press. units: 0=cmH2O 1=hPa
-        self.asf.patch(b'\x00', self.asf.find_var(0x028C) + 0x08, clobber=True)
+        self.asf.patch(b'\x00', self.asf.find_var('PRD') + 0x08, clobber=True)
         # mask: 0=Pillows 1=Full 2=Nasal 3=Pediatric
         self.asf.patch(b'\x00', self.asf.find_var(0x0213) + 0x08, clobber=True)
         # tube: SlimLine, Standard, 3m

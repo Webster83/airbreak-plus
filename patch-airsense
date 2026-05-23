@@ -190,13 +190,83 @@ find_g6_var() { find_var_record 6  0x18 0x1FD "$1"; }
 find_g8_var() { find_var_record 8  0x14 0x20D "$1"; }
 
 # dispatch var_id to correct table lookup
-find_var() {
+find_var_id() {
     local vid=$(printf "%d" "$1")
     if   (( vid < 0x1E  ));                        then find_g3_var "$1"
     elif (( vid >= 0x1E  && vid < 0x1E + 0x1DF )); then find_g4_var "$1"
     elif (( vid >= 0x1FD && vid < 0x1FD + 0x10 )); then find_g6_var "$1"
     elif (( vid >= 0x20D && vid < 0x20D + 0xA5 )); then find_g8_var "$1"
-    else die "find_var: var_id $1 not in g3/g4/g6/g8"
+    else die "find_var_id: var_id $1 not in g3/g4/g6/g8"
+    fi
+}
+
+declare -A _var_by_name
+_uart_names_loaded=0
+
+load_uart_names() {
+    [[ "$_uart_names_loaded" == 1 ]] && return 0
+
+    local g23
+    g23=$(globals_offset 23) || die "globals[23] not found"
+
+    # globals[23] is a 26-bucket UART-name lookup table:
+    # each bucket points to {char2, char3, var_id} entries for one first letter.
+    while IFS=$'\t' read -r name vid; do
+        [[ -n "$name" && -n "$vid" ]] || continue
+        _var_by_name[$name]=$vid
+    done < <(
+        perl -e '
+            use strict;
+            use warnings;
+
+            my ($file, $g23, $flash_base) = @ARGV;
+            $g23 += 0;
+            $flash_base = oct($flash_base);
+
+            open my $fh, "<:raw", $file or die "open: $!";
+            local $/;
+            my $data = <$fh>;
+            my $len = length($data);
+
+            my $u32 = sub {
+                my ($off) = @_;
+                return undef if $off < 0 || $off + 4 > $len;
+                return unpack("V", substr($data, $off, 4));
+            };
+
+            for my $letter_idx (0..25) {
+                my $off = $g23 + $letter_idx * 8;
+                my $sub_ptr = $u32->($off);
+                my $count = $u32->($off + 4);
+                next if !defined($sub_ptr) || !defined($count) || $count > 200;
+
+                my $sub_off = $sub_ptr - $flash_base;
+                next if $sub_off < 0 || $sub_off + $count * 4 > $len;
+
+                for my $j (0..$count - 1) {
+                    my ($c2, $c3, $vid) = unpack("C C v", substr($data, $sub_off + $j * 4, 4));
+                    printf "%s%c%c\t0x%04X\n", chr(ord("A") + $letter_idx), $c2, $c3, $vid;
+                }
+            }
+        ' "$OUT" "$g23" "$FLASH_BASE"
+    )
+
+    _uart_names_loaded=1
+}
+
+find_var_name() {
+    load_uart_names
+    local name=${1^^}
+    local vid=${_var_by_name[$name]}
+    [[ -n "$vid" ]] || die "unknown UART variable name: $1"
+    find_var_id "$vid"
+}
+
+find_var() {
+    if [[ "$1" == 0x* || "$1" =~ ^[0-9]+$ ]]; then
+        find_var_id "$1"
+    else
+        find_var_name "$1"
     fi
 }
 
@@ -532,7 +602,7 @@ gui_config () {
         
         # gui_create_menus->menu_create_text_or_float
         0x0217 0x021B 0x0221 0x0222 0x022B 0x0232 0x0233 0x0234 0x0245 0x0246
-        0x0218 0x0247 0x0270 0x0271
+        0x0218 0x0247 CYI TRI
 
         # gui_create_menus->menu_create_item_type_0x29_maybe
         0x0029 0x00EC 0x00F0 0x00F1 0x00F2 0x00F3 0x00F4 0x00F5 0x00F6 0x00FA 0x0156
@@ -543,7 +613,7 @@ gui_config () {
 
     local offsets=()
     for var in "${vars[@]}"; do
-        offsets+=( $(find_var $var) )
+        offsets+=( $(find_var "$var") )
     done
     local offset_str=$(IFS=,; echo "${offsets[*]}")
     perl -0777 -pi -e '
@@ -786,7 +856,7 @@ patch_defaults() {
     # language (eng)
     printf '\x00' | patch $(( $(find_g8_var 0x0212) + G8_DEFAULT )) || die failed
     # press. units: 0=cmH2O 1=hPa
-    printf '\x00' | patch $(( $(find_g8_var 0x028C) + G8_DEFAULT )) || die failed
+    printf '\x00' | patch $(( $(find_var PRD) + G8_DEFAULT )) || die failed
     # mask: 0=Pillows 1=Full 2=Nasal 3=Pediatric
     printf '\x00' | patch $(( $(find_g8_var 0x0213) + G8_DEFAULT )) || die failed
     # tube: SlimLine, Standard, 3m
