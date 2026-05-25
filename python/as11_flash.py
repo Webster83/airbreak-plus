@@ -204,6 +204,10 @@ DESC_PRESETS = {
         "desc2": 0xD785ABA6,
         "desc3": 0xBEB37EE2,
     },
+    "16.8.5.0": {
+        "desc2": 0x7862CBA7,
+        "desc3": 0xBEB37EE2,
+    },
 }
 
 BLE_CRED_FILE = Path.home() / ".as11_ble.json"
