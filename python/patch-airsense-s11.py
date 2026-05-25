@@ -46,6 +46,16 @@ def str2bool(value):
     raise argparse.ArgumentTypeError("Boolean value expected.")
 
 
+def parse_u16(value):
+    try:
+        out = int(value, 0)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected integer or hex value") from None
+    if out < 0 or out > 0xFFFF:
+        raise argparse.ArgumentTypeError("expected 16-bit value")
+    return out
+
+
 def clean_ascii(data):
     return data.decode("ascii", errors="replace").split("\x00")[0]
 
@@ -93,8 +103,8 @@ UNLOCKED_ENUM_SETTING_NAMES = (
     "TSS",  # Treatment screen style: Dots, PressureBar, FlowWave
 )
 
-# BLE RPC methods enabled by default when patch-ble-permissions runs.
-DEFAULT_BLE_UNLOCK_METHODS = (
+# RPC methods enabled by default when patch-rpc-permissions runs.
+DEFAULT_RPC_UNLOCK_METHODS = (
     "SetDateTime",
     "ApplyUpgrade",
     # "GetLedStatus",
@@ -105,8 +115,24 @@ DEFAULT_BLE_UNLOCK_METHODS = (
     # "ClearAutoConnectList",
 )
 
+# VCIDs to enable for patch-rpc-permissions by default
+DEFAULT_RPC_UNLOCK_VCIDS = (0x0396,)
+
+# Known RPC permission selector values
+KNOWN_RPC_PERMISSION_VCIDS = (
+    0x0380,  # CAN small JSON-RPC lane, 600-byte buffer; paired with host 0x0381
+    0x0382,  # CAN large/service JSON-RPC lane, 7650-byte buffer; paired with host 0x0383
+    0x0390,  # BLE plaintext small session lane, 600-byte buffer; paired with host 0x0391
+    0x0392,  # BLE plaintext large session lane, 7650-byte buffer; paired with host 0x0393
+    0x0394,  # BLE encrypted small RPC lane, 632-byte buffer; paired with host 0x0395
+    0x0396,  # BLE encrypted large RPC lane, 7682-byte buffer; paired with host 0x0397
+    0x0398,  # no endpoint-catalog transport row found
+    0x0780,  # Internal/cloud small RPC lane, 1024-byte buffer; paired with 0x0781
+    0x0788,  # Internal/cloud large RPC lane, 7650-byte buffer; paired with 0x0789
+)
+
 # RPC method names known from AS11 firmware dispatch tables. Used only to
-# locate the moving method->command-id table; patch defaults live above.
+# locate the moving method->command-id table; patch defaults live in DEFAULT_RPC_UNLOCK_METHODS
 KNOWN_RPC_METHODS = (
     "GetVersion",
     "EnterTherapy",
@@ -731,11 +757,14 @@ class S11Firmware(object):
 class S11FirmwarePatches(object):
     """Patch methods for S11 firmware."""
 
-    def __init__(self, asf, ble_unlock_methods=None):
+    def __init__(self, asf, rpc_unlock_methods=None, rpc_unlock_vcids=None):
         self.asf = asf
-        if ble_unlock_methods is None:
-            ble_unlock_methods = DEFAULT_BLE_UNLOCK_METHODS
-        self.ble_unlock_methods = list(ble_unlock_methods or ())
+        if rpc_unlock_methods is None:
+            rpc_unlock_methods = DEFAULT_RPC_UNLOCK_METHODS
+        if rpc_unlock_vcids is None:
+            rpc_unlock_vcids = DEFAULT_RPC_UNLOCK_VCIDS
+        self.rpc_unlock_methods = list(rpc_unlock_methods or ())
+        self.rpc_unlock_vcids = list(rpc_unlock_vcids or ())
 
     def is_blacklisted_setting(self, row):
         long_name = row["long_name"] or ""
@@ -1115,7 +1144,7 @@ class S11FirmwarePatches(object):
         except ValueError:
             print("motor_nagscreen: threshold not found!")
 
-    def ble_record_flags_are_bits(self, off, stride):
+    def rpc_permission_record_flags_are_bits(self, off, stride):
         if off + stride > len(self.asf.fw) or stride < 2:
             return False
         for idx in range(1, stride):
@@ -1124,11 +1153,10 @@ class S11FirmwarePatches(object):
                 return False
         return True
 
-    def find_ble_permission_table(self):
+    def find_rpc_permission_table(self):
         # Level 3 command permission table:
         # 8.3/8.4: [cmd_id] [flag0..flag7]
         # 8.5:     [cmd_id] [flag0..flag8]
-        # Flag index 1 (record byte +2) is BLE encrypted in checked builds.
         #
         # Anchor: cmd_id 4 (GetDateTime) with all flags = 1, APPL region only.
         # Walk the table bounds because command 3 is absent and table length
@@ -1141,12 +1169,12 @@ class S11FirmwarePatches(object):
             except ValueError:
                 continue
         else:
-            raise ValueError("BLE permission table anchor not found")
+            raise ValueError("RPC permission table anchor not found")
         base = anchor_off
         cmd = self.asf.u8(base)
         while base - stride >= self.asf.APPL_OFF:
             prev_off = base - stride
-            if not self.ble_record_flags_are_bits(prev_off, stride):
+            if not self.rpc_permission_record_flags_are_bits(prev_off, stride):
                 break
             prev_cmd = self.asf.u8(prev_off)
             if prev_cmd >= cmd:
@@ -1155,12 +1183,38 @@ class S11FirmwarePatches(object):
             cmd = prev_cmd
         return base, stride
 
-    def ble_permission_rows(self, base, stride):
+    def find_rpc_permission_vcid_table(self, flag_count):
+        # The permission flag columns are named by a nearby u16 VCID table.
+        # Its order is firmware-specific, so resolve the VCID before patching.
+        known = set(KNOWN_RPC_PERMISSION_VCIDS)
+        appl_end = self.asf.APPL_OFF + self.asf.APPL_SIZE
+        candidates = []
+        for off in range(self.asf.APPL_OFF, appl_end - flag_count * 2, 2):
+            vcids = tuple(self.asf.u16(off + idx * 2) for idx in range(flag_count))
+            if len(set(vcids)) != flag_count:
+                continue
+            if any(vcid not in known for vcid in vcids):
+                continue
+            after = bytes(self.asf.fw[off + flag_count * 2:off + flag_count * 2 + 64])
+            score = 0
+            for marker in (b"UnsupportedCommand", b"StorageFailure", b"InvalidObject"):
+                if marker in after:
+                    score += 1
+            candidates.append((score, off, vcids))
+        if not candidates:
+            raise ValueError("RPC permission VCID table not found")
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        best_score, best_off, best_vcids = candidates[0]
+        if len(candidates) > 1 and candidates[1][0] == best_score:
+            raise ValueError("RPC permission VCID table is ambiguous")
+        return best_off, best_vcids
+
+    def rpc_permission_rows(self, base, stride):
         rows = {}
         prev_cmd = -1
         off = base
         scanned = 0
-        while self.ble_record_flags_are_bits(off, stride):
+        while self.rpc_permission_record_flags_are_bits(off, stride):
             cmd = self.asf.u8(off)
             if cmd <= prev_cmd:
                 break
@@ -1170,7 +1224,7 @@ class S11FirmwarePatches(object):
             scanned += 1
         return rows, scanned
 
-    def find_ble_rpc_dispatch_table(self):
+    def find_rpc_dispatch_table(self):
         # APPL method table: [char *method_name, u32 command_id] records.
         # The table moves between versions, so score candidates by known RPC
         # method names instead of relying on absolute addresses.
@@ -1193,48 +1247,60 @@ class S11FirmwarePatches(object):
             if score >= 8 and (best is None or (score, len(seq)) > (best[0], len(best[2]))):
                 best = (score, start, seq)
         if best is None:
-            raise ValueError("BLE RPC dispatch table not found")
+            raise ValueError("RPC dispatch table not found")
         return best[1], best[2]
 
-    def ble_method_cmds(self):
-        _base, seq = self.find_ble_rpc_dispatch_table()
+    def rpc_method_cmds(self):
+        _base, seq = self.find_rpc_dispatch_table()
         out = {}
         for name, cmd, _off in seq:
             out[name] = cmd
         return out
 
-    def ble_permissions(self):
-        if not self.ble_unlock_methods:
+    def rpc_permissions(self):
+        if not self.rpc_unlock_methods or not self.rpc_unlock_vcids:
             return
 
-        method_cmds = self.ble_method_cmds()
+        method_cmds = self.rpc_method_cmds()
         unlock_items = []
-        for name in self.ble_unlock_methods:
+        for name in self.rpc_unlock_methods:
             if name not in method_cmds:
-                raise ValueError("ble_permissions: RPC method %r not found" % name)
+                raise ValueError("rpc_permissions: RPC method %r not found" % name)
             unlock_items.append((name, method_cmds[name]))
 
-        base, stride = self.find_ble_permission_table()
-        rows, scanned = self.ble_permission_rows(base, stride)
+        base, stride = self.find_rpc_permission_table()
+        rows, scanned = self.rpc_permission_rows(base, stride)
+        vcid_table_off, vcids = self.find_rpc_permission_vcid_table(stride - 1)
+        vcid_columns = {vcid: idx + 1 for idx, vcid in enumerate(vcids)}
+        unlock_vcids = []
+        for vcid in self.rpc_unlock_vcids:
+            if vcid not in vcid_columns:
+                raise ValueError("rpc_permissions: VCID 0x%04X not present in permission table" % vcid)
+            unlock_vcids.append(vcid)
 
         n = 0
         missing = 0
         already = 0
-        print("Patching BLE permissions...")
+        print("Patching RPC permissions... table 0x%05X, VCIDs %s" % (
+            vcid_table_off,
+            ", ".join("0x%04X" % vcid for vcid in vcids),
+        ))
         for label, cmd in unlock_items:
             off = rows.get(cmd)
             if off is None:
                 print("  %s -> id %d: permission row missing" % (label, cmd))
                 missing += 1
                 continue
-            if self.asf.u8(off + 2) == 0:
-                self.asf.write_u8(off + 2, 1)
-                print("  %s -> id %d: enabled" % (label, cmd))
-                n += 1
-            else:
-                print("  %s -> id %d: already enabled" % (label, cmd))
-                already += 1
-        print("Patching BLE permissions... %d enabled, %d already enabled, %d missing (%d entries scanned)" %
+            for vcid in unlock_vcids:
+                flag_off = off + vcid_columns[vcid]
+                if self.asf.u8(flag_off) == 0:
+                    self.asf.write_u8(flag_off, 1)
+                    print("  %s -> id %d VCID 0x%04X: enabled" % (label, cmd, vcid))
+                    n += 1
+                else:
+                    print("  %s -> id %d VCID 0x%04X: already enabled" % (label, cmd, vcid))
+                    already += 1
+        print("Patching RPC permissions... %d enabled, %d already enabled, %d missing (%d entries scanned)" %
               (n, already, missing, scanned))
 
     def vid_spoof(self):
@@ -1450,10 +1516,10 @@ PATCH_LIST = [
         "function": "motor_nagscreen",
     },
     {
-        "arg": "patch-ble-permissions",
-        "desc": "Enable selected BLE Level 3 RPC commands on encrypted VCID.",
+        "arg": "patch-rpc-permissions",
+        "desc": "Enable selected RPC commands on configured VCID permissions.",
         "default": True,
-        "function": "ble_permissions",
+        "function": "rpc_permissions",
     },
     {
         "arg": "patch-vid-spoof",
@@ -1476,6 +1542,8 @@ def add_patch_switch(parser, patch):
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Patch AirSense/AirCurve 11 firmware.")
+    default_rpc_methods = ", ".join(DEFAULT_RPC_UNLOCK_METHODS)
+    default_rpc_vcids = ", ".join("0x%04X" % vcid for vcid in DEFAULT_RPC_UNLOCK_VCIDS)
     parser.add_argument("INFILE", help="Input original binary file")
     parser.add_argument("OUTFILE", help="Output patched file")
     parser.add_argument("OPERATION", choices=["INFO", "PATCH"], help="Operation to perform")
@@ -1492,10 +1560,17 @@ def build_arg_parser():
     )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite output file if it exists already.")
     parser.add_argument(
-        "--ble-unlock-method",
+        "--rpc-unlock-method",
         action="append",
         default=None,
-        help="BLE RPC method name to unlock; repeatable. Default: SetDateTime, ApplyUpgrade.",
+        help="RPC method name to unlock; repeatable. Default: %s." % default_rpc_methods,
+    )
+    parser.add_argument(
+        "--rpc-unlock-vcid",
+        action="append",
+        type=parse_u16,
+        default=None,
+        help="RPC permission VCID to unlock; repeatable. Default: %s." % default_rpc_vcids,
     )
     return parser
 
@@ -1512,7 +1587,8 @@ def main(argv=None):
 
     patches = S11FirmwarePatches(
         asf,
-        ble_unlock_methods=args.ble_unlock_method,
+        rpc_unlock_methods=args.rpc_unlock_method,
+        rpc_unlock_vcids=args.rpc_unlock_vcid,
     )
 
     for patch in PATCH_LIST:

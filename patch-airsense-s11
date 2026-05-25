@@ -32,11 +32,11 @@ PATCHES=(
     patch-vid-spoof
     patch-motor-nagscreen
     patch-asv-ps-range
-    patch-ble-permissions
+    patch-rpc-permissions
 )
 
-# BLE RPC method names to enable when patch-ble-permissions is selected.
-BLE_UNLOCK=(
+# RPC method names to enable when patch-rpc-permissions is selected.
+RPC_UNLOCK=(
     SetDateTime
     ApplyUpgrade
     # GetLedStatus
@@ -47,13 +47,21 @@ BLE_UNLOCK=(
     # ClearAutoConnectList
 )
 
+# RPC permission VCIDs to enable for the selected methods.
+RPC_UNLOCK_VCID=(
+    0x0396
+)
+
 args=( "--all-patches" "n" )
 for patch in "${PATCHES[@]}"; do
     args+=( "--$patch" "Y" )
 done
 
-for method in "${BLE_UNLOCK[@]}"; do
-    args+=( "--ble-unlock-method" "$method" )
+for method in "${RPC_UNLOCK[@]}"; do
+    args+=( "--rpc-unlock-method" "$method" )
+done
+for vcid in "${RPC_UNLOCK_VCID[@]}"; do
+    args+=( "--rpc-unlock-vcid" "$vcid" )
 done
 
 exec "$PYTHON" "$PATCHER" "$IN" "$OUT" PATCH --overwrite "${args[@]}"
