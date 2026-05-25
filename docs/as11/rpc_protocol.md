@@ -17,7 +17,8 @@ covered separately in `bluetooth_protocol.md` and `can_protocol.md`.
 - [Stream RPC](#stream-rpc)
 - [Spool RPC](#spool-rpc)
 - [Method sets](#method-sets)
-  - [Plaintext BLE security/session VCID](#plaintext-ble-securitysession-vcid)
+  - [RPC permission selectors](#rpc-permission-selectors)
+  - [Plaintext BLE security/session](#plaintext-ble-securitysession)
   - [Patient / myAir BLE](#patient--myair-ble)
   - [Service / CAN](#service--can)
 - [Error codes](#error-codes)
@@ -358,7 +359,25 @@ shapes are listed in [AS11 RPC Spool Reference](rpc_spools.md).
 The capability strings are embedded in firmware. The visible set varies by
 transport and access level.
 
-### Plaintext BLE security/session VCID
+### RPC permission selectors
+
+The firmware has a per-command permission matrix keyed by local RPC selector.
+For BLE and CAN these selector values match the device TX side of the
+transport pair. Host requests use the paired device RX VCID.
+
+| Permission selector / device TX | Host request VCID / device RX | Role |
+|---------------------------------|--------------------------------|------|
+| `0x0380` | `0x0381` | CAN small JSON-RPC lane |
+| `0x0382` | `0x0383` | CAN large/service JSON-RPC lane used by current tools |
+| `0x0390` | `0x0391` | BLE plaintext small security/session lane |
+| `0x0392` | `0x0393` | BLE plaintext large security/session lane used by current tools |
+| `0x0394` | `0x0395` | BLE encrypted small RPC lane |
+| `0x0396` | `0x0397` | BLE encrypted large RPC lane used by current tools |
+| `0x0398` | unknown | 16.8.5.0 selector with no endpoint-catalog row found |
+| `0x0780` | `0x0781` | internal/cloud small RPC lane |
+| `0x0788` | `0x0789` | internal/cloud large RPC lane |
+
+### Plaintext BLE security/session
 
 The plaintext BLE VCID is used to create or resume an encrypted session.
 

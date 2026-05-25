@@ -59,17 +59,14 @@ the full payload, then validates the payload CRC.
 
 ## VCIDs
 
-Known working VCIDs:
+Known BLE RPC/session lanes:
 
-| VCID | Direction | Payload |
-|------|-----------|---------|
-| `0x0393` | client to device | plaintext JSON, key exchange only |
-| `0x0392` | device to client | plaintext responses and heartbeat |
-| `0x0397` | client to device | encrypted JSON RPC |
-| `0x0396` | device to client | encrypted JSON responses |
-
-Other VCIDs such as `0x0394` and `0x0380` have appeared in service-level
-experiments, but the stable local BLE path uses the four VCIDs above.
+| Device TX / permission selector | Device RX / host request VCID | Payload | Device TX/RX buffers | Notes |
+|-------------------------------|-------------------------------|---------|----------------------|-------|
+| `0x0390` | `0x0391` | plaintext JSON | 600 / 600 bytes | security/session lane |
+| `0x0392` | `0x0393` | plaintext JSON | 7650 / 7650 bytes | security/session lane used by current tools |
+| `0x0394` | `0x0395` | encrypted JSON | 632 / 600 bytes | encrypted RPC lane |
+| `0x0396` | `0x0397` | encrypted JSON | 7682 / 7650 bytes | encrypted RPC lane used by current tools |
 
 The device accepts only the key exchange/session methods on the plaintext
 path. Ordinary calls such as `GetVersion`, `Get`, and `Set` require the
@@ -253,4 +250,3 @@ or `RequestSession` because the device provides a fresh nonce.
 notifications use the encrypted RX VCID after session setup.
 
 Clients must handle notifications while waiting for a request response.
-

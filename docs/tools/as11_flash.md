@@ -16,26 +16,27 @@ This is the primary path -- start here.
 
 ```
 as11_flash.py flash -d ble:as11 -f patched.bin --block conf+app
-as11_flash.py flash -d ble:AA:BB:CC:DD:EE:FF -f patched.bin --block conf+app --apply
+as11_flash.py flash -d ble:AA:BB:CC:DD:EE:FF -f patched.bin --block conf+app
 as11_flash.py flash -d can:/dev/ttyACM0 -f patched.bin --block conf+app
-as11_flash.py flash -d can:can0 --can-flavour socketcan -f patched.bin --block conf+app --apply
+as11_flash.py flash -d can:can0 --can-flavour socketcan -f patched.bin --block conf+app
 as11_flash.py flash -d ble:as11 -f patched.bin --block config --apply-plain
 as11_flash.py flash -d ble:as11 -f patched.bin --block full --include-full-flash --apply
 ```
 
 `-f` accepts a full internal flash image (the patcher's output), an APPL/CONF
 extract, or any block payload. The tool auto-detects the layout and packages
-the requested `--block` slice. Without an apply flag the device runs
-`CheckUpgradeFile` and stops -- nothing is written to flash.
+the requested `--block` slice. If `--block` is omitted, `flash` guesses a
+safe non-bootloader target from the input size when possible.
 
-To actually commit the upgrade pick an apply flag (see [Apply modes](#apply-modes));
-over BLE this needs either the device's OTA key or a permission patch first
-(see [Apply over BLE](#apply-over-ble)).
+By default `flash` applies after `CheckUpgradeFile`: authenticated apply on
+BLE, plain `ApplyUpgrade` on CAN/TCP. Use `--verify-only` to upload and verify
+without rebooting or writing flash.
 
 ### upload
 
 Push a pre-built `.abc` container without rebuilding it. Useful when the
-container was produced ahead of time or by a separate workflow.
+container was produced ahead of time or by a separate workflow. Unlike
+`flash`, `upload` is verify-only by default.
 
 ```
 as11_flash.py upload -d ble:as11 patched.abc
@@ -58,6 +59,18 @@ Inspect an existing `.abc` container.
 
 ```
 as11_flash.py info patched.abc
+```
+
+### apply
+
+Apply a previously uploaded and verified container. The command can use a
+saved `.abc`, a raw firmware image that rebuilds to the same `.abc`, or the
+known SHA-256 hash from an earlier successful upload.
+
+```
+as11_flash.py apply -d can:/dev/ttyACM0 --hash HASH64
+as11_flash.py apply -d can:/dev/ttyACM0 -f patched.bin --block conf+app
+as11_flash.py apply -d ble:as11 --abc-file patched.abc
 ```
 
 ### targets
@@ -87,30 +100,35 @@ as11_flash.py flash -d ble:as11 -f patched.bin --block conf+app --apply
 
 | Flag | Effect |
 |------|--------|
-| no apply flag | Verify only; stop after `CheckUpgradeFile` |
+| no apply flag on `upload` | Verify only; stop after `CheckUpgradeFile` |
+| no apply flag on BLE `flash`/`apply` | authenticated apply |
+| no apply flag on CAN/TCP `flash`/`apply` | plain `ApplyUpgrade` |
+| `--verify-only` | Verify only; stop after `CheckUpgradeFile` |
 | `--apply` | Verify, then `ApplyAuthenticatedUpgrade` |
 | `--apply-authenticated` | Synonym for `--apply` |
 | `--apply-plain` | Verify, then `ApplyUpgrade` (unauthenticated) |
 
 Authenticated apply resolves the OTA signing key from `--key`, `--key-file`,
-or `$AS11_OTA_KEY`.
+`$AS11_OTA_KEY`, or a stored BLE device `otaKey`.
 
 ### Apply over BLE
 
-BLE is locked down -- neither apply mode works on a stock device out of the box.
-Pick one path before flashing:
+The stock BLE RPC exposes authenticated apply, but the HMAC needs the
+device's OTA key. Plain `ApplyUpgrade` over BLE needs a firmware permission
+patch first. Pick one path before flashing:
 
-1. **Authenticated path (`--apply`).** Retrieve the device's OTA key over
-   SWD/OpenOCD using `tcl/as11-keys.tcl` and pass it via `--key`,
-   `--key-file`, or `$AS11_OTA_KEY`. The key is per-device. Procedure
-   documented in [`docs/as11/ota_protocol.md`](../as11/ota_protocol.md#retrieving-the-local-ota-key).
+1. **Authenticated path.** Retrieve the device's OTA key over SWD/OpenOCD
+   using `tcl/as11-keys.tcl` and pass it via `--key`, `--key-file`, or
+   `$AS11_OTA_KEY`, or store it as the device alias `otaKey`. The key is
+   per-device. Procedure documented in
+   [`docs/as11/ota_protocol.md`](../as11/ota_protocol.md#retrieving-the-local-ota-key).
 
-2. **Unauthenticated path (`--apply-plain`).** Flash the `ble-permissions`
-   patch first, which exposes `ApplyUpgrade` on encrypted VCID. After that
-   `--apply-plain` works over BLE with no key. The first install of the
-   patched firmware still has to land via SWD or CAN; subsequent BLE
-   flashes go through unauthenticated apply.
+2. **Unauthenticated path (`--apply-plain`).** Flash the `patch-rpc-permissions`
+   patch first, which exposes `ApplyUpgrade` on encrypted BLE permission
+   selector `0x0396`. Host requests still go over the paired VCID `0x0397`.
+   After that `--apply-plain` works over BLE with no key. The first install
+   of the patched firmware still has to land via SWD or CAN; subsequent BLE
+   flashes can use unauthenticated apply.
 
 CAN exposes `ApplyUpgrade` natively, so `--apply-plain` works there
 without either step.
-
