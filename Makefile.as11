@@ -1,8 +1,9 @@
 AS11_FIRMWARE ?= as11.bin
 AS11_PATCHED ?= $(BUILD)/as11-patched.bin
 
-# must match offset in patch-airsense-s11.py
-AS11_VID_SPOOF_OFFSET := 0x081DA000
+# free address across known 8.3/8.4/8.5 APPL images
+# patcher can still relocate the payload when it's occupied in a newer firmware
+AS11_VID_SPOOF_OFFSET := 0x081DBAD0
 AS11_VID_SPOOF_BIN := $(BUILD)/as11_vid_spoof.bin
 AS11_BINS := $(AS11_VID_SPOOF_BIN)
 

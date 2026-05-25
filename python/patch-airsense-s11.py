@@ -178,7 +178,7 @@ MODE_SELECTOR_NAMES = (
     "TOM",
 )
 
-AS11_VID_SPOOF_ADDR = 0x081DA000
+AS11_VID_SPOOF_ADDR = 0x081DBAD0
 AS11_VID_SPOOF_BINARY = "as11_vid_spoof.bin"
 AS11_VID_SPOOF_MAGIC = 0x56313141
 
@@ -1047,49 +1047,58 @@ class S11FirmwarePatches(object):
         except ValueError:
             print("motor_nagscreen: threshold not found!")
 
-    def ble_record_flags_are_bits(self, off):
-        if off + 9 > len(self.asf.fw):
+    def ble_record_flags_are_bits(self, off, stride):
+        if off + stride > len(self.asf.fw) or stride < 2:
             return False
-        for idx in range(1, 9):
+        for idx in range(1, stride):
             flag = self.asf.u8(off + idx)
             if flag not in (0, 1):
                 return False
         return True
 
     def find_ble_permission_table(self):
-        # Level 3 command permission table: 9-byte entries
-        # [cmd_id] [flag0..flag7], flag index 1 = BLE encrypted.
+        # Level 3 command permission table:
+        # 8.3/8.4: [cmd_id] [flag0..flag7]
+        # 8.5:     [cmd_id] [flag0..flag8]
+        # Flag index 1 (record byte +2) is BLE encrypted in checked builds.
         #
-        # Anchor: cmd_id 4 (GetDateTime) with all 8 flags = 1, APPL region only.
+        # Anchor: cmd_id 4 (GetDateTime) with all flags = 1, APPL region only.
         # Walk the table bounds because command 3 is absent and table length
         # shifts between firmware builds.
-        anchor = bytes.fromhex("040101010101010101")
-        anchor_off = self.asf.find_bytes(anchor, self.asf.APPL_OFF)
+        for stride in (10, 9):
+            anchor = bytes([4] + [1] * (stride - 1))
+            try:
+                anchor_off = self.asf.find_bytes(anchor, self.asf.APPL_OFF)
+                break
+            except ValueError:
+                continue
+        else:
+            raise ValueError("BLE permission table anchor not found")
         base = anchor_off
         cmd = self.asf.u8(base)
-        while base - 9 >= self.asf.APPL_OFF:
-            prev_off = base - 9
-            if not self.ble_record_flags_are_bits(prev_off):
+        while base - stride >= self.asf.APPL_OFF:
+            prev_off = base - stride
+            if not self.ble_record_flags_are_bits(prev_off, stride):
                 break
             prev_cmd = self.asf.u8(prev_off)
             if prev_cmd >= cmd:
                 break
             base = prev_off
             cmd = prev_cmd
-        return base
+        return base, stride
 
-    def ble_permission_rows(self, base):
+    def ble_permission_rows(self, base, stride):
         rows = {}
         prev_cmd = -1
         off = base
         scanned = 0
-        while self.ble_record_flags_are_bits(off):
+        while self.ble_record_flags_are_bits(off, stride):
             cmd = self.asf.u8(off)
             if cmd <= prev_cmd:
                 break
             rows[cmd] = off
             prev_cmd = cmd
-            off += 9
+            off += stride
             scanned += 1
         return rows, scanned
 
@@ -1137,8 +1146,8 @@ class S11FirmwarePatches(object):
                 raise ValueError("ble_permissions: RPC method %r not found" % name)
             unlock_items.append((name, method_cmds[name]))
 
-        base = self.find_ble_permission_table()
-        rows, scanned = self.ble_permission_rows(base)
+        base, stride = self.find_ble_permission_table()
+        rows, scanned = self.ble_permission_rows(base, stride)
 
         n = 0
         missing = 0
@@ -1176,12 +1185,6 @@ class S11FirmwarePatches(object):
         vid_row = vid_rows[0]
         mop_row = mop_rows[0]
 
-        # Resolve the commit path and runtime SRAM slots from the firmware
-        # g5 gives the MOP trigger, g2 gives the VID target.
-        code_off = self.asf.ptr_to_off(AS11_VID_SPOOF_ADDR)
-        if code_off is None:
-            raise ValueError("vid_spoof: code cave address outside firmware image")
-
         try:
             enum_off = self.asf.find_bytes(AS11_G5_ENUM_WRITEBACK_PATTERN, self.asf.APPL_OFF)
         except ValueError as exc:
@@ -1206,33 +1209,87 @@ class S11FirmwarePatches(object):
             raise ValueError("vid_spoof: expected one g2 numeric writeback before g5 storage, found %d" % len(numeric))
         _numeric_off, numeric_base = numeric[0]
 
-        skip = (code_off, code_off + 0x400)
-        hook_ptr = AS11_VID_SPOOF_ADDR | 1
-        refs = self.asf.find_u32_offsets(orig, skip)
-        if len(refs) == 1:
-            vtable_entry = self.asf.off_to_addr(refs[0])
-        else:
-            hook_refs = self.asf.find_u32_offsets(hook_ptr, skip)
-            if len(hook_refs) != 1:
-                raise ValueError(
-                    "vid_spoof: expected one vtable reference to 0x%08X or hook, found %d/%d" %
-                    (orig, len(refs), len(hook_refs))
-                )
-            vtable_entry = self.asf.off_to_addr(hook_refs[0])
-
         with open(path, "rb") as f:
             blob = f.read()
         if not blob:
             raise ValueError("vid_spoof: %s is empty" % path)
 
-        # The compiled hook has a tiny placeholder parameter block.
-        # Fill it with resolved values
+        # The compiled hook has a tiny placeholder parameter block tagged by
+        # magic. The patcher rewrites it with firmware-specific function and
+        # SRAM table addresses before copying the hook into APPL slack.
         magic = struct.pack("<I", AS11_VID_SPOOF_MAGIC)
         param_off = blob.find(magic)
         if param_off < 0 or blob.find(magic, param_off + 1) >= 0:
             raise ValueError("vid_spoof: parameter block magic not unique")
         if param_off + 20 > len(blob):
             raise ValueError("vid_spoof: parameter block is truncated")
+
+        expected_start = AS11_VID_SPOOF_ADDR
+        expected_end = expected_start + len(blob)
+        flash_refs = []
+        bad_refs = []
+        for off in range(0, len(blob) - 3, 4):
+            value = struct.unpack_from("<I", blob, off)[0]
+            if self.asf.FLASH_BASE <= value < self.asf.FLASH_BASE + len(self.asf.fw):
+                flash_refs.append((off, value))
+                if not (expected_start <= value < expected_end):
+                    bad_refs.append((off, value))
+        if bad_refs:
+            refs = ", ".join("0x%02X->0x%08X" % item for item in bad_refs)
+            print(
+                "Patching runtime VID spoof... skipped (%s has absolute refs outside "
+                "0x%08X..0x%08X: %s; rebuild with 'make as11-vid-spoof')" %
+                (path, expected_start, expected_end - 1, refs)
+            )
+            return
+        if not flash_refs:
+            print(
+                "Patching runtime VID spoof... skipped (%s has no payload self refs; "
+                "rebuild with 'make as11-vid-spoof')" % path
+            )
+            return
+
+        preferred_off = self.asf.ptr_to_off(AS11_VID_SPOOF_ADDR)
+        if preferred_off is None:
+            raise ValueError("vid_spoof: preferred hook address outside firmware image")
+        preferred_has_hook = (
+            preferred_off + param_off + 4 <= len(self.asf.fw)
+            and bytes(self.asf.fw[preferred_off + param_off:preferred_off + param_off + 4]) == magic
+        )
+
+        if preferred_has_hook:
+            code_off = preferred_off
+            hook_ptr = AS11_VID_SPOOF_ADDR | 1
+            refs = self.asf.find_u32_offsets(hook_ptr, (code_off, code_off + len(blob)))
+            if len(refs) != 1:
+                raise ValueError(
+                    "vid_spoof: expected one vtable reference to installed hook 0x%08X, found %d" %
+                    (hook_ptr, len(refs))
+                )
+            vt_off = refs[0]
+        else:
+            code_off = preferred_off
+            existing = bytes(self.asf.fw[code_off:code_off + len(blob)])
+            if any(byte != 0xFF for byte in existing):
+                print(
+                    "Patching runtime VID spoof... skipped (preferred address 0x%08X..0x%08X is occupied)" %
+                    (AS11_VID_SPOOF_ADDR, AS11_VID_SPOOF_ADDR + len(blob) - 1)
+                )
+                return
+            refs = [
+                off for off in self.asf.find_u32_offsets(orig, (code_off, code_off + len(blob)))
+                if not (off >= 4 and bytes(self.asf.fw[off - 4:off]) == magic)
+            ]
+            if len(refs) != 1:
+                raise ValueError(
+                    "vid_spoof: expected one vtable reference to 0x%08X, found %d" %
+                    (orig, len(refs))
+                )
+            vt_off = refs[0]
+
+        code_addr = self.asf.off_to_addr(code_off)
+        hook_ptr = code_addr | 1
+
         blob = bytearray(blob)
         struct.pack_into(
             "<IIIII",
@@ -1246,22 +1303,16 @@ class S11FirmwarePatches(object):
         )
         blob = bytes(blob)
 
-        vt_off = self.asf.ptr_to_off(vtable_entry)
-        if vt_off is None:
-            raise ValueError("vid_spoof: patch address outside firmware image")
-        if code_off + len(blob) > self.asf.APPL_OFF + self.asf.APPL_SIZE:
-            raise ValueError("vid_spoof: hook binary does not fit APPL block")
-
         current_ptr = self.asf.u32(vt_off)
         if current_ptr not in (orig, hook_ptr):
             raise ValueError(
                 "vid_spoof: vtable entry 0x%08X is 0x%08X, expected 0x%08X" %
-                (vtable_entry, current_ptr, orig)
+                (self.asf.off_to_addr(vt_off), current_ptr, orig)
             )
 
         existing = bytes(self.asf.fw[code_off:code_off + len(blob)])
         if existing != blob and current_ptr != hook_ptr and any(byte != 0xFF for byte in existing):
-            raise ValueError("vid_spoof: code cave at 0x%08X is not empty" % AS11_VID_SPOOF_ADDR)
+            raise ValueError("vid_spoof: flash at 0x%08X is not empty" % code_addr)
 
         changed = 0
         if existing != blob:
