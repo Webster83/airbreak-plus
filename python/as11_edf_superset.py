@@ -16,7 +16,6 @@ import sys
 from pathlib import Path
 
 
-PLD_STREAM_TAG = "PLD"
 STREAM_HEADER_SIZE = 16
 STREAM_SIGNAL_SIZE = 16
 SUMMARY_RECORD_SIZE = 36
@@ -24,20 +23,39 @@ STR_RECORD_SETTING = 0x00
 STR_RECORD_SUMMARY = 0x01
 
 
-# Format: EDF signal id, EDF label, EDF physical unit, firmware scale.
+# Format: var short name, EDF label, EDF physical unit, firmware scale.
+BRP_STREAM_SIGNALS = (
+    ("RFL", "Flow.40ms", "L/s", 500.0),
+    ("MKP", "Press.40ms", "cmH2O", 50.0),
+)
+
+
+SA2_STREAM_SIGNALS = (
+    ("HRT", "Pulse.1s", "bpm", 1.0),
+    ("SAO", "SpO2.1s", "%", 1.0),
+)
+
+
 PLD_SUPERSET_SIGNALS = (
-    (317, "MaskPress.2s", "cmH2O", 50.0),
-    (201, "Press.2s", "cmH2O", 50.0),
-    (299, "EprPress.2s", "cmH2O", 50.0),
-    (314, "Leak.2s", "L/s", 50.0),
-    (380, "RespRate.2s", "bpm", 5.0),
-    (765, "TidVol.2s", "L", 50.0),
-    (225, "MinVent.2s", "L/min", 8.0),
-    (715, "TgtVent.2s", "L/min", 8.0),
-    (431, "IERatio.2s", "%", 1.0),
-    (660, "Snore.2s", "", 50.0),
-    (335, "FlowLim.2s", "", 100.0),
-    (399, "Ti.2s", "seconds", 50.0),
+    ("MKF", "MaskPress.2s", "cmH2O", 50.0),
+    ("MKI", "Press.2s", "cmH2O", 50.0),
+    ("MKE", "EprPress.2s", "cmH2O", 50.0),
+    ("LKF", "Leak.2s", "L/s", 50.0),
+    ("RR2", "RespRate.2s", "bpm", 5.0),
+    ("TD2", "TidVol.2s", "L", 50.0),
+    ("MV2", "MinVent.2s", "L/min", 8.0),
+    ("TGT", "TgtVent.2s", "L/min", 8.0),
+    ("IE2", "IERatio.2s", "%", 1.0),
+    ("SNI", "Snore.2s", "", 50.0),
+    ("FFL", "FlowLim.2s", "", 100.0),
+    ("INT", "Ti.2s", "seconds", 50.0),
+)
+
+
+STREAM_SCHEMAS = (
+    ("BRP", BRP_STREAM_SIGNALS),
+    ("SA2", SA2_STREAM_SIGNALS),
+    ("PLD", PLD_SUPERSET_SIGNALS),
 )
 
 
@@ -183,6 +201,140 @@ STR_SUPERSET_METADATA = (
 STR_SUPERSET_KEYS = tuple(row[0] for row in STR_SUPERSET_METADATA)
 
 
+STR_SUPERSET_SELECTED_NAMES = (
+    "",
+    "PPD",
+    "ActiveTherapyProfile",
+    "Cpap-StartPressure",
+    "Cpap-SetPressure",
+    "AutoSet-StartPressure",
+    "AutoSet-MaxPressure",
+    "AutoSet-MinPressure",
+    "HerAuto-StartPressure",
+    "HerAuto-MaxPressure",
+    "HerAuto-MinPressure",
+    "VAuto-StartPressure",
+    "VAuto-MaxInspiratoryPressure",
+    "VAuto-MinExpiratoryPressure",
+    "VAuto-SetPressureSupport",
+    "VAuto-SetMaxInspiratoryTime",
+    "VAuto-SetMinInspiratoryTime",
+    "VAuto-TriggerSensitivity",
+    "VAuto-CycleSensitivity",
+    "Spont-StartPressure",
+    "Spont-TargetInspiratoryPressure",
+    "Spont-TargetExpiratoryPressure",
+    "Spont-EasyBreatheEnable",
+    "Spont-RespiratoryRateEnable",
+    "Spont-SetMaxInspiratoryTime",
+    "Spont-SetMinInspiratoryTime",
+    "Spont-RiseTimeEnable",
+    "Spont-RiseTime",
+    "Spont-TriggerSensitivity",
+    "Spont-CycleSensitivity",
+    "ST-StartPressure",
+    "ST-TargetInspiratoryPressure",
+    "ST-TargetExpiratoryPressure",
+    "ST-SetRespiratoryRate",
+    "ST-SetMaxInspiratoryTime",
+    "ST-SetMinInspiratoryTime",
+    "ST-RiseTimeEnable",
+    "ST-RiseTime",
+    "ST-TriggerSensitivity",
+    "ST-CycleSensitivity",
+    "Timed-StartPressure",
+    "Timed-TargetInspiratoryPressure",
+    "Timed-TargetExpiratoryPressure",
+    "Timed-SetRespiratoryRate",
+    "Timed-SetInspiratoryTime",
+    "Timed-RiseTimeEnable",
+    "Timed-RiseTime",
+    "ASV-StartPressure",
+    "ASV-TargetExpiratoryPressure",
+    "ASV-MaxPressureSupport",
+    "ASV-MinPressureSupport",
+    "ASVAuto-StartPressure",
+    "ASVAuto-MaxExpiratoryPressure",
+    "ASVAuto-MinExpiratoryPressure",
+    "ASVAuto-MaxPressureSupport",
+    "ASVAuto-MinPressureSupport",
+    "AutoSetComfort",
+    "RampEnable",
+    "RampTime",
+    "EprEnablePatientAccess",
+    "EprEnable",
+    "EprPressure",
+    "EprType",
+    "SmartStart",
+    "PatientView",
+    "AntiBacterialFilter",
+    "MaskType",
+    "TubeType",
+    "ClimateControl",
+    "HumidifierSettingEnable",
+    "HumidifierLevel",
+    "HeatedTubeSettingEnable",
+    "HeatedTubeTemperature",
+    "Summary-TubeConnected",
+    "Summary-HumidifierConnected",
+    "Summary-BlowerPressure-95",
+    "Summary-BlowerPressure-5",
+    "Summary-RespiratoryFlow-95",
+    "Summary-RespiratoryFlow-5",
+    "Summary-BlowerFlow-50",
+    "Summary-AmbientHumidity-50",
+    "Summary-HumidifierTemperature-50",
+    "Summary-HeatedTubeTemperature-50",
+    "Summary-HeatedTubePower-50",
+    "Summary-HumidifierPower-50",
+    "Summary-SpO2-50",
+    "Summary-SpO2-95",
+    "Summary-SpO2-100",
+    "SAU",
+    "Summary-SpontTriggerPercentage",
+    "Summary-SpontCyclePercentage",
+    "Summary-MeanMaskPressure-50",
+    "Summary-MeanMaskPressure-95",
+    "Summary-MeanMaskPressure-100",
+    "Summary-InspiratoryPressure-50",
+    "Summary-InspiratoryPressure-95",
+    "Summary-InspiratoryPressure-100",
+    "Summary-ExpiratoryPressure-50",
+    "Summary-ExpiratoryPressure-95",
+    "Summary-ExpiratoryPressure-100",
+    "Summary-Leak-50",
+    "Summary-Leak-95",
+    "Summary-Leak-75",
+    "Summary-Leak-100",
+    "Summary-MinuteVentilation-50",
+    "Summary-MinuteVentilation-95",
+    "Summary-MinuteVentilation-100",
+    "Summary-RespiratoryRate-50",
+    "Summary-RespiratoryRate-95",
+    "Summary-RespiratoryRate-100",
+    "Summary-TidalVolume-50",
+    "Summary-TidalVolume-95",
+    "Summary-TidalVolume-100",
+    "Summary-TargetMinuteVentilation-50",
+    "Summary-TargetMinuteVentilation-95",
+    "Summary-TargetMinuteVentilation-100",
+    "Summary-IeRatio-50",
+    "Summary-IeRatio-95",
+    "Summary-IeRatio-100",
+    "Summary-InspiratoryDuration-50",
+    "Summary-InspiratoryDuration-95",
+    "Summary-InspiratoryDuration-100",
+    "Summary-ApneaHypopneaIndex",
+    "Summary-HypopneaIndex",
+    "Summary-ApneaIndex",
+    "Summary-ObstructiveApneaIndex",
+    "Summary-CentralApneaIndex",
+    "Summary-UnknownApneaIndex",
+    "Summary-ReraIndex",
+    "CSD",
+)
+
+
 def align_up(value: int, align: int) -> int:
     return (value + align - 1) & ~(align - 1)
 
@@ -241,6 +393,17 @@ class S11EdfSupersetPatcher:
                 return stream
         raise ValueError("EDF stream %s not found" % tag)
 
+    def resolve_stream_signals(self, wanted_signals):
+        out = []
+        for var_name, label, unit, scale in wanted_signals:
+            rows = self.asf.find_descriptors_by_name(var_name)
+            if not rows:
+                raise ValueError("EDF stream variable %s not found" % var_name)
+            if len(rows) != 1:
+                raise ValueError("EDF stream variable %s is ambiguous (%d matches)" % (var_name, len(rows)))
+            out.append((rows[0]["var_id"], label, unit, scale))
+        return out
+
     def find_existing_string_ptr(self, text):
         if text == "":
             return None
@@ -297,14 +460,11 @@ class S11EdfSupersetPatcher:
             raise ValueError("not enough erased CONF slack for %d-byte EDF patch" % size)
         return best
 
-    def pld_is_already_superset(self, stream):
-        return self.stream_is_already_superset(stream, PLD_SUPERSET_SIGNALS)
-
-    def stream_is_already_superset(self, stream, wanted_signals):
+    def stream_is_already_superset(self, stream, resolved_signals):
         signals = self.stream_signals(stream)
-        if len(signals) != len(wanted_signals):
+        if len(signals) != len(resolved_signals):
             return False
-        for got, want in zip(signals, wanted_signals):
+        for got, want in zip(signals, resolved_signals):
             sig_id, name, unit, scale = want
             if got["id"] != sig_id or got["name"] != name or got["unit"] != unit:
                 return False
@@ -312,10 +472,11 @@ class S11EdfSupersetPatcher:
                 return False
         return True
 
-    def patch_stream_superset(self, tag, wanted_signals, label):
+    def patch_stream_schema(self, tag, wanted_signals):
         stream = self.find_stream(tag)
-        if self.stream_is_already_superset(stream, wanted_signals):
-            print("Patching EDF %s stream... already superset" % label)
+        resolved_signals = self.resolve_stream_signals(wanted_signals)
+        if self.stream_is_already_superset(stream, resolved_signals):
+            print("Patching EDF %s stream... already superset" % tag)
             return 0
 
         existing_signals = self.stream_signals(stream)
@@ -327,7 +488,7 @@ class S11EdfSupersetPatcher:
         needed_strings = []
         needed_set = set()
         ptrs = {}
-        for _sig_id, name, unit, _scale in wanted_signals:
+        for _sig_id, name, unit, _scale in resolved_signals:
             for text in (name, unit):
                 if text in ptrs:
                     continue
@@ -341,7 +502,7 @@ class S11EdfSupersetPatcher:
                 else:
                     ptrs[text] = ptr
 
-        table_size = len(wanted_signals) * STREAM_SIGNAL_SIZE
+        table_size = len(resolved_signals) * STREAM_SIGNAL_SIZE
         strings_size = sum(len(text.encode("ascii")) + 1 for text in needed_strings)
         strings_start_rel = align_up(table_size, 4)
         alloc_size = strings_start_rel + strings_size
@@ -355,7 +516,7 @@ class S11EdfSupersetPatcher:
             self.asf.fw[string_off:string_off + len(raw)] = raw
             string_off += len(raw)
 
-        for index, (sig_id, name, unit, scale) in enumerate(wanted_signals):
+        for index, (sig_id, name, unit, scale) in enumerate(resolved_signals):
             off = table_off + index * STREAM_SIGNAL_SIZE
             struct.pack_into(
                 "<IIIf",
@@ -367,16 +528,19 @@ class S11EdfSupersetPatcher:
                 scale,
             )
 
-        self.asf.write_u32(stream["offset"] + 4, len(wanted_signals))
+        self.asf.write_u32(stream["offset"] + 4, len(resolved_signals))
         self.asf.write_u32(stream["offset"] + 12, self.asf.off_to_addr(table_off))
         print(
             "Patching EDF %s stream... %d signals, table 0x%06X, %d strings"
-            % (label, len(wanted_signals), table_off, len(needed_strings))
+            % (tag, len(resolved_signals), table_off, len(needed_strings))
         )
         return 1
 
-    def patch_pld_stream(self):
-        return self.patch_stream_superset(PLD_STREAM_TAG, PLD_SUPERSET_SIGNALS, "PLD")
+    def patch_stream_schemas(self):
+        changed = 0
+        for tag, signals in STREAM_SCHEMAS:
+            changed += self.patch_stream_schema(tag, signals)
+        return changed
 
     def summary_key(self, off):
         kind = self.asf.u32(off + 4)
@@ -391,6 +555,13 @@ class S11EdfSupersetPatcher:
             self.asf.u16(off + 14),
         )
 
+    def summary_selected_name(self, off):
+        kind = self.asf.u32(off + 4)
+        selected = self.asf.u16(off + 10) if kind < 3 else self.asf.u16(off + 8)
+        if selected == 0x7FFF:
+            return ""
+        return self.asf.var_name(selected)
+
     def patch_str_summary(self):
         header = self.asf.globals_offset(15)
         count = self.asf.u16(header + 4)
@@ -398,10 +569,20 @@ class S11EdfSupersetPatcher:
         if table_off is None:
             raise ValueError("STR SummaryRecord pointer is outside image")
 
-        metadata = {row[0]: row[1:] for row in STR_SUPERSET_METADATA}
-        wanted = set(STR_SUPERSET_KEYS)
-        if set(metadata) != wanted:
+        metadata_by_key = {row[0]: row[1:] for row in STR_SUPERSET_METADATA}
+        wanted_keys = set(STR_SUPERSET_KEYS)
+        if set(metadata_by_key) != wanted_keys:
             raise ValueError("STR metadata/key table mismatch")
+        if len(STR_SUPERSET_SELECTED_NAMES) != len(STR_SUPERSET_METADATA):
+            raise ValueError("STR selected-name table length mismatch")
+        metadata_by_name = {}
+        for name, row in zip(STR_SUPERSET_SELECTED_NAMES, STR_SUPERSET_METADATA):
+            if not name:
+                continue
+            if name in metadata_by_name:
+                raise ValueError("duplicate STR selected name %s" % name)
+            metadata_by_name[name] = row[1:]
+
         strings = []
         for _key, label, unit, _logical_scale, _edf_scale, _record_class, _reserved16 in STR_SUPERSET_METADATA:
             strings.append(label)
@@ -414,10 +595,16 @@ class S11EdfSupersetPatcher:
         for index in range(count):
             off = table_off + index * SUMMARY_RECORD_SIZE
             key = self.summary_key(off)
-            if key not in wanted:
+            selected_name = self.summary_selected_name(off)
+            metadata = metadata_by_name.get(selected_name)
+            found_id = selected_name
+            if metadata is None:
+                metadata = metadata_by_key.get(key)
+                found_id = key
+            if metadata is None:
                 continue
-            found.add(key)
-            label, unit, logical_scale, edf_scale, record_class, reserved16 = metadata[key]
+            found.add(found_id)
+            label, unit, logical_scale, edf_scale, record_class, reserved16 = metadata
             before = bytes(self.asf.fw[off + 16:off + 36])
             struct.pack_into("<f", self.asf.fw, off + 16, logical_scale)
             self.asf.write_u8(off + 20, record_class)
@@ -431,26 +618,26 @@ class S11EdfSupersetPatcher:
             if bytes(self.asf.fw[off + 16:off + 36]) != before:
                 hydrated += 1
 
-        missing = len(wanted - found)
+        wanted_names = set(name for name in STR_SUPERSET_SELECTED_NAMES if name)
+        missing = len(wanted_names - found)
+        if STR_SUPERSET_KEYS[0] not in found:
+            missing += 1
         if missing:
             print("  WARN: %d STR superset rows were not found in this image" % missing)
         print(
             "Patching EDF STR summary... %d rows activated, %d rows hydrated, %d strings, %d/%d present"
-            % (activated, hydrated, strings_written, len(found), len(wanted))
+            % (activated, hydrated, strings_written, len(found), len(STR_SUPERSET_METADATA))
         )
         return activated + hydrated + strings_written
 
-    def patch(self, pld=True, str_summary=True):
-        changed = 0
-        if pld:
-            changed += self.patch_pld_stream()
-        if str_summary:
-            changed += self.patch_str_summary()
+    def patch(self):
+        changed = self.patch_stream_schemas()
+        changed += self.patch_str_summary()
         return changed
 
 
-def patch_edf_superset(asf, pld=True, str_summary=True):
-    return S11EdfSupersetPatcher(asf).patch(pld=pld, str_summary=str_summary)
+def patch_edf_superset(asf):
+    return S11EdfSupersetPatcher(asf).patch()
 
 
 def load_patch_module():
@@ -468,12 +655,6 @@ def build_arg_parser():
     parser = argparse.ArgumentParser(description="Patch S11 EDF superset metadata.")
     parser.add_argument("infile", help="Input full S11 firmware image")
     parser.add_argument("outfile", help="Output patched firmware image")
-    parser.add_argument("--no-pld", action="store_true", help="Do not patch PLD stream schema")
-    parser.add_argument(
-        "--no-str",
-        action="store_true",
-        help="Do not activate and hydrate STR summary rows",
-    )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite output file")
     return parser
 
@@ -483,7 +664,7 @@ def main(argv=None):
     patch_module = load_patch_module()
     with open(args.infile, "rb") as f:
         asf = patch_module.S11Firmware(f)
-    patch_edf_superset(asf, pld=not args.no_pld, str_summary=not args.no_str)
+    patch_edf_superset(asf)
     asf.fix_crcs()
     asf.write_output(args.outfile, args.overwrite)
     return 0
