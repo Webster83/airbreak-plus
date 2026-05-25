@@ -1038,6 +1038,74 @@ class S11FirmwarePatches(object):
         if n_hidden:
             print("Hiding blacklisted RPC JSON profile nodes... %d nodes disabled" % n_hidden)
 
+    def asv_pressure_support_range(self):
+        """Remove the ASV/ASVAuto 5 cmH2O MinPS/MaxPS separation."""
+        pairs = (
+            ("ASV-MaxPressureSupport", "ASV-MinPressureSupport"),
+            ("ASVAuto-MaxPressureSupport", "ASVAuto-MinPressureSupport"),
+        )
+        max_rows = []
+        rows = []
+        n_static_bounds = 0
+        n_max_floor = 0
+        static_bounds_slot = 0x3E
+
+        for max_name, min_name in pairs:
+            found = self.asf.find_descriptors_by_name(max_name, ("g2",))
+            if len(found) != 1:
+                raise ValueError("asv_pressure_support_range: expected one %s descriptor, found %d" %
+                                 (max_name, len(found)))
+            max_row = found[0]
+            found = self.asf.find_descriptors_by_name(min_name, ("g2",))
+            if len(found) != 1:
+                raise ValueError("asv_pressure_support_range: expected one %s descriptor, found %d" %
+                                 (min_name, len(found)))
+            min_row = found[0]
+            max_rows.append(max_row)
+            rows.extend((max_row, min_row))
+
+            # MaxPS has a static 5 cmH2O floor. Match it to MinPS, then force
+            # both descriptors off the runtime dynamic-bounds slots that also
+            # encode the stock 5 cmH2O separation during setting application.
+            max_min_off = max_row["offset"] + 0x10
+            min_min = self.asf.u32(min_row["offset"] + 0x10)
+            if self.asf.u32(max_min_off) != min_min:
+                self.asf.write_u32(max_min_off, min_min)
+                n_max_floor += 1
+
+        for row in rows:
+            bounds_off = row["offset"] + 0x1A
+            if self.asf.u8(bounds_off) != static_bounds_slot:
+                self.asf.write_u8(bounds_off, static_bounds_slot)
+                n_static_bounds += 1
+
+        # PairedNumericRangeSelector PS helper takes ASV-MaxPressureSupport and
+        # ASVAuto-MaxPressureSupport, multiplies raw scale by 5 and adds MinPS.
+        # Descriptor indexes drift between releases, so include resolved indexes
+        # in the signature and patch only the nearby "movs r0, #5".
+        pattern = (
+            0x32, 0xB5, 0x98, 0xB0, 0x04, 0x00, 0x20, 0x00,
+            0x00, 0xB2, max_rows[0]["index"], 0x28, 0x03, 0xD0,
+            0x20, 0x00, 0x00, 0xB2, max_rows[1]["index"], 0x28, 0x23, 0xD1,
+        )
+        helper_off = self.asf.find_bytes(bytes(pattern), self.asf.APPL_OFF)
+        mul_off = None
+        for off in range(helper_off, min(helper_off + 0x60, len(self.asf.fw) - 4)):
+            if bytes(self.asf.fw[off + 1:off + 4]) == bytes.fromhex("204543"):
+                if self.asf.u8(off) in (0, 5):
+                    mul_off = off
+                    break
+        if mul_off is None:
+            raise ValueError("asv_pressure_support_range: multiplier not found near helper")
+
+        n_code = 0
+        if self.asf.u8(mul_off) == 5:
+            self.asf.write_u8(mul_off, 0)
+            n_code = 1
+
+        print("Patching ASV pressure support range... %d max floors, %d static bounds, %d code constants" %
+              (n_max_floor, n_static_bounds, n_code))
+
     def motor_nagscreen(self):
         try:
             offset = self.asf.find_bytes(bytes.fromhex("C000B304"))
@@ -1368,6 +1436,12 @@ PATCH_LIST = [
         "desc": "Expose the official S11 EDF PLD and STR superset.",
         "default": True,
         "function": "patch_edf_superset",
+    },
+    {
+        "arg": "patch-asv-ps-range",
+        "desc": "Unlock ASV/ASVAuto pressure support range.",
+        "default": False,
+        "function": "asv_pressure_support_range",
     },
     {
         "arg": "patch-motor-nagscreen",
