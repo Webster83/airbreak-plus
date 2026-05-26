@@ -480,14 +480,40 @@ class ASFirmwarePatches(object):
 
     def asv_unlock_ps_range(self):
         # Disable the ASV and ASVAuto PS range check to allow Max PS < (Min PS + 5)
+        # and remove the fixed ASV EPAP ceiling of MCP - 6.0 cmH2O.
         #
         # CDX code patches: zero the 0xfa (5.0 cmH2O) immediate in add.w/sub.w
         cdx_patches = {
-            'SX567-0402': [(0x76c08, b'\x00'), (0x76c34, b'\x00'), (0x76cca, b'\x00')],
-            'SX567-0401': [(0x76c08, b'\x00'), (0x76c34, b'\x00'), (0x76cca, b'\x00')],
-            'SX567-0306': [(0x76c08, b'\x00'), (0x76c34, b'\x00'), (0x76cca, b'\x00')],
-            'SX567-0305': [(0x76c0c, b'\x00'), (0x76c38, b'\x00'), (0x76cce, b'\x00')],
-            'SX567-0302': [(0x76494, b'\x00'), (0x764c0, b'\x00'), (0x76556, b'\x00')],
+            'SX567-0402': [
+                (0x76bd6, b'\xa0\xf1\x00\x01'), # EEP max: MCP - 6.0 -> MCP             ; sub.w r1, r0, #0x12c -> #0x00
+                (0x76c08, b'\x00'),             # MXS min: MNS + 5.0 -> MNS             ; add.w r1, r0, #0xfa -> #0x00
+                (0x76c34, b'\x00'),             # MNS max: MCP - EEP - 5.0 -> MCP - EEP ; sub.w r1, r0, #0xfa -> #0x00
+                (0x76cca, b'\x00'),             # AXS min: ANS + 5.0 -> ANS             ; add.w r1, r0, #0xfa -> #0x00
+            ],
+            'SX567-0401': [
+                (0x76bd6, b'\xa0\xf1\x00\x01'),
+                (0x76c08, b'\x00'),
+                (0x76c34, b'\x00'),
+                (0x76cca, b'\x00'),
+            ],
+            'SX567-0306': [
+                (0x76bd6, b'\xa0\xf1\x00\x01'),
+                (0x76c08, b'\x00'),
+                (0x76c34, b'\x00'),
+                (0x76cca, b'\x00'),
+            ],
+            'SX567-0305': [
+                (0x76bda, b'\xa0\xf1\x00\x01'),
+                (0x76c0c, b'\x00'),
+                (0x76c38, b'\x00'),
+                (0x76cce, b'\x00'),
+            ],
+            'SX567-0302': [
+                (0x76462, b'\xa0\xf1\x00\x01'),
+                (0x76494, b'\x00'),
+                (0x764c0, b'\x00'),
+                (0x76556, b'\x00'),
+            ],
         }
         patches = cdx_patches.get(self.asf.cdx_ver)
         if patches:
@@ -496,10 +522,12 @@ class ASFirmwarePatches(object):
         else:
             print("  asv_unlock_ps_range: CDX code patches skipped (unknown CDX version %s)" % self.asf.cdx_ver)
 
-        # Update variable config to allow Max PS to be set below 5
+        # Pressure support vars use scale=1/50: 1250 = 25.0 cmH2O.
+        G4_MAX = 0x0C
         G4_MIN = 0x10
-        self.asf.patch(b'\x00', self.asf.find_var('MXS') + G4_MIN, clobber=True) # Max PS (ASV)
-        self.asf.patch(b'\x00', self.asf.find_var('AXS') + G4_MIN, clobber=True) # Max PS (ASVAuto)
+        for var in ('MNS', 'MXS', 'ANS', 'AXS'):
+            self.asf.patch(b'\x00\x00\x00\x00', self.asf.find_var(var) + G4_MIN, clobber=True)
+            self.asf.patch(b'\xe2\x04\x00\x00', self.asf.find_var(var) + G4_MAX, clobber=True)
 
     def gui_config (self):
         # enable editable options in clinical settings menu
@@ -873,7 +901,7 @@ if __name__ == "__main__":
                                                       "Use --force-deprecated to apply anyway."},
         {'arg':"patch-gui-config",      'desc':"Enable all of the editable options in the settings menu.",
                                                                                                         'default':True,  'function':'gui_config'},
-        {'arg':"patch-asv-ps-range",    'desc':"Unlock ASV/ASVAuto pressure support range.",            'default':True,  'function':'asv_unlock_ps_range'},
+        {'arg':"patch-asv-ps-range",    'desc':"Unlock ASV/ASVAuto pressure constraints.",              'default':True,  'function':'asv_unlock_ps_range'},
         {'arg':"patch-defaults",        'desc':"Change firmware defaults.",                             'default':True,  'function':'patch_defaults'},
         {'arg':"patch-logos",           'desc':"Change start-up logos.",                                'default':False, 'function':'patch_logos'},
         {'arg':"patch-fw-serialmonitor",'desc':"Add monitor binary running on USART3 accessory port.",  'default':False, 'function':'patch_uart3_monitor'},

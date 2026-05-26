@@ -494,22 +494,25 @@ unlock_ui_limits() {
 
 asv_unlock_ps_range () {
     # Disable the ASV and ASVAuto PS range check to allow Max PS < (Min PS + 5)
+    # and remove the fixed ASV EPAP ceiling of MCP - 6.0 cmH2O.
 
-    echo "Unlocking ASV pressure support range"
+    echo "Unlocking ASV pressure constraints"
 
-    # CDX code patches: zero the 0xfa (5.0 cmH2O) immediate in add.w/sub.w
     case "$CDX_VER" in
         SX567-0401|SX567-0306|SX567-0402)
-            printf '\x00' | patch 0x76c08  # add.w r1, r0, #0xfa -> #0x00
-            printf '\x00' | patch 0x76c34  # sub.w r1, r0, #0xfa -> #0x00
-            printf '\x00' | patch 0x76cca  # add.w r1, r0, #0xfa -> #0x00
+            printf '\xa0\xf1\x00\x01' | patch 0x76bd6  # EEP.max: MCP - 6.0 -> MCP             ; sub.w r1, r0, #0x12c -> #0x00
+            printf '\x00' | patch 0x76c08              # MXS.min: MNS + 5.0 -> MNS             ; add.w r1, r0, #0xfa -> #0x00
+            printf '\x00' | patch 0x76c34              # MNS.max: MCP - EEP - 5.0 -> MCP - EEP ; sub.w r1, r0, #0xfa -> #0x00
+            printf '\x00' | patch 0x76cca              # AXS.min: ANS + 5.0 -> ANS             ; add.w r1, r0, #0xfa -> #0x00
             ;;
         SX567-0305)
+            printf '\xa0\xf1\x00\x01' | patch 0x76bda
             printf '\x00' | patch 0x76c0c
             printf '\x00' | patch 0x76c38
             printf '\x00' | patch 0x76cce
             ;;
         SX567-0302)
+            printf '\xa0\xf1\x00\x01' | patch 0x76462
             printf '\x00' | patch 0x76494
             printf '\x00' | patch 0x764c0
             printf '\x00' | patch 0x76556
@@ -519,9 +522,14 @@ asv_unlock_ps_range () {
             ;;
     esac
 
+    local G4_MAX=0x0C
     local G4_MIN=0x10
-    printf '\x00' | patch $(( $(find_var MXS) + G4_MIN )) # Max PS (ASV)
-    printf '\x00' | patch $(( $(find_var AXS) + G4_MIN )) # Max PS (ASVAuto)
+    for var in MNS MXS ANS AXS; do
+        # min = 0
+        printf '\x00\x00\x00\x00' | patch $(( $(find_var "$var") + G4_MIN ))
+        # max = 1250 = 25.0 cmH2O
+        printf '\xe2\x04\x00\x00' | patch $(( $(find_var "$var") + G4_MAX ))
+    done
 }
 
 extra_debug() {
