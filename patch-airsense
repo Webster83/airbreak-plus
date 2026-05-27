@@ -627,7 +627,7 @@ gui_config () {
         
         # gui_create_menus->menu_create_text_or_float
         EBE BRE AFC ALR HME EPA EPX EPT VCS VTS
-        RSC CSR CYI TRI
+        RSC RST CSR CYI TRI
 
         # gui_create_menus->menu_create_item_type_0x29_maybe
         MTT ZAE ZAM ZAR ZAZ ZA2 ZA3 ZAY ZAS CRD ZAV
