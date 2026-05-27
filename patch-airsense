@@ -630,7 +630,7 @@ gui_config () {
         RSC RST CSR CYI TRI
 
         # gui_create_menus->menu_create_item_type_0x29_maybe
-        MTT ZAE ZAM ZAR ZAZ ZA2 ZA3 ZAY ZAS CRD ZAV
+        MTT ZAE ZAM ZAR ZAZ ZA1 ZA2 ZA3 ZAY ZAS CRD ZAV RCR
 
         # gui_create_menus->gui_infobox_create
         TGT AAV IER IN5 ZMA ITN ITX
