@@ -162,7 +162,7 @@ Contains string-type variables (BID, SID, CID, PNA, SRN, etc.).
 | +0x00 | 2 | flags | Status bitmask (see below) |
 | +0x02 | 1 | callback_id | Post-change callback index. 0 = none |
 | +0x03 | 1 | -- | |
-| +0x04 | 2 | next_var_id | Linked-list pointer into g[4] for dependency chain. 0x7FFF = end |
+| +0x04 | 2 | next_dependent_g4_idx | Linked-list pointer into g[4] for dependency chain. 0x7FFF = end |
 | +0x06 | 2 | name_str_id | Localized display name via g[2] |
 | +0x08 | 4 | default_value | Default value, copied to RAM on init |
 | +0x0C | 4 | max_value | Upper clamp |
@@ -214,7 +214,7 @@ Contains string-type variables (BID, SID, CID, PNA, SRN, etc.).
 | +0x00 | 2 | flags | Status bitmask (see below) |
 | +0x02 | 1 | callback_id | Post-change callback index. 0 = none |
 | +0x03 | 1 | -- | |
-| +0x04 | 2 | linked_var_id | Index into g[4] for dependency propagation. 0x7FFF = none |
+| +0x04 | 2 | dependency_head_g4_idx | Index into g[4] for dependency propagation. 0x7FFF = none |
 | +0x06 | 2 | name_str_id | Localized display name via g[2] |
 | +0x08 | 1 | default_value | Default state byte |
 | +0x09 | 1 | num_options | Number of valid options |
@@ -407,9 +407,9 @@ Note: VIS/EDT assignment may be swapped. Contradicting findings exist.
 When a g[8] variable changes, the firmware walks a linked list of dependent g[4] variables:
 
 ```
-g[8] entry +0x04: linked_var_id
-  -> g[4][linked_var_id] +0x04: next_var_id
-    -> g[4][next_var_id] +0x04: next_var_id
+g[8] entry +0x04: dependency_head_g4_idx
+  -> g[4][dependency_head_g4_idx] +0x04: next_dependent_g4_idx
+    -> g[4][next_dependent_g4_idx] +0x04: next_dependent_g4_idx
       -> ... (up to 4 deep, 0x7FFF terminates)
 ```
 
