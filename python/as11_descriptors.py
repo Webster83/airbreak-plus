@@ -1,0 +1,2153 @@
+#!/usr/bin/env python3
+
+import argparse
+import math
+import re
+import shlex
+import struct
+import sys
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
+FLASH_BASE = 0x08000000
+CONF_BASE = 0x20000
+CONF_SIZE = 0x20000
+LONG_NAME_SEARCH_BASE = 0x40000
+
+G1_STRIDE = 10
+G2_STRIDE = 32
+G3_STRIDE = 20
+G5_STRIDE = 16
+G10_STRIDE = 14
+G13_ROUTE_STRIDE = 6
+G14_COLLECTION_STRIDE = 0x34
+SUMMARY_STRIDE = 36
+
+MODE_NAMES = [
+    "CPAP", "AutoSet", "HerAuto", "Spont", "ST",
+    "Timed", "VAuto", "ASV", "ASVAuto", "iVAPS", "PAC",
+]
+
+MODE_PREFIXES = {
+    0: "Cpap-",
+    1: "AutoSet-",
+    2: "HerAuto-",
+    3: "Spont-",
+    4: "ST-",
+    5: "Timed-",
+    6: "VAuto-",
+    7: "ASV-",
+    8: "ASVAuto-",
+    9: "iVAPS-",
+    10: "PAC-",
+}
+
+LANGUAGE_NAMES = [
+    "English", "French", "German", "Italian", "SpanishEU", "SpanishUS",
+    "PortugueseEU", "PortugueseUS", "Dutch", "Swedish", "Danish",
+    "Norwegian", "Finnish", "Russian", "Turkish", "Polish", "Czech",
+    "Greek", "Estonian", "ChineseTraditional", "ChineseSimplified",
+    "Japanese", "Korean", "Croatian", "Hungarian", "Romanian", "Slovenian",
+]
+
+LANGUAGE_CODES = {
+    "en": 0,
+    "fr": 1,
+    "de": 2,
+    "it": 3,
+    "es": 4,
+    "es-es": 4,
+    "es-us": 5,
+    "pt": 6,
+    "pt-pt": 6,
+    "pt-br": 7,
+    "nl": 8,
+    "sv": 9,
+    "da": 10,
+    "no": 11,
+    "nb": 11,
+    "fi": 12,
+    "ru": 13,
+    "tr": 14,
+    "pl": 15,
+    "cs": 16,
+    "el": 17,
+    "et": 18,
+    "zh-tw": 19,
+    "zh": 20,
+    "zh-cn": 20,
+    "ja": 21,
+    "jp": 21,
+    "ko": 22,
+    "kr": 22,
+    "hr": 23,
+    "hu": 24,
+    "ro": 25,
+    "sl": 26,
+}
+
+GUI_TEXT_RECORD_BITS = 20
+GUI_TEXT_CODE_BITS = 17
+
+GUI_TEXT_POOL_MODEL_C_OFF = 8
+GUI_TEXT_POOL_MODEL_A_OFF = 16
+GUI_TEXT_POOL_MODEL_B_OFF = 24
+GUI_TEXT_POOL_STATE_OFF = 36
+GUI_TEXT_POOL_TRANSITION_OFF = 48
+GUI_TEXT_POOL_STRING_PTR_OFF = 52
+GUI_TEXT_POOL_RECORD_BASE_OFF = 60
+
+
+class AS11Firmware:
+    def __init__(self, path):
+        with open(path, "rb") as f:
+            self.data = f.read()
+        self.path = path
+        if len(self.data) < CONF_BASE + 0x108:
+            raise ValueError("firmware image is too small for an AS11 CONF block")
+
+        mt_ptr = self.u32(CONF_BASE + 0x104)
+        self.mt_off = self._off_for_addr(mt_ptr, 20 * 4)
+        if self.mt_off is None:
+            raise ValueError("globals table pointer 0x%08X is outside this image" % mt_ptr)
+
+        self.g = {}
+        for i in range(20):
+            val = self.u32(self.mt_off + i * 4)
+            if FLASH_BASE <= val < FLASH_BASE + len(self.data):
+                self.g[i] = val - FLASH_BASE
+            else:
+                self.g[i] = val
+        for index in (1, 2, 3, 5):
+            if not self._file_range_ok(self.g.get(index), 1):
+                raise ValueError("globals[%d] does not point inside this image" % index)
+
+        self.g1_count = self._count_records(self.g[1], G1_STRIDE)
+        self.g2_count = self._count_records(self.g[2], G2_STRIDE)
+        self.g3_count = self._count_records(self.g[3], G3_STRIDE)
+        self.g5_count = self._count_records(self.g[5], G5_STRIDE)
+        self.g10_count = self.g[11] if isinstance(self.g[11], int) and self.g[11] < 0x1000 else 103
+
+        # S11 DataItemFactory order: globals[1], globals[2], globals[3], globals[5].
+        self.g1_id_base = 0
+        self.g2_id_base = self.g1_count
+        self.g3_id_base = self.g2_id_base + self.g2_count
+        self.g5_id_base = self.g3_id_base + self.g3_count
+        self.max_var_id = self.g5_id_base + self.g5_count - 1
+
+        self.long_name_table_off = None
+        self.long_name_table_count = 0
+        self._long_names = None
+        self.name_buckets = self._build_name_buckets()
+        self.opt_table_off = None
+        self.opt_table_count = 0
+        self.opt_entries = None
+        self.opt_by_type = {}
+        self.opt_symbol_ptrs = []
+        self.opt_first_by_type = {}
+        self.gui_text_cache = {}
+        self.gui_text_pool_addr = None
+        self.gui_text_record_base = None
+        self.gui_text_markov_stream = None
+        self.gui_text_model_a = None
+        self.gui_text_model_b = None
+        self.gui_text_model_c = None
+        self.gui_text_state_table = None
+        self.gui_text_transition_table = None
+        self.gui_text_lang_stride = None
+        self.gui_text_count = None
+        self.gui_text_available = None
+
+    @property
+    def long_names(self):
+        if self._long_names is None:
+            self._long_names = self._build_long_names()
+        return self._long_names
+
+    def _file_range_ok(self, off, size=1):
+        return isinstance(off, int) and size >= 0 and 0 <= off <= len(self.data) - size
+
+    def _check_range(self, off, size):
+        if not self._file_range_ok(off, size):
+            raise ValueError("file offset %r size %d is outside this image" %
+                             (off, size))
+
+    def u8(self, off):
+        self._check_range(off, 1)
+        return self.data[off]
+
+    def u16(self, off):
+        self._check_range(off, 2)
+        return struct.unpack_from("<H", self.data, off)[0]
+
+    def i32(self, off):
+        self._check_range(off, 4)
+        return struct.unpack_from("<i", self.data, off)[0]
+
+    def u32(self, off):
+        self._check_range(off, 4)
+        return struct.unpack_from("<I", self.data, off)[0]
+
+    def f32(self, off):
+        self._check_range(off, 4)
+        return struct.unpack_from("<f", self.data, off)[0]
+
+    def f64(self, off):
+        self._check_range(off, 8)
+        return struct.unpack_from("<d", self.data, off)[0]
+
+    def off_to_addr(self, off):
+        return FLASH_BASE + off
+
+    def ptr_to_off(self, ptr, size=1):
+        return self._off_for_addr(ptr, size)
+
+    def _off_for_addr(self, addr, size=1):
+        if FLASH_BASE <= addr <= FLASH_BASE + len(self.data) - size:
+            return addr - FLASH_BASE
+        return None
+
+    def _u32_addr(self, addr):
+        off = self._off_for_addr(addr, 4)
+        if off is None:
+            raise ValueError("flash address 0x%08X is outside this image" % addr)
+        return self.u32(off)
+
+    def _count_records(self, base, stride):
+        count = 0
+        while base + count * stride + stride <= len(self.data):
+            vt = self.u16(base + count * stride)
+            if vt < 0x0200 or vt > 0x0FFF:
+                break
+            count += 1
+        return count
+
+    def _string_at_ptr(self, ptr, max_len=96, allow_empty=False):
+        off = self._off_for_addr(ptr)
+        if off is None:
+            return None
+        end = self.data.find(b"\x00", off)
+        if end < 0 or end - off > max_len:
+            return None
+        if end == off and not allow_empty:
+            return None
+        raw = self.data[off:end]
+        if any(b < 0x20 or b > 0x7E for b in raw):
+            return None
+        return raw.decode("ascii")
+
+    def _init_gui_text_decoder(self):
+        if not self._discover_gui_text_tables():
+            return False
+        try:
+            return bool(self.decode_gui_text(0, 0))
+        except (ValueError, UnicodeError, IndexError, struct.error):
+            self.gui_text_cache.clear()
+            self.gui_text_pool_addr = None
+            return False
+
+    def _ensure_gui_text_decoder(self):
+        if self.gui_text_available is None:
+            self.gui_text_available = self._init_gui_text_decoder()
+        return self.gui_text_available
+
+    def _discover_gui_text_tables(self):
+        best = None
+        data = self.data
+        data_len = len(data)
+        unpack_u32 = struct.Struct("<I").unpack_from
+        addr_max = FLASH_BASE + data_len - 4
+
+        def addr_ok(addr):
+            return FLASH_BASE <= addr <= addr_max
+
+        def token_pool_ok(addr):
+            off = addr - FLASH_BASE
+            return (
+                0 <= off <= data_len - 3
+                and data[off] == 0x00
+                and data[off + 1] == 0x0A
+                and data[off + 2] == 0x20
+            )
+
+        for pos in range(0, data_len - 64, 4):
+            markov_stream = unpack_u32(data, pos)[0]
+            if not addr_ok(markov_stream):
+                continue
+            model_c = unpack_u32(data, pos + GUI_TEXT_POOL_MODEL_C_OFF)[0]
+            model_a = unpack_u32(data, pos + GUI_TEXT_POOL_MODEL_A_OFF)[0]
+            model_b = unpack_u32(data, pos + GUI_TEXT_POOL_MODEL_B_OFF)[0]
+            state_table = unpack_u32(data, pos + GUI_TEXT_POOL_STATE_OFF)[0]
+            transition_table = unpack_u32(
+                data, pos + GUI_TEXT_POOL_TRANSITION_OFF)[0]
+            pool_ptr = unpack_u32(data, pos + GUI_TEXT_POOL_STRING_PTR_OFF)[0]
+            record_base = unpack_u32(data, pos + GUI_TEXT_POOL_RECORD_BASE_OFF)[0]
+            needed = (
+                markov_stream, model_a, model_b, model_c, state_table,
+                transition_table, pool_ptr, record_base,
+            )
+            if any(not addr_ok(addr) for addr in needed):
+                continue
+            pool = unpack_u32(data, pool_ptr - FLASH_BASE)[0]
+            if not (FLASH_BASE <= pool < FLASH_BASE + data_len):
+                continue
+            if not token_pool_ok(pool):
+                continue
+
+            for stride in self._discover_gui_text_lang_strides(record_base):
+                text_count = (stride * 8) // GUI_TEXT_RECORD_BITS
+                if text_count <= 0:
+                    continue
+
+                candidate = (
+                    markov_stream, model_a, model_b, model_c, state_table,
+                    transition_table, record_base, pool, stride, text_count,
+                )
+                score = self._score_gui_text_candidate(candidate)
+                if score <= 0:
+                    continue
+                if best is None or score > best[0]:
+                    best = (score, candidate)
+
+        if best is None:
+            return False
+
+        (
+            _score,
+            (
+                markov_stream, model_a, model_b, model_c, state_table,
+                transition_table, record_base, pool, stride, text_count,
+            ),
+        ) = best
+        self.gui_text_markov_stream = markov_stream
+        self.gui_text_model_a = model_a
+        self.gui_text_model_b = model_b
+        self.gui_text_model_c = model_c
+        self.gui_text_state_table = state_table
+        self.gui_text_transition_table = transition_table
+        self.gui_text_record_base = record_base
+        self.gui_text_pool_addr = pool
+        self.gui_text_lang_stride = stride
+        self.gui_text_count = text_count
+        self.gui_text_cache.clear()
+        return True
+
+    def _discover_gui_text_lang_strides(self, record_base):
+        data = self.data
+        data_len = len(data)
+        unpack_u32 = struct.Struct("<I").unpack_from
+
+        def first_record_value(stride, lang):
+            off = record_base + lang * stride - FLASH_BASE
+            if off < 0 or off + 4 > data_len:
+                raise ValueError("record offset outside image")
+            return unpack_u32(data, off)[0] >> (32 - GUI_TEXT_RECORD_BITS)
+
+        viable = []
+        max_stride = min(
+            0x10000,
+            (FLASH_BASE + data_len - record_base) // (len(LANGUAGE_NAMES) - 1),
+        )
+        for stride in range(0x80, max_stride):
+            try:
+                first_values = [
+                    first_record_value(stride, lang)
+                    for lang in range(min(5, len(LANGUAGE_NAMES)))
+                ]
+            except (ValueError, IndexError, struct.error):
+                continue
+            if first_values[0] != 0 or max(first_values) - min(first_values) > 1000:
+                continue
+            try:
+                values = [
+                    first_record_value(stride, lang)
+                    for lang in range(len(LANGUAGE_NAMES))
+                ]
+            except (ValueError, IndexError, struct.error):
+                continue
+            spread = max(values) - min(values)
+            if values[0] == 0 and spread < 5000:
+                viable.append((spread, stride))
+        return [stride for _spread, stride in sorted(viable)]
+
+    def _score_gui_text_candidate(self, candidate):
+        saved = (
+            self.gui_text_markov_stream, self.gui_text_model_a,
+            self.gui_text_model_b, self.gui_text_model_c,
+            self.gui_text_state_table, self.gui_text_transition_table,
+            self.gui_text_record_base, self.gui_text_pool_addr,
+            self.gui_text_lang_stride, self.gui_text_count,
+        )
+        (
+            self.gui_text_markov_stream, self.gui_text_model_a,
+            self.gui_text_model_b, self.gui_text_model_c,
+            self.gui_text_state_table, self.gui_text_transition_table,
+            self.gui_text_record_base, self.gui_text_pool_addr,
+            self.gui_text_lang_stride, self.gui_text_count,
+        ) = candidate
+        self.gui_text_cache.clear()
+        score = 0
+        try:
+            for lang in range(min(3, len(LANGUAGE_NAMES))):
+                for text_id in range(min(16, self.gui_text_count)):
+                    text = self.decode_gui_text(text_id, lang)
+                    if text and all(ch.isprintable() or ch in "\r\n\t"
+                                    for ch in text):
+                        score += 1
+        except (ValueError, UnicodeError, IndexError, struct.error):
+            score = 0
+        (
+            self.gui_text_markov_stream, self.gui_text_model_a,
+            self.gui_text_model_b, self.gui_text_model_c,
+            self.gui_text_state_table, self.gui_text_transition_table,
+            self.gui_text_record_base, self.gui_text_pool_addr,
+            self.gui_text_lang_stride, self.gui_text_count,
+        ) = saved
+        self.gui_text_cache.clear()
+        return score
+
+    def _gui_extract_bits(self, addr, start, n_bits):
+        value = 0
+        for k in range(n_bits):
+            pos = start + k
+            word = self._u32_addr(addr + (pos // 32) * 4)
+            value = (value << 1) | ((word >> (31 - (pos % 32))) & 1)
+        return value
+
+    def _gui_select_record(self, addr, record_bits, index):
+        return self._gui_extract_bits(addr, index * record_bits, record_bits)
+
+    def _gui_decode_symbol(self, bitoff):
+        bits = self._gui_extract_bits(self.gui_text_markov_stream, bitoff,
+                                      GUI_TEXT_CODE_BITS)
+        lo = 0
+        hi = GUI_TEXT_CODE_BITS
+        length = None
+        while hi - lo > 0:
+            mid = (hi + lo) // 2
+            lower = self._gui_select_record(self.gui_text_model_b,
+                                            GUI_TEXT_CODE_BITS, mid)
+            if mid < GUI_TEXT_CODE_BITS - 1:
+                upper = self._gui_select_record(self.gui_text_model_b,
+                                                GUI_TEXT_CODE_BITS, mid + 1)
+            else:
+                upper = 0xFFFFFFFF
+            prefix = bits >> (GUI_TEXT_CODE_BITS - (mid + 1))
+            if prefix < lower:
+                hi = mid
+            elif prefix < (upper >> 1):
+                length = mid + 1
+                break
+            else:
+                lo = mid
+        if length is None:
+            length = lo + 1
+
+        idx = ((bits >> (GUI_TEXT_CODE_BITS - length))
+               + self._gui_select_record(self.gui_text_model_a, 9, length - 1)
+               - self._gui_select_record(self.gui_text_model_b,
+                                         GUI_TEXT_CODE_BITS, length - 1))
+        symbol = self._gui_select_record(self.gui_text_model_c, 9, idx)
+        return symbol, length
+
+    def _gui_token_len(self, token):
+        if token < 0x50:
+            return 1
+        if token < 0xF6:
+            return 2
+        return 3
+
+    def _gui_token_off(self, token):
+        if token < 0x50:
+            return token
+        if token < 0xF6:
+            return token * 2 - 0x50
+        return token * 3 - 0xF6 - 0x50
+
+    def decode_gui_text(self, text_id, lang=0):
+        key = (text_id, lang)
+        if key in self.gui_text_cache:
+            return self.gui_text_cache[key]
+        if self.gui_text_count is None or self.gui_text_lang_stride is None:
+            raise ValueError("GUI text decoder is not available")
+        if not 0 <= text_id < self.gui_text_count:
+            raise ValueError("GUI text id 0x%X is outside 0x000..0x%03X" %
+                             (text_id, self.gui_text_count - 1))
+        if not 0 <= lang < len(LANGUAGE_NAMES):
+            raise ValueError("language index %d is outside 0..%d" %
+                             (lang, len(LANGUAGE_NAMES) - 1))
+        if self.gui_text_pool_addr is None:
+            raise ValueError("GUI text decoder is not available")
+
+        record_addr = self.gui_text_record_base + lang * self.gui_text_lang_stride
+        bitoff = self._gui_select_record(record_addr, GUI_TEXT_RECORD_BITS,
+                                         text_id)
+        state = 0
+        raw = bytearray()
+        for _ in range(240):
+            state_base = self._gui_select_record(self.gui_text_state_table, 14,
+                                                 state)
+            symbol, n_bits = self._gui_decode_symbol(bitoff)
+            token = self._gui_select_record(self.gui_text_transition_table, 11,
+                                            state_base + symbol)
+            length = self._gui_token_len(token)
+            offset = self._gui_token_off(token)
+            pool_off = self._off_for_addr(self.gui_text_pool_addr + offset,
+                                          length)
+            if pool_off is None:
+                raise ValueError("GUI text pool offset is outside this image")
+            raw += self.data[pool_off:pool_off + length]
+            if token == 0:
+                break
+            bitoff += n_bits
+            state = token
+            if len(raw) > 240:
+                break
+
+        text = raw.rstrip(b"\x00").decode("utf-8", errors="replace")
+        self.gui_text_cache[key] = text
+        return text
+
+    def _build_long_names(self):
+        data = self.data
+        data_len = len(data)
+        unpack_entry = struct.Struct("<IHH").unpack_from
+
+        def string_at_ptr(ptr, max_len=96, allow_empty=False):
+            off = ptr - FLASH_BASE
+            if off < 0 or off >= data_len:
+                return None
+            end = data.find(b"\x00", off)
+            if end < 0 or end - off > max_len:
+                return None
+            if end == off and not allow_empty:
+                return None
+            raw = data[off:end]
+            if any(b < 0x20 or b > 0x7E for b in raw):
+                return None
+            return raw.decode("ascii")
+
+        def valid_entry(off):
+            if off < 0 or off + 8 > data_len:
+                return None
+            ptr, vid, pad = unpack_entry(data, off)
+            if pad != 0:
+                return None
+            if not (vid < 0x1000 or vid == 0x7FFF):
+                return None
+            name = string_at_ptr(ptr, allow_empty=True)
+            if name is None:
+                return None
+            if not name and vid != 0x7FFF:
+                return None
+            return ptr, vid, name
+
+        best = (0, 0, None)
+        for start in range(LONG_NAME_SEARCH_BASE, data_len - 8, 4):
+            entry = valid_entry(start)
+            if entry is None:
+                continue
+            if valid_entry(start - 8) is not None:
+                continue
+
+            count = 0
+            named = 0
+            off = start
+            while True:
+                entry = valid_entry(off)
+                if entry is None:
+                    break
+                if entry[2]:
+                    named += 1
+                count += 1
+                off += 8
+
+            if count >= 100 and named >= 50 and (named, count) > (best[0], best[1]):
+                best = (named, count, start)
+
+        named, count, start = best
+        self.long_name_table_off = start
+        self.long_name_table_count = count
+        nodes = {}
+        if start is None:
+            return nodes
+
+        for i in range(count):
+            off = start + i * 8
+            ptr, vid, _pad = unpack_entry(data, off)
+            if vid >= 0x1000:
+                continue
+            name = string_at_ptr(ptr, allow_empty=True)
+            if name:
+                nodes[vid] = name
+        return nodes
+
+    def _build_name_buckets(self):
+        tags = {}
+        g8_base = self.g[8]
+        for bucket_idx in range(26):
+            off = g8_base + bucket_idx * 8
+            if off + 8 > len(self.data):
+                break
+            ptr = self.u32(off)
+            count = self.u32(off + 4)
+            if ptr == 0 and count == 0:
+                continue
+            if ptr < FLASH_BASE or ptr >= FLASH_BASE + len(self.data) or count > 300:
+                continue
+            prefix = chr(ord("A") + bucket_idx)
+            table_off = ptr - FLASH_BASE
+            for j in range(count):
+                eoff = table_off + j * 4
+                if eoff + 4 > len(self.data):
+                    break
+                c1 = self.u8(eoff)
+                c2 = self.u8(eoff + 1)
+                vid = self.u16(eoff + 2)
+                if 0x20 < c1 < 0x7F and 0x20 < c2 < 0x7F and vid < 0x1000:
+                    tags[vid] = prefix + chr(c1) + chr(c2)
+        return tags
+
+    def _build_option_table(self):
+        """Locate and parse the enum option symbol stream.
+
+        Layout: 12-byte entries, each
+            +0  u32  symbol_ptr  (flash address of a NUL-terminated symbol)
+            +4  u32  type_id     (g5 index boundary marker)
+            +8  u32  option      (symbol slot inside that type)
+
+        Returns (offset, count, flat_entries, by_type_dict, symbol_ptrs).
+        """
+
+        data = self.data
+        data_len = len(data)
+        unpack_entry = struct.Struct("<III").unpack_from
+
+        def string_at_ptr(ptr, max_len=96, allow_empty=False):
+            off = ptr - FLASH_BASE
+            if off < 0 or off >= data_len:
+                return None
+            end = data.find(b"\x00", off)
+            if end < 0 or end - off > max_len:
+                return None
+            if end == off and not allow_empty:
+                return None
+            raw = data[off:end]
+            if any(b < 0x20 or b > 0x7E for b in raw):
+                return None
+            return raw.decode("ascii")
+
+        def valid_entry(off):
+            if off + 12 > data_len:
+                return None
+            symbol_ptr, typ, opt = unpack_entry(data, off)
+            symbol = string_at_ptr(symbol_ptr)
+            if symbol is None:
+                return None
+            if not (0 <= typ < 0x200):
+                return None
+            if not (0 <= opt < 0x40):
+                return None
+            return symbol_ptr, typ, opt, symbol
+
+        # Scan for the longest run of valid entries. The table is typically
+        # ~0x081070a8..0x08109970 on 15.8.4.0; lengths and exact offset vary
+        # across firmware builds.
+        best = (0, 0)  # (count, start_offset)
+        off = 0x100000  # text+rodata generally lives after 1 MiB
+        while off + 12 <= data_len:
+            if valid_entry(off) is None:
+                off += 4
+                continue
+            start = off
+            count = 0
+            while valid_entry(off) is not None:
+                count += 1
+                off += 12
+            if count > best[0]:
+                best = (count, start)
+        count, start = best
+        if count < 50:
+            return (None, 0, [], {}, [])
+
+        entries = []
+        by_type = {}
+        for i in range(count):
+            o = start + i * 12
+            _symbol_ptr, typ, opt, symbol = valid_entry(o)
+            entries.append((typ, opt, symbol))
+            by_type.setdefault(typ, []).append((opt, symbol))
+        for typ in by_type:
+            by_type[typ].sort()
+
+        symbol_ptrs = []
+        i = 0
+        while start + i * 12 + 4 <= data_len:
+            ptr = struct.unpack_from("<I", data, start + i * 12)[0]
+            if string_at_ptr(ptr) is None:
+                break
+            symbol_ptrs.append(ptr)
+            i += 1
+        return (start, count, entries, by_type, symbol_ptrs)
+
+    def _ensure_option_table(self):
+        if self.opt_entries is not None:
+            return
+        (
+            self.opt_table_off, self.opt_table_count, self.opt_entries,
+            self.opt_by_type, self.opt_symbol_ptrs,
+        ) = self._build_option_table()
+        self.opt_first_by_type = {}
+        for pos, entry in enumerate(self.opt_entries):
+            self.opt_first_by_type.setdefault(entry[0], pos)
+
+    def option_symbols_for_g5_index(self, idx, n_options):
+        """Return decoded option symbols for g5[idx], if the flat table covers it."""
+        self._ensure_option_table()
+        if n_options <= 0:
+            return []
+        pos = self.opt_first_by_type.get(idx)
+        if pos is None:
+            return []
+
+        # The table is a flat enum-symbol stream. The first row carrying a g5
+        # index is the previous enum's tail; the current enum starts at the
+        # following row and may continue into the next index boundary row.
+        symbols = []
+        for slot in range(pos + 1, pos + 1 + n_options):
+            if slot >= len(self.opt_symbol_ptrs):
+                break
+            symbols.append(self._string_at_ptr(self.opt_symbol_ptrs[slot]))
+        return symbols
+
+    def dispatch_var_id(self, vid):
+        if self.g1_id_base <= vid < self.g2_id_base:
+            return ("g[1]", self.g[1], G1_STRIDE, vid - self.g1_id_base)
+        if self.g2_id_base <= vid < self.g3_id_base:
+            return ("g[2]", self.g[2], G2_STRIDE, vid - self.g2_id_base)
+        if self.g3_id_base <= vid < self.g5_id_base:
+            return ("g[3]", self.g[3], G3_STRIDE, vid - self.g3_id_base)
+        if self.g5_id_base <= vid < self.g5_id_base + self.g5_count:
+            return ("g[5]", self.g[5], G5_STRIDE, vid - self.g5_id_base)
+        return None
+
+    def descriptor_specs(self):
+        return {
+            "g1": {
+                "base": self.g[1], "stride": G1_STRIDE,
+                "count": self.g1_count, "id_base": self.g1_id_base,
+            },
+            "g2": {
+                "base": self.g[2], "stride": G2_STRIDE,
+                "count": self.g2_count, "id_base": self.g2_id_base,
+            },
+            "g3": {
+                "base": self.g[3], "stride": G3_STRIDE,
+                "count": self.g3_count, "id_base": self.g3_id_base,
+            },
+            "g5": {
+                "base": self.g[5], "stride": G5_STRIDE,
+                "count": self.g5_count, "id_base": self.g5_id_base,
+            },
+            "g10": {
+                "base": self.g[10], "stride": G10_STRIDE,
+                "count": self.g10_count, "id_base": None,
+            },
+        }
+
+    def conf_layout(self):
+        pointer_offsets = sorted(
+            off for off in self.g.values()
+            if isinstance(off, int) and CONF_BASE <= off < CONF_BASE + CONF_SIZE
+        )
+        out = []
+        for index in range(20):
+            off = self.g.get(index)
+            if not isinstance(off, int) or not (
+                    CONF_BASE <= off < CONF_BASE + CONF_SIZE):
+                out.append({
+                    "index": index, "value": off,
+                    "offset": None, "end": None, "size": None,
+                })
+                continue
+            end = CONF_BASE + CONF_SIZE
+            for candidate in pointer_offsets:
+                if candidate > off:
+                    end = candidate
+                    break
+            out.append({
+                "index": index, "value": off, "offset": off,
+                "end": end, "size": end - off,
+            })
+        return out
+
+    def section_end(self, index):
+        for sec in self.conf_layout():
+            if sec["index"] == index:
+                return sec["end"]
+        return None
+
+    def var_short_name(self, vid):
+        return self.name_buckets.get(vid, "")
+
+    def var_long_name(self, vid):
+        return self.long_names.get(vid, "")
+
+    def read_descriptor(self, arr, idx):
+        arr = normalize_array_name(arr)
+        specs = self.descriptor_specs()
+        if arr not in specs:
+            raise ValueError("unknown descriptor array: %s" % arr)
+        spec = specs[arr]
+        if idx < 0 or idx >= spec["count"]:
+            raise IndexError("%s[%d] outside 0..%d" %
+                             (arr, idx, spec["count"] - 1))
+        off = spec["base"] + idx * spec["stride"]
+        vid = self.u16(off) if spec["id_base"] is None else spec["id_base"] + idx
+        raw = self.data[off:off + spec["stride"]]
+        rec = {
+            "array": arr,
+            "index": idx,
+            "offset": off,
+            "address": self.off_to_addr(off),
+            "var_id": vid,
+            "short_name": self.var_short_name(vid),
+            "long_name": self.var_long_name(vid),
+            "name": self.var_name(vid),
+            "raw": raw,
+        }
+        if arr == "g1":
+            vt = self.u16(off)
+            rec.update({
+                "vid_type": vt,
+                "active": bool(vt & 1),
+                "subtype": self.u16(off + 2),
+                "linked_var_id": self.u16(off + 4),
+                "class_tag": self.u16(off + 6),
+                "max_length": self.u16(off + 8),
+            })
+        elif arr == "g2":
+            vt = self.u16(off)
+            scale = self.u16(off + 22)
+            step = self.u16(off + 24)
+            rec.update({
+                "vid_type": vt,
+                "active": bool(vt & 1),
+                "enum_ref": self.u16(off + 2),
+                "source_index": self.u16(off + 4),
+                "storage_class": self.u16(off + 6),
+                "default": self.u32(off + 8),
+                "max": self.u32(off + 12),
+                "min": self.i32(off + 16),
+                "format": self.u16(off + 20),
+                "scale": scale,
+                "step": step,
+                "bounds_slot": self.u8(off + 26),
+                "sample_source_id": self.u8(off + 27),
+                "quantity_class": self.u32(off + 28),
+            })
+            if scale:
+                rec["scaled_default"] = rec["default"] / scale
+                rec["scaled_min"] = rec["min"] / scale
+                rec["scaled_max"] = rec["max"] / scale
+                rec["scaled_step"] = step / scale
+        elif arr == "g3":
+            vt = self.u16(off)
+            fixed_mask = self.u32(off + 8)
+            editable_mask = self.u32(off + 12)
+            bit_count = self.u8(off + 16)
+            list_offset = self.u16(off + 18)
+            g4_base = self.g.get(4)
+            list_file_off = None
+            g4_codes = []
+            if isinstance(g4_base, int):
+                list_file_off = g4_base + list_offset
+                if list_file_off + bit_count <= len(self.data):
+                    g4_codes = list(self.data[list_file_off:list_file_off + bit_count])
+            rec.update({
+                "vid_type": vt,
+                "active": bool(vt & 1),
+                "subtype": self.u16(off + 2),
+                "linked_var_id": self.u16(off + 4),
+                "class_tag": self.u16(off + 6),
+                "fixed_mask": fixed_mask,
+                "editable_mask": editable_mask,
+                "mask_bits": [i for i in range(32) if (editable_mask >> i) & 1],
+                "bit_count": bit_count,
+                "g4_list_offset": list_offset,
+                "g4_list_file_offset": list_file_off,
+                "g4_codes": g4_codes,
+            })
+        elif arr == "g5":
+            vt = self.u16(off)
+            options_offset = self.u16(off + 2)
+            n_options = self.u8(off + 9)
+            option_mask = self.u32(off + 12)
+            g4_base = self.g.get(4)
+            options_file_off = None
+            g4_codes = []
+            if isinstance(g4_base, int):
+                options_file_off = g4_base + options_offset
+                if options_file_off + n_options <= len(self.data):
+                    g4_codes = list(self.data[options_file_off:options_file_off + n_options])
+            rec.update({
+                "vid_type": vt,
+                "active": bool(vt & 1),
+                "g4_options_offset": options_offset,
+                "g4_options_file_offset": options_file_off,
+                "g4_codes": g4_codes,
+                "owner_ref": self.u16(off + 4),
+                "item_class": self.u16(off + 6),
+                "default_option": self.u8(off + 8),
+                "n_options": n_options,
+                "zero": self.u16(off + 10),
+                "option_mask": option_mask,
+                "enabled_options": [i for i in range(32) if (option_mask >> i) & 1],
+            })
+        elif arr == "g10":
+            mode_bytes = self.data[off + 2:off + G10_STRIDE]
+            rec.update({
+                "modes": [
+                    MODE_NAMES[i]
+                    for i, value in enumerate(mode_bytes[:len(MODE_NAMES)])
+                    if value
+                ],
+                "mode_bytes": mode_bytes,
+            })
+        return rec
+
+    def edf_str_records(self):
+        base = self.g.get(15)
+        if not isinstance(base, int):
+            return []
+        count = self.u16(base + 4)
+        rec_base = self.ptr_to_off(self.u32(base + 8))
+        if rec_base is None:
+            return []
+        out = []
+        for i in range(count):
+            off = rec_base + i * SUMMARY_STRIDE
+            if off + SUMMARY_STRIDE > len(self.data):
+                break
+            kind = self.u32(off + 4)
+            var_a = self.u16(off + 8)
+            var_b = self.u16(off + 10)
+            selected = var_b if kind < 3 else var_a
+            label_ptr = self.u32(off + 24)
+            unit_ptr = self.u32(off + 28)
+            edf_label = self._string_at_ptr(label_ptr, allow_empty=True)
+            edf_unit = self._string_at_ptr(unit_ptr, allow_empty=True)
+            out.append({
+                "index": i,
+                "offset": off,
+                "field_id": self.u32(off),
+                "kind": kind,
+                "var_a": var_a,
+                "var_b": var_b,
+                "selected_var": selected,
+                "selector_a": self.u16(off + 12),
+                "selector_b": self.u16(off + 14),
+                "scale": self.f32(off + 16),
+                "record_class": self.u8(off + 20),
+                "active": bool(self.u8(off + 21)),
+                "reserved16": self.u16(off + 22),
+                "edf_label": edf_label,
+                "edf_unit": edf_unit,
+                "hydrated": edf_label not in (None, ""),
+                "edf_output_scale": self.f32(off + 32),
+                "short_name": self.var_short_name(selected),
+                "long_name": self.var_long_name(selected),
+                "name": self.var_name(selected),
+                "raw": self.data[off:off + SUMMARY_STRIDE],
+            })
+        return out
+
+    def edf_streams(self):
+        base = self.g.get(16)
+        if not isinstance(base, int):
+            return []
+        out = []
+        end = self.section_end(16) or len(self.data)
+        i = 0
+        while True:
+            off = base + i * 16
+            if off + 16 > end:
+                break
+            period = self.u16(off)
+            samples = self.u16(off + 2)
+            count = self.u32(off + 4)
+            tag_ptr = self.u32(off + 8)
+            table_ptr = self.u32(off + 12)
+            if period == 0 or tag_ptr == 0 or table_ptr == 0:
+                break
+            tag = self._string_at_ptr(tag_ptr)
+            table_off = self.ptr_to_off(table_ptr)
+            if not tag or table_off is None:
+                break
+            signals = []
+            for j in range(count):
+                roff = table_off + j * 16
+                signals.append({
+                    "index": j,
+                    "offset": roff,
+                    "id": self.u32(roff),
+                    "name": self._string_at_ptr(self.u32(roff + 4)) or "",
+                    "unit": self._string_at_ptr(self.u32(roff + 8),
+                                                allow_empty=True) or "",
+                    "scale": self.f32(roff + 12),
+                })
+            out.append({
+                "index": i,
+                "offset": off,
+                "tag": tag,
+                "period_ms": period,
+                "samples_per_60s": samples,
+                "signal_count": count,
+                "signals": signals,
+            })
+            i += 1
+        return out
+
+    def event_defs(self):
+        base = self.g.get(12)
+        if not isinstance(base, int):
+            return []
+        out = []
+        end = self.section_end(12) or len(self.data)
+        i = 0
+        while True:
+            off = base + i * 36
+            if off + 36 > end:
+                break
+            name_ptr = self.u32(off)
+            code_ptr = self.u32(off + 4)
+            if name_ptr == 0 or code_ptr == 0:
+                break
+            name = self._string_at_ptr(name_ptr)
+            code = self._string_at_ptr(code_ptr)
+            if not name or not code:
+                break
+            out.append({
+                "index": i,
+                "offset": off,
+                "name": name,
+                "code": code,
+                "event_class": self.u32(off + 8),
+                "period_or_limit": self.u32(off + 0x0c),
+                "record_kind": self.u32(off + 0x10),
+                "flags_a": self.u32(off + 0x14),
+                "buffer_or_mask": self.u32(off + 0x18),
+                "retention_or_batch": self.u32(off + 0x1c),
+                "packed_ref": self.u32(off + 0x20),
+                "raw": self.data[off:off + 36],
+            })
+            i += 1
+        return out
+
+    def event_routes(self):
+        base = self.g.get(13)
+        if not isinstance(base, int):
+            return []
+        end = self.section_end(13) or len(self.data)
+        count = max(0, (end - base) // G13_ROUTE_STRIDE)
+        events = self.event_defs()
+        out = []
+        for i in range(count):
+            off = base + i * G13_ROUTE_STRIDE
+            event_index = self.u16(off)
+            event = events[event_index] if 0 <= event_index < len(events) else None
+            out.append({
+                "index": i,
+                "offset": off,
+                "event_index": event_index,
+                "event_code": None if event is None else event["code"],
+                "event_name": None if event is None else event["name"],
+                "subindex": self.u16(off + 2),
+                "route": self.u16(off + 4),
+                "raw": self.data[off:off + G13_ROUTE_STRIDE],
+            })
+        return out
+
+    def event_labels(self):
+        base = self.g.get(17)
+        if not isinstance(base, int):
+            return []
+        out = []
+        end = self.section_end(17) or len(self.data)
+        i = 0
+        while True:
+            off = base + i * 28
+            if off + 28 > end:
+                break
+            label_count = self.u16(off + 2)
+            tag = self._string_at_ptr(self.u32(off + 16))
+            table_off = self.ptr_to_off(self.u32(off + 24))
+            if not tag or table_off is None:
+                break
+            labels = []
+            for j in range(label_count):
+                ptr = self.u32(table_off + j * 4)
+                labels.append(self._string_at_ptr(ptr, allow_empty=True) or "")
+            out.append({
+                "index": i,
+                "offset": off,
+                "tag": tag,
+                "event_bound": self.u16(off),
+                "label_count": label_count,
+                "record_size": self.u32(off + 4),
+                "label_ptr_stride": self.u32(off + 8),
+                "flags": self.u32(off + 12),
+                "enabled_constant": self.u32(off + 20),
+                "label_table": self.u32(off + 24),
+                "labels": labels,
+            })
+            i += 1
+        return out
+
+    def periodic_collections(self):
+        base = self.g.get(14)
+        if not isinstance(base, int):
+            return []
+        out = []
+        end = self.section_end(14) or len(self.data)
+        i = 0
+        while True:
+            off = base + i * G14_COLLECTION_STRIDE
+            if off + G14_COLLECTION_STRIDE > end:
+                break
+            tag_ptr = self.u32(off)
+            signal_count = self.u8(off + 0x28)
+            id_list_ptr = self.u32(off + 0x2c)
+            if tag_ptr == 0 or id_list_ptr == 0:
+                break
+            tag = self._string_at_ptr(tag_ptr)
+            id_list_off = self.ptr_to_off(id_list_ptr)
+            meta_off = self.ptr_to_off(self.u32(off + 0x30))
+            if not tag or id_list_off is None:
+                break
+            signals = []
+            for j in range(signal_count):
+                vid = self.u16(id_list_off + j * 2)
+                meta_file_off = None if meta_off is None else meta_off + j * 0x30
+                meta = None
+                if meta_file_off is not None and meta_file_off + 0x30 <= len(self.data):
+                    meta = {
+                        "min": self.f64(meta_file_off),
+                        "max": self.f64(meta_file_off + 8),
+                        "resolution": self.f64(meta_file_off + 0x10),
+                        "scale": self.f64(meta_file_off + 0x18),
+                        "class_flags": self.u32(meta_file_off + 0x20),
+                        "transform": self.u32(meta_file_off + 0x28),
+                    }
+                signals.append({
+                    "index": j,
+                    "var_id": vid,
+                    "short_name": self.var_short_name(vid),
+                    "long_name": self.var_long_name(vid),
+                    "name": self.var_name(vid),
+                    "metadata_offset": meta_file_off,
+                    "metadata": meta,
+                })
+            out.append({
+                "index": i,
+                "offset": off,
+                "tag": tag,
+                "period_ms": self.u32(off + 4),
+                "window_or_period": self.u32(off + 8),
+                "buffer_size": self.u32(off + 0x0c),
+                "record_size": self.u32(off + 0x10),
+                "collection_param_a": self.u32(off + 0x14),
+                "collection_param_b": self.u32(off + 0x18),
+                "collection_kind": self.u32(off + 0x1c),
+                "flags": self.u32(off + 0x20),
+                "active_bit": self.u16(off + 0x24),
+                "signal_count": signal_count,
+                "signals": signals,
+                "raw": self.data[off:off + G14_COLLECTION_STRIDE],
+            })
+            i += 1
+        return out
+
+    def storage_sets(self):
+        base = self.g.get(6)
+        if not isinstance(base, int):
+            return []
+        out = []
+        end = self.section_end(6) or len(self.data)
+        i = 0
+        while True:
+            off = base + i * 16
+            if off + 16 > end:
+                break
+            tag_raw = self.data[off:off + 4]
+            if tag_raw[3] != 0 or any(b < 0x20 or b > 0x7E for b in tag_raw[:3]):
+                break
+            ptr = self.u32(off + 8)
+            count = self.u32(off + 12)
+            list_off = self.ptr_to_off(ptr)
+            if list_off is None:
+                break
+            vars_out = []
+            for j in range(count):
+                vid = self.u16(list_off + j * 2)
+                vars_out.append({
+                    "index": j,
+                    "var_id": vid,
+                    "short_name": self.var_short_name(vid),
+                    "long_name": self.var_long_name(vid),
+                    "name": self.var_name(vid),
+                })
+            out.append({
+                "index": i,
+                "offset": off,
+                "tag": tag_raw[:3].decode("ascii"),
+                "set_id": self.u32(off + 4),
+                "list_ptr": ptr,
+                "count": count,
+                "vars": vars_out,
+            })
+            i += 1
+        return out
+
+    def fmt_raw(self, raw_bytes):
+        return " ".join(f"{b:02X}" for b in raw_bytes)
+
+    def ascii_field(self, off, size):
+        self._check_range(off, size)
+        raw = self.data[off:off + size].split(b"\x00")[0]
+        return raw.decode("ascii", errors="replace")
+
+    def var_name(self, vid):
+        return self.long_names.get(vid) or self.name_buckets.get(vid, "")
+
+    def descriptor_status(self, vid):
+        disp = self.dispatch_var_id(vid)
+        if not disp:
+            return "MISSING", None
+        arr, base, stride, idx = disp
+        vt = self.u16(base + idx * stride)
+        return f"{arr}[{idx}] {'ACT' if vt & 1 else 'INACT'}", disp
+
+    def cmd_info(self):
+        platform = self.ascii_field(CONF_BASE + 0x18, 0x10)
+        model = self.ascii_field(CONF_BASE + 0x28, 0x10)
+        codename = self.ascii_field(CONF_BASE + 0x38, 0x10)
+        git = self.ascii_field(CONF_BASE + 0x68, 0x10)
+        ptype = self.u32(CONF_BASE)
+        stype = self.u32(CONF_BASE + 4)
+
+        print(f"  File:     {self.path}")
+        print(f"  Platform: {platform} / {model} / {codename}")
+        print(f"  Product:  type={ptype} sub={stype}")
+        print(f"  Git:      {git}")
+        print(f"  MT:       0x{self.mt_off:05X} (CONF+0x{self.mt_off - CONF_BASE:04X})")
+        print()
+        print("  Descriptor arrays:")
+        print("    globals[1]: %4d records x %dB  var_ids 0x%04X-0x%04X" %
+              (self.g1_count, G1_STRIDE, self.g1_id_base,
+               self.g2_id_base - 1))
+        print("    globals[2]: %4d records x %dB  var_ids 0x%04X-0x%04X" %
+              (self.g2_count, G2_STRIDE, self.g2_id_base,
+               self.g3_id_base - 1))
+        print("    globals[3]: %4d records x %dB  var_ids 0x%04X-0x%04X" %
+              (self.g3_count, G3_STRIDE, self.g3_id_base,
+               self.g5_id_base - 1))
+        print("    globals[5]: %4d records x %dB  var_ids 0x%04X-0x%04X" %
+              (self.g5_count, G5_STRIDE, self.g5_id_base,
+               self.g5_id_base + self.g5_count - 1))
+        print(f"    Max var_id with descriptor: 0x{self.max_var_id:04X}")
+        print(f"  globals[10]: {self.g10_count:4d} per-mode variable enables")
+        if self._long_names is None:
+            print("  Long names:  not probed until needed")
+        elif self.long_name_table_off is None:
+            print(f"  Long names:  {len(self.long_names):4d} active bindings (table not found)")
+        else:
+            print("  Long names:  %4d active bindings @ 0x%05X (%d entries)" %
+                  (len(self.long_names), self.long_name_table_off,
+                   self.long_name_table_count))
+        print(f"  Name table:  {len(self.name_buckets):4d} 3-char tags")
+        if self.opt_entries is None:
+            print("  Enum symbols: not probed until var-options")
+        elif self.opt_table_off is None:
+            print("  Enum symbols:(table not found)")
+        else:
+            print("  Enum symbols:%4d flat (symbol,type,opt) entries @ 0x%05X" %
+                  (self.opt_table_count, self.opt_table_off))
+        if self.gui_text_available is None:
+            print("  GUI text:    not probed until text/text-search")
+        elif self.gui_text_available:
+            print("  GUI text:    decoder ready (%d ids/lang, stride 0x%X)" %
+                  (self.gui_text_count, self.gui_text_lang_stride))
+        else:
+            print("  GUI text:    decoder not available for this image")
+
+    def descriptor_line_fields(self, rec):
+        fields = {
+            "array": rec["array"],
+            "idx": rec["index"],
+            "off": fmt_off(rec["offset"]),
+            "addr": fmt_addr(rec["address"]),
+            "var": "0x%04X" % rec["var_id"],
+            "short": fmt_text(rec["short_name"]),
+            "long": fmt_text(rec["long_name"]),
+        }
+        if rec["array"] != "g10":
+            fields.update({
+                "act": fmt_bool(rec.get("active", False)),
+                "vt": "0x%04X" % rec.get("vid_type", 0),
+            })
+        if rec["array"] == "g1":
+            fields.update({
+                "subtype": "0x%04X" % rec["subtype"],
+                "linked_var": "0x%04X" % rec["linked_var_id"],
+                "class_tag": "0x%04X" % rec["class_tag"],
+                "max_len": rec["max_length"],
+            })
+        elif rec["array"] == "g2":
+            if rec.get("scale"):
+                fields.update({
+                    "default": fmt_number(rec["scaled_default"]),
+                    "min": fmt_number(rec["scaled_min"]),
+                    "max": fmt_number(rec["scaled_max"]),
+                    "step": fmt_number(rec["scaled_step"]),
+                    "scale": rec["scale"],
+                })
+            else:
+                fields.update({
+                    "default": rec["default"],
+                    "min": rec["min"],
+                    "max": rec["max"],
+                    "step": rec["step"],
+                    "scale": rec["scale"],
+                })
+            fields.update({
+                "raw_default": rec["default"],
+                "raw_min": rec["min"],
+                "raw_max": rec["max"],
+                "format": "0x%04X" % rec["format"],
+                "bounds_slot": "0x%02X" % rec["bounds_slot"],
+                "sample_source": rec["sample_source_id"],
+                "quantity_class": "0x%08X" % rec["quantity_class"],
+            })
+        elif rec["array"] == "g3":
+            fields.update({
+                "g4_list": "+0x%04X" % rec["g4_list_offset"],
+                "g4_off": fmt_off(rec["g4_list_file_offset"]),
+                "bits": rec["bit_count"],
+                "fixed": "0x%08X" % rec["fixed_mask"],
+                "editable": "0x%08X" % rec["editable_mask"],
+                "set_bits": rec["mask_bits"],
+                "g4_codes": ["0x%02X" % value for value in rec["g4_codes"]],
+            })
+        elif rec["array"] == "g5":
+            fields.update({
+                "g4_opts": "+0x%04X" % rec["g4_options_offset"],
+                "g4_off": fmt_off(rec["g4_options_file_offset"]),
+                "default_opt": rec["default_option"],
+                "n_opts": rec["n_options"],
+                "mask": "0x%08X" % rec["option_mask"],
+                "enabled": rec["enabled_options"],
+                "owner_ref": "0x%04X" % rec["owner_ref"],
+                "item_class": "0x%04X" % rec["item_class"],
+                "g4_codes": ["0x%02X" % value for value in rec["g4_codes"]],
+            })
+        elif rec["array"] == "g10":
+            fields.update({
+                "modes": rec["modes"],
+                "mode_bytes": " ".join("%02X" % b for b in rec["mode_bytes"]),
+            })
+        return fields
+
+    def emit_descriptor_line(self, rec):
+        emit_line(**self.descriptor_line_fields(rec))
+
+    def cmd_var(self, vid, verbose=False):
+        if not verbose:
+            disp = self.dispatch_var_id(vid)
+            if not disp:
+                emit_line(var="0x%04X" % vid,
+                          short=fmt_text(self.name_buckets.get(vid)),
+                          long=fmt_text(self.long_names.get(vid)),
+                          status="missing")
+                return
+            arr, _base, _stride, idx = disp
+            self.emit_descriptor_line(self.read_descriptor(arr, idx))
+            return
+
+        tag = self.name_buckets.get(vid, "")
+        name = self.long_names.get(vid, "")
+        print(f"  var_id:    0x{vid:04X} ({vid})")
+        print(f"  short:     {fmt_text(tag)}")
+        print(f"  long:      {fmt_text(name)}")
+
+        disp = self.dispatch_var_id(vid)
+        if not disp:
+            print(f"  Dispatch:  *** NO DESCRIPTOR (max var_id 0x{self.max_var_id:04X}) ***")
+            return
+
+        arr, base, stride, idx = disp
+        rec = self.read_descriptor(arr, idx)
+        print(f"  Dispatch:  {arr}[{idx}]  ({fmt_off(base + idx * stride)})")
+        print()
+        for key, value in self.descriptor_line_fields(rec).items():
+            print(f"  {key}: {line_value(value)}")
+        print(f"  raw: {self.fmt_raw(rec['raw'])}")
+        print()
+        self._print_related_g10(vid)
+        if rec["array"] == "g5":
+            self.cmd_var_options_by_id(vid, verbose=True)
+
+    def _print_related_g10(self, vid):
+        for i in range(self.g10_count):
+            g10 = self.read_descriptor("g10", i)
+            if g10["var_id"] == vid:
+                modes = ",".join(g10["modes"])
+                print(f"  g10[{i:3d}]:  modes={modes}")
+                print(f"             bytes={' '.join(f'{b:02X}' for b in g10['mode_bytes'][:11])}")
+                break
+        else:
+            print("  g10:       (not registered)")
+
+    def cmd_mode(self, mode_idx):
+        if mode_idx < 0 or mode_idx >= len(MODE_NAMES):
+            raise ValueError("mode index must be 0..%d" % (len(MODE_NAMES) - 1))
+
+        mode_name = MODE_NAMES[mode_idx]
+        prefix = MODE_PREFIXES.get(mode_idx)
+        vids = {}
+        for i in range(self.g10_count):
+            g10 = self.read_descriptor("g10", i)
+            if mode_name in g10["modes"]:
+                vids[g10["var_id"]] = "g10"
+        if prefix:
+            for vid, name in self.long_names.items():
+                if name.startswith(prefix) and vid not in vids:
+                    vids[vid] = "name"
+
+        for vid in sorted(vids):
+            status, _ = self.descriptor_status(vid)
+            emit_line(
+                mode=mode_idx,
+                mode_name=mode_name,
+                var="0x%04X" % vid,
+                short=fmt_text(self.name_buckets.get(vid)),
+                long=fmt_text(self.long_names.get(vid)),
+                source=vids[vid],
+                status=status,
+            )
+
+    def cmd_var_options(self, ident, verbose=False):
+        """Print enum option slots for a var_id, long name, or 3-char tag."""
+        vid = self._resolve_var_ident(ident)
+        if vid is None:
+            raise ValueError(
+                "could not resolve %r to a var_id; use a numeric id, long name, "
+                "3-char tag, or underscored short name" % ident)
+        self.cmd_var_options_by_id(vid, verbose)
+
+    def cmd_var_options_by_id(self, vid, verbose=False):
+        """Print enum option slots for an already resolved var_id."""
+        name = self.long_names.get(vid, "")
+        tag = self.name_buckets.get(vid, "")
+        d = self.dispatch_var_id(vid)
+        if d is None:
+            raise ValueError("var 0x%04X has no descriptor" % vid)
+        arr = d[0]
+        if arr != "g[5]":
+            raise ValueError(
+                "var 0x%04X (%s / %s) dispatches via %s; only g[5] vars "
+                "have enum option slots" % (vid, tag, name, arr))
+        idx = d[3]
+        rec = self.read_descriptor("g5", idx)
+        symbols = self.option_symbols_for_g5_index(idx, rec["n_options"])
+        if not verbose:
+            for opt in range(rec["n_options"]):
+                emit_line(
+                    var="0x%04X" % vid,
+                    short=fmt_text(tag),
+                    long=fmt_text(name),
+                    idx=idx,
+                    opt=opt,
+                    enabled=1 if ((rec["option_mask"] >> opt) & 1) else 0,
+                    default=1 if opt == rec["default_option"] else 0,
+                    g4_code=(
+                        "0x%02X" % rec["g4_codes"][opt]
+                        if opt < len(rec["g4_codes"]) else "n/a"
+                    ),
+                    symbol=fmt_text(symbols[opt] if opt < len(symbols) else None),
+                )
+            return
+
+        print(f"  var_id:   0x{vid:04X}  tag={tag}  name={name}")
+        print(
+            "  dispatch: g[5][%d]   n_opts=%d   default=%d   mask=0x%08X"
+            % (idx, rec["n_options"], rec["default_option"],
+               rec["option_mask"])
+        )
+        print(
+            "  g4:       +0x%04X file=%s codes=%s"
+            % (
+                rec["g4_options_offset"],
+                fmt_off(rec["g4_options_file_offset"]),
+                ",".join("0x%02X" % value for value in rec["g4_codes"]) or "n/a",
+            )
+        )
+        print("  options:")
+        for opt in range(rec["n_options"]):
+            flags = []
+            if (rec["option_mask"] >> opt) & 1:
+                flags.append("enabled")
+            if opt == rec["default_option"]:
+                flags.append("default")
+            suffix = " [%s]" % ",".join(flags) if flags else ""
+            g4_code = (
+                "0x%02X" % rec["g4_codes"][opt]
+                if opt < len(rec["g4_codes"]) else "n/a"
+            )
+            symbol = symbols[opt] if opt < len(symbols) else "n/a"
+            print(f"    {opt:3d}: g4={g4_code} symbol={symbol!r}{suffix}")
+
+    def cmd_text(self, text_id, lang=0):
+        if not self._ensure_gui_text_decoder():
+            raise ValueError("GUI text decoder is not available for this image")
+        text = self.decode_gui_text(text_id, lang)
+        shown = text.replace("\r", "\\r").replace("\n", "\\n")
+        if not shown:
+            shown = "(empty)"
+        lang_name = LANGUAGE_NAMES[lang] if 0 <= lang < len(LANGUAGE_NAMES) else "n/a"
+        print(f"  0x{text_id:03X} lang={lang} ({lang_name}): {shown}")
+
+    def cmd_text_search(self, query, lang=0):
+        if not self._ensure_gui_text_decoder():
+            raise ValueError("GUI text decoder is not available for this image")
+        if not 0 <= lang < len(LANGUAGE_NAMES):
+            raise ValueError("language index %d is outside 0..%d" %
+                             (lang, len(LANGUAGE_NAMES) - 1))
+        q = query.lower()
+        found = []
+        for text_id in range(self.gui_text_count):
+            try:
+                text = self.decode_gui_text(text_id, lang)
+            except Exception:
+                continue
+            if q in text.lower():
+                found.append((text_id, text))
+        if not found:
+            print(f'  No GUI text matching "{query}"')
+            return
+        print(f"  {'text_id':>7}  text")
+        print(f"  {'-' * 7}  {'-' * 60}")
+        for text_id, text in found:
+            shown = text.replace("\r", "\\r").replace("\n", "\\n")
+            print(f"  0x{text_id:03X}  {shown}")
+
+    def _resolve_var_ident(self, ident):
+        """Resolve a var_id, long name, or 3-char tag to var_id (int)."""
+        s = ident.strip()
+        if s.startswith("_"):
+            s = s[1:]
+        s_upper = s.upper()
+        for vid, tag in self.name_buckets.items():
+            if tag == s_upper:
+                return vid
+        for vid, name in self.long_names.items():
+            if name == s:
+                return vid
+        s_lower = s.lower()
+        for vid, name in self.long_names.items():
+            if name.lower() == s_lower:
+                return vid
+        if re.fullmatch(r"[0-9]+", s) or re.fullmatch(r"0[xX][0-9a-fA-F]+", s):
+            return parse_numeric_arg(s, "var_id")
+        return None
+
+    def filter_rows(self, rows, active=False, inactive=False, name=None):
+        out = list(rows)
+        if active:
+            out = [row for row in out if row.get("active") is True]
+        if inactive:
+            out = [row for row in out if row.get("active") is False]
+        if name:
+            rx = re.compile(name, re.IGNORECASE)
+            out = [row for row in out if rx.search(descriptor_filter_text(row))]
+        return out
+
+    def cmd_globals(self):
+        layout = {row["index"]: row for row in self.conf_layout()}
+        for i in sorted(self.g):
+            sec = layout.get(i, {})
+            value = self.g.get(i)
+            if isinstance(value, int) and CONF_BASE <= value < CONF_BASE + CONF_SIZE:
+                value_text = "0x%08X" % self.off_to_addr(value)
+            elif isinstance(value, int):
+                value_text = "0x%08X" % value
+            else:
+                value_text = "n/a"
+            emit_line(
+                global_index=i,
+                value=value_text,
+                off=fmt_off(sec.get("offset")),
+                end=fmt_off(sec.get("end")),
+                size=(
+                    "0x%X" % sec["size"]
+                    if sec.get("size") is not None else "n/a"
+                ),
+            )
+
+    def cmd_conf_layout(self):
+        for sec in sorted(self.conf_layout(),
+                          key=lambda row: row["offset"] or 0xFFFFFFFF):
+            if sec["offset"] is None or sec["end"] is None:
+                continue
+            emit_line(
+                global_index=sec["index"],
+                off=fmt_off(sec["offset"]),
+                end=fmt_off(sec["end"]),
+                addr=fmt_addr(self.off_to_addr(sec["offset"])),
+                size="0x%X" % sec["size"],
+            )
+
+    def cmd_vars(self, arr_name, active=False, inactive=False, name=None,
+                 verbose=False):
+        arr = normalize_array_name(arr_name)
+        specs = self.descriptor_specs()
+        if arr == "all":
+            arrays = ("g1", "g2", "g3", "g5")
+        elif arr in specs:
+            arrays = (arr,)
+        else:
+            raise ValueError("unknown descriptor array: %s" % arr_name)
+
+        for current_arr in arrays:
+            spec = specs[current_arr]
+            rows = [self.read_descriptor(current_arr, idx)
+                    for idx in range(spec["count"])]
+            rows = self.filter_rows(rows, active=active, inactive=inactive, name=name)
+            for row in rows:
+                if verbose:
+                    print("[%s %d]" % (row["array"], row["index"]))
+                    for key, value in self.descriptor_line_fields(row).items():
+                        print("  %s: %s" % (key, line_value(value)))
+                    print("  raw: %s" % self.fmt_raw(row["raw"]))
+                else:
+                    self.emit_descriptor_line(row)
+
+    def cmd_edf_str(self, all_rows=False, inactive=False, name=None,
+                    verbose=False):
+        rows = self.edf_str_records()
+        if inactive:
+            rows = self.filter_rows(rows, inactive=True, name=name)
+        elif not all_rows:
+            rows = self.filter_rows(rows, active=True, name=name)
+        else:
+            rows = self.filter_rows(rows, name=name)
+        for row in rows:
+            fields = {
+                "idx": row["index"],
+                "off": fmt_off(row["offset"]),
+                "act": fmt_bool(row["active"]),
+                "field": row["field_id"],
+                "kind": row["kind"],
+                "record_class": row["record_class"],
+                "selected_var": "0x%04X" % row["selected_var"],
+                "short": fmt_text(row["short_name"]),
+                "long": fmt_text(row["long_name"]),
+                "hydrated": int(row["hydrated"]),
+                "edf_label": fmt_text(row["edf_label"]),
+                "edf_unit": fmt_text(row["edf_unit"]),
+                "scale": fmt_number(row["scale"]),
+                "edf_scale": fmt_number(row["edf_output_scale"]),
+            }
+            if verbose:
+                print("[edf-str %d]" % row["index"])
+                for key, value in fields.items():
+                    print("  %s: %s" % (key, line_value(value)))
+                print("  var_a: 0x%04X %s/%s" %
+                      (row["var_a"], fmt_text(self.var_short_name(row["var_a"])),
+                       fmt_text(self.var_long_name(row["var_a"]))))
+                print("  var_b: 0x%04X %s/%s" %
+                      (row["var_b"], fmt_text(self.var_short_name(row["var_b"])),
+                       fmt_text(self.var_long_name(row["var_b"]))))
+            else:
+                emit_line(**fields)
+
+    def cmd_edf_streams(self, names=None, verbose=False):
+        wanted = {name.upper().lstrip("&") for name in (names or [])}
+        for item in self.edf_streams():
+            if wanted and item["tag"].upper().lstrip("&") not in wanted:
+                continue
+            if verbose:
+                print("[%s]" % item["tag"])
+                print("  off: %s" % fmt_off(item["offset"]))
+                print("  period_ms: %d" % item["period_ms"])
+                print("  samples_per_60s: %d" % item["samples_per_60s"])
+                print("  signal_count: %d" % item["signal_count"])
+            for sig in item["signals"]:
+                emit_line(
+                    stream=item["tag"],
+                    stream_idx=item["index"],
+                    signal_idx=sig["index"],
+                    off=fmt_off(sig["offset"]),
+                    id="0x%04X" % sig["id"],
+                    name=fmt_text(sig["name"]),
+                    unit=fmt_text(sig["unit"]),
+                    scale=fmt_number(sig["scale"]),
+                    period_ms=item["period_ms"],
+                    samples_per_60s=item["samples_per_60s"],
+                )
+
+    def cmd_events(self, filters=None, verbose=False):
+        wanted = [f.lower() for f in (filters or [])]
+        for row in self.event_defs():
+            if wanted:
+                haystack = "%s %s" % (row["code"], row["name"])
+                if not any(f in haystack.lower() for f in wanted):
+                    continue
+            fields = {
+                "idx": row["index"],
+                "off": fmt_off(row["offset"]),
+                "code": row["code"],
+                "name": row["name"],
+                "event_class": row["event_class"],
+                "record_kind": row["record_kind"],
+                "flags": "0x%08X" % row["flags_a"],
+                "buffer_or_mask": "0x%08X" % row["buffer_or_mask"],
+            }
+            if verbose:
+                print("[event %d]" % row["index"])
+                for key, value in fields.items():
+                    print("  %s: %s" % (key, line_value(value)))
+                print("  period_or_limit: %s" % row["period_or_limit"])
+                print("  retention_or_batch: %s" % row["retention_or_batch"])
+                print("  packed_ref: 0x%08X" % row["packed_ref"])
+            else:
+                emit_line(**fields)
+
+    def cmd_event_routes(self, filters=None):
+        wanted = [f.lower() for f in (filters or [])]
+        for row in self.event_routes():
+            if wanted:
+                haystack = "%s %s" % (
+                    fmt_text(row["event_code"]), fmt_text(row["event_name"]))
+                if not any(f in haystack.lower() for f in wanted):
+                    continue
+            emit_line(
+                idx=row["index"],
+                off=fmt_off(row["offset"]),
+                event_idx=row["event_index"],
+                subindex=row["subindex"],
+                route=row["route"],
+                code=fmt_text(row["event_code"]),
+                name=fmt_text(row["event_name"]),
+            )
+
+    def cmd_event_labels(self, names=None):
+        wanted = {name.upper().lstrip("&") for name in (names or [])}
+        for table in self.event_labels():
+            if wanted and table["tag"].upper().lstrip("&") not in wanted:
+                continue
+            for idx, label in enumerate(table["labels"]):
+                emit_line(
+                    table=table["tag"],
+                    table_idx=table["index"],
+                    label_idx=idx,
+                    label=label,
+                    event_bound=table["event_bound"],
+                    flags="0x%08X" % table["flags"],
+                )
+
+    def cmd_collections(self, names=None, verbose=False):
+        wanted = {name.upper().lstrip("&") for name in (names or [])}
+        for row in self.periodic_collections():
+            if wanted and row["tag"].upper().lstrip("&") not in wanted:
+                continue
+            if verbose:
+                emit_line(
+                    collection=row["tag"],
+                    idx=row["index"],
+                    off=fmt_off(row["offset"]),
+                    period_ms=row["period_ms"],
+                    window=row["window_or_period"],
+                    buffer=row["buffer_size"],
+                    record_size=row["record_size"],
+                    active_bit=row["active_bit"],
+                    flags="0x%08X" % row["flags"],
+                    signals=row["signal_count"],
+                )
+            for sig in row["signals"]:
+                meta = sig.get("metadata") or {}
+                emit_line(
+                    collection=row["tag"],
+                    collection_idx=row["index"],
+                    signal_idx=sig["index"],
+                    var="0x%04X" % sig["var_id"],
+                    short=fmt_text(sig["short_name"]),
+                    long=fmt_text(sig["long_name"]),
+                    min=fmt_number(meta.get("min", 0)) if meta else "n/a",
+                    max=fmt_number(meta.get("max", 0)) if meta else "n/a",
+                    scale=fmt_number(meta.get("scale", 0)) if meta else "n/a",
+                    metadata_off=fmt_off(sig["metadata_offset"]),
+                )
+
+    def cmd_storage_sets(self, names=None, names_only=False):
+        wanted = {name.upper().lstrip("&") for name in (names or [])}
+        rows = self.storage_sets()
+        if wanted:
+            rows = [row for row in rows
+                    if row["tag"].upper().lstrip("&") in wanted]
+        for row in rows:
+            if names_only:
+                emit_line(
+                    set=row["tag"],
+                    idx=row["index"],
+                    set_id="0x%04X" % row["set_id"],
+                    count=row["count"],
+                    names=[
+                        "%s/%s" % (fmt_text(v["short_name"]),
+                                   fmt_text(v["long_name"]))
+                        for v in row["vars"]
+                    ],
+                )
+                continue
+            for v in row["vars"]:
+                emit_line(
+                    set=row["tag"],
+                    set_idx=row["index"],
+                    item_idx=v["index"],
+                    set_id="0x%04X" % row["set_id"],
+                    var="0x%04X" % v["var_id"],
+                    short=fmt_text(v["short_name"]),
+                    long=fmt_text(v["long_name"]),
+                )
+
+def parse_numeric_arg(value, what="number"):
+    text = value.strip()
+    if re.fullmatch(r"[0-9]+", text):
+        return int(text, 10)
+    if re.fullmatch(r"0[xX][0-9a-fA-F]+", text):
+        return int(text, 16)
+    raise argparse.ArgumentTypeError(
+        "invalid %s %r; use decimal or explicit hex like 0x10" %
+        (what, value)
+    )
+
+
+def parse_mode_arg(value):
+    try:
+        mode = parse_numeric_arg(value, "mode")
+    except argparse.ArgumentTypeError as exc:
+        raise argparse.ArgumentTypeError(
+            "invalid mode %r; use decimal 0..%d or explicit hex like 0x6" %
+            (value, len(MODE_NAMES) - 1)
+        ) from exc
+    if not 0 <= mode < len(MODE_NAMES):
+        raise argparse.ArgumentTypeError(
+            "mode %d outside 0..%d" % (mode, len(MODE_NAMES) - 1)
+        )
+    return mode
+
+
+def parse_lang_arg(value):
+    text = value.strip()
+    if re.fullmatch(r"[0-9]+", text) or re.fullmatch(r"0[xX][0-9a-fA-F]+", text):
+        return parse_numeric_arg(text, "language")
+
+    key = text.lower().replace("_", "-")
+    if key in LANGUAGE_CODES:
+        return LANGUAGE_CODES[key]
+    raise argparse.ArgumentTypeError(
+        "invalid language %r; use an index or code like en, de, es-us, pl" %
+        value
+    )
+
+
+def normalize_array_name(name):
+    lowered = name.strip().lower()
+    if lowered.startswith("g[") and lowered.endswith("]"):
+        lowered = "g" + lowered[2:-1]
+    return lowered
+
+
+def fmt_bool(value):
+    return "ACT" if value else "off"
+
+
+def fmt_off(value):
+    return "n/a" if value is None else "0x%06X" % value
+
+
+def fmt_addr(value):
+    return "n/a" if value is None else "0x%08X" % value
+
+
+def fmt_text(value):
+    return value if value not in (None, "") else "n/a"
+
+
+def fmt_number(value):
+    if isinstance(value, int):
+        return str(value)
+    if not math.isfinite(value):
+        return str(value)
+    rounded_int = round(value)
+    if abs(value - rounded_int) <= max(1e-9, abs(value) * 1e-7):
+        return str(rounded_int)
+    for places in range(1, 9):
+        rounded = round(value, places)
+        if abs(value - rounded) <= max(1e-9, abs(value) * 1e-6):
+            text = f"{rounded:.{places}f}".rstrip("0").rstrip(".")
+            return "0" if text in ("", "-0") else text
+    text = f"{value:.8f}".rstrip("0").rstrip(".")
+    return "0" if text in ("", "-0") else text
+
+
+def line_value(value):
+    if value is None or value == "":
+        return "n/a"
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, float):
+        return fmt_number(value)
+    if isinstance(value, (list, tuple)):
+        return ",".join(line_value(item) for item in value) or "n/a"
+    text = str(value)
+    return (
+        text.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+    )
+
+
+def emit_line(**fields):
+    print("|".join("%s=%s" % (key, line_value(value))
+                   for key, value in fields.items()))
+
+
+def descriptor_filter_text(row):
+    return " ".join(str(row.get(key) or "") for key in (
+        "name", "short_name", "long_name", "edf_label", "edf_unit",
+    ))
+
+
+def parse_text_id_arg(value):
+    return parse_numeric_arg(value, "text id")
+
+
+def resolve_var_arg(fw, ident):
+    vid = fw._resolve_var_ident(ident)
+    if vid is None:
+        raise ValueError(
+            "could not resolve %r to a var_id; use a numeric id, long name, "
+            "3-char tag, or underscored short name" % ident)
+    return vid
+
+
+def add_command_parsers(subparsers):
+    subparsers.add_parser("info", help="show firmware summary and array sizes")
+
+    p = subparsers.add_parser(
+        "var",
+        help="show one variable descriptor by id, long name, or short tag",
+    )
+    p.add_argument("ident", help="var_id, long name, tag, or _TAG")
+    p.add_argument("--verbose", action="store_true", help="show multi-line details")
+
+    p = subparsers.add_parser("mode", help="show settings associated with a therapy mode")
+    p.add_argument("mode", type=parse_mode_arg,
+                   help="mode index 0..10, decimal or explicit hex")
+
+    p = subparsers.add_parser("globals", help="list globals[] values")
+
+    subparsers.add_parser("conf-layout", help="list CONF layout inferred from globals[]")
+
+    p = subparsers.add_parser("vars", help="list variables")
+    p.add_argument(
+        "--array",
+        choices=("all", "g1", "g2", "g3", "g5", "g10"),
+        default="all",
+        help="descriptor array to list; default scans g1/g2/g3/g5",
+    )
+    p.add_argument("--active", action="store_true", help="only active records")
+    p.add_argument("--inactive", action="store_true", help="only inactive records")
+    p.add_argument("--name", help="case-insensitive regex over resolved names")
+    p.add_argument("--verbose", action="store_true", help="show multi-line details")
+
+    p = subparsers.add_parser("var-options", help="show enum option slots for a g5 variable")
+    p.add_argument("ident", help="var_id, long name, tag, or _TAG")
+    p.add_argument("--verbose", action="store_true", help="show multi-line enum details")
+
+    p = subparsers.add_parser("edf-str", help="list STR.edf SummaryRecord rows")
+    p.add_argument("--all", action="store_true", help="include inactive STR rows")
+    p.add_argument("--inactive", action="store_true", help="only inactive records")
+    p.add_argument("--name", help="case-insensitive regex over resolved names")
+    p.add_argument("--verbose", action="store_true", help="show multi-line details")
+
+    p = subparsers.add_parser("edf-streams", help="list globals[16] EDF stream signal tables")
+    p.add_argument("stream", nargs="*", help="optional stream tag filter, e.g. BRP PLD")
+    p.add_argument("--verbose", action="store_true", help="show stream headers")
+
+    p = subparsers.add_parser("events", help="list globals[12] event definitions")
+    p.add_argument("filter", nargs="*", help="optional code/name substring filter")
+    p.add_argument("--verbose", action="store_true", help="show multi-line details")
+
+    p = subparsers.add_parser("event-routes", help="list globals[13] event route triples")
+    p.add_argument("filter", nargs="*", help="optional code/name substring filter")
+
+    p = subparsers.add_parser("event-labels", help="list globals[17] event label tables")
+    p.add_argument("table", nargs="*", help="optional table tag filter, e.g. EVE CSL")
+
+    p = subparsers.add_parser("collections", help="list globals[14] collection tables")
+    p.add_argument("collection", nargs="*", help="optional collection tag filter, e.g. NRF APD")
+    p.add_argument("--verbose", action="store_true", help="include collection rows")
+
+    p = subparsers.add_parser("storage-sets", help="list globals[6] persisted setting sets")
+    p.add_argument("set", nargs="*", help="optional set tag filter, e.g. HST BGL")
+    p.add_argument("--names-only", action="store_true")
+
+    p = subparsers.add_parser("text", help="decode one localized GUI text id")
+    p.add_argument("text_id", type=parse_text_id_arg,
+                   help="GUI text id, decimal or explicit hex")
+    p.add_argument("--lang", type=parse_lang_arg, default=0,
+                   help="language index or code, e.g. en, de, pl")
+
+    p = subparsers.add_parser("text-search", help="search localized GUI text strings")
+    p.add_argument("query", nargs="+")
+    p.add_argument("--lang", type=parse_lang_arg, default=0, help="language index or code")
+
+
+def build_command_parser(prog="as11"):
+    parser = argparse.ArgumentParser(prog=prog)
+    subparsers = parser.add_subparsers(dest="command")
+    add_command_parsers(subparsers)
+    return parser
+
+
+def build_main_parser():
+    parser = argparse.ArgumentParser(
+        description="Air11 CONF block navigator",
+    )
+    parser.add_argument("firmware", help="firmware image")
+    parser.add_argument(
+        "-i", "--interactive",
+        action="store_true",
+        help="start interactive descriptor shell",
+    )
+    subparsers = parser.add_subparsers(dest="command")
+    add_command_parsers(subparsers)
+    return parser
+
+
+def run_command(fw, args):
+    command = args.command or "info"
+    if command == "info":
+        fw.cmd_info()
+    elif command == "var":
+        fw.cmd_var(resolve_var_arg(fw, args.ident), args.verbose)
+    elif command == "globals":
+        fw.cmd_globals()
+    elif command == "conf-layout":
+        fw.cmd_conf_layout()
+    elif command == "vars":
+        if args.active and args.inactive:
+            raise ValueError("--active and --inactive are mutually exclusive")
+        fw.cmd_vars(args.array, args.active, args.inactive, args.name,
+                    args.verbose)
+    elif command == "mode":
+        fw.cmd_mode(args.mode)
+    elif command == "var-options":
+        fw.cmd_var_options(args.ident, args.verbose)
+    elif command == "edf-str":
+        if args.all and args.inactive:
+            raise ValueError("--all and --inactive are mutually exclusive")
+        fw.cmd_edf_str(args.all, args.inactive, args.name, args.verbose)
+    elif command == "edf-streams":
+        fw.cmd_edf_streams(args.stream, args.verbose)
+    elif command == "events":
+        fw.cmd_events(args.filter, args.verbose)
+    elif command == "event-routes":
+        fw.cmd_event_routes(args.filter)
+    elif command == "event-labels":
+        fw.cmd_event_labels(args.table)
+    elif command == "collections":
+        fw.cmd_collections(args.collection, args.verbose)
+    elif command == "storage-sets":
+        fw.cmd_storage_sets(args.set, args.names_only)
+    elif command == "text":
+        fw.cmd_text(args.text_id, args.lang)
+    elif command == "text-search":
+        fw.cmd_text_search(" ".join(args.query), args.lang)
+    else:
+        raise ValueError(f"unknown command: {command}")
+
+
+def run_repl(fw):
+    parser = build_command_parser()
+    print()
+    print("  AS11 Descriptor Navigator")
+    print("  " + "-" * 40)
+    fw.cmd_info()
+    print()
+    print('  Type "help" for commands, "quit" to exit.')
+    print()
+
+    while True:
+        try:
+            line = input("as11> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not line:
+            continue
+        if line.lower() in ("quit", "exit", "q"):
+            break
+        if line.lower() == "help":
+            parser.print_help()
+            print()
+            continue
+        if line.lower().startswith("help "):
+            parts = shlex.split(line)
+            if len(parts) == 2:
+                try:
+                    parser.parse_args([parts[1], "--help"])
+                except SystemExit:
+                    pass
+                print()
+                continue
+        try:
+            parts = shlex.split(line)
+            args = parser.parse_args(parts)
+            run_command(fw, args)
+        except SystemExit:
+            pass
+        except Exception as exc:
+            print(f"  Error: {exc}")
+        print()
+
+
+def main():
+    parser = build_main_parser()
+    try:
+        args = parser.parse_args()
+        fw = AS11Firmware(args.firmware)
+        if args.interactive:
+            if args.command is not None:
+                raise ValueError("--interactive cannot be combined with a subcommand")
+            run_repl(fw)
+        else:
+            run_command(fw, args)
+        return 0
+    except BrokenPipeError:
+        return 0
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
