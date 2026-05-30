@@ -122,8 +122,8 @@ as11_config.py -d ble:as11 spool --list-types
 as11_config.py -d ble:as11 spool --probe --from-dt 2026-04-29T00:00:00.000Z
 ```
 
-Spool types, payload families, wire fields, and inner record shapes are
-listed in [AS11 RPC Spool Reference](../as11/rpc_spools.md).
+Spool types, payload families, and inner record shapes are listed in
+[AS11 RPC Spool Reference](../as11/rpc_spools.md).
 
 The tool builds the `spoolAddress` as:
 
@@ -132,11 +132,9 @@ The tool builds the `spoolAddress` as:
 ```
 
 `--probe` runs one non-following spool round per selected type and prints a
-compact status table. Each populated row's outer protobuf field is checked
-against the registry's `wire_field`. Use `--only populated` to hide empty
-rows. Spools with a `gate_var` (currently only `RecordedSound`) are
-pre-checked and reported as `GATED` without a round-trip when the gate is
-closed.
+compact status table. Use `--only populated` to hide empty rows. Spools with
+a `gate_var` (currently only `RecordedSound`) are pre-checked and reported as
+`GATED` without a round-trip when the gate is closed.
 
 The confirmed spool-address selector is `fromDateTime`. The returned
 `nextSpoolAddress` uses the same shape and is followed automatically unless
@@ -193,8 +191,7 @@ inspect the generic protobuf wire structure.
 ### decode
 
 Decode a previously captured spool payload offline, without contacting the
-device. The spool type is inferred from the outer protobuf field number
-unless `--type` is given.
+device. Pass `--type` when the payload type is known.
 
 ```
 as11_config.py decode summary.bin

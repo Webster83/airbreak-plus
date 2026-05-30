@@ -300,7 +300,7 @@ SPOOL_REGISTRY: dict[str, dict] = {
         "group": "therapy data",
         "format": "event protobuf",
         "family": "event",
-        "wire_field": None,
+        "wire_field": 4,
     },
     "TherapyOneMinutePeriodic": {
         "group": "therapy data",
@@ -470,7 +470,7 @@ SPOOL_REGISTRY: dict[str, dict] = {
         "group": "diagnostic blobs",
         "format": "diagnostic acoustic blob",
         "family": "diag_blob",
-        "wire_field": None,
+        "wire_field": 24,
     },
     "RecordedSound": {
         "group": "diagnostic blobs",
