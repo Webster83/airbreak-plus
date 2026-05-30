@@ -13,6 +13,7 @@ caveat are described in
   - [Full enumeration](#full-enumeration)
 - [Inner record shapes](#inner-record-shapes)
   - [Event records](#event-records)
+  - [TherapyOneMinutePeriodic records](#therapyoneminuteperiodic-records)
   - [RC03 archived-signal records](#rc03-archived-signal-records)
 
 ## Spool registry
@@ -93,6 +94,42 @@ Most event spool records use the same inner record shape:
 The outer field number and wrapper depth vary by spool family, so the host
 tool unwraps repeated field-1 event records conservatively and keeps unknown
 event codes numeric unless a label table has been verified.
+
+### TherapyOneMinutePeriodic records
+
+`TherapyOneMinutePeriodic` uses outer protobuf field `5`. Each outer record
+contains one or more per-signal messages, plus field `15`, which has been
+observed as the sample interval in minutes.
+
+Each per-signal message has this shape:
+
+| Field | Meaning |
+|-------|---------|
+| `1` | status/kind marker, observed as `1` |
+| `2` | start timestamp, UTC milliseconds |
+| `3` | sample block |
+
+The sample block is an int16 series. Fields `1..7` and `21` are headerless
+second-difference/Rice streams using the same reconstruction formula as RC03.
+Fields `8` and `9`, when present, are raw little-endian int16 arrays.
+
+Decoded fields:
+
+| Field | Name | CSV column | Scale |
+|-------|------|------------|-------|
+| `1` | Leak | `leak_l_min` | `raw * 1.2` L/min |
+| `2` | InspiratoryPressure | `insp_pressure_cmH2O` | `raw / 5` cmH2O |
+| `3` | ExpiratoryPressure | `exp_pressure_cmH2O` | `raw / 5` cmH2O |
+| `4` | MinuteVentilation | `minute_vent_l_min` | `raw / 8` L/min |
+| `5` | InspiratoryDuration | `insp_duration_s` | `raw / 50` seconds |
+| `6` | RespiratoryRate | `resp_rate_bpm` | `raw` bpm |
+| `7` | IeRatio | `ie_ratio_pct` | `raw * 4` percent |
+| `8` | SpO2 | `spo2_pct` | `raw` percent |
+| `9` | HeartRate | `heart_rate_bpm` | `raw` bpm |
+| `21` | MIS | `mis` | `raw / 50`; exact meaning unresolved |
+
+The field mapping and scales are verified against `Summary` percentile
+records and observed oximetry samples.
 
 ### RC03 archived-signal records
 

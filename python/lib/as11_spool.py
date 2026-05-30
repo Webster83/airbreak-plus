@@ -223,6 +223,14 @@ def spool_payload_shape(data: bytes) -> str:
 
 
 SPOOL_LEGENDS: dict[str, dict] = {
+    "UsageEvents-TherapyStatusEvents": {
+        "event_types": {
+            1: "NoUsage", 2: "MaskOff", 3: "MaskOn", 4: "PowerOff",
+            5: "MaskFitStart", 6: "MaskFitStop",
+            7: "TherapyStart", 8: "TherapyStop",
+            9: "LearnTargetsStart", 10: "LearnTargetsStop",
+        },
+    },
     "TherapyEvents-RespiratoryEvents": {
         "event_types": {
             2: "Hypopnea", 3: "CentralApnea", 4: "ObstructiveApnea",
@@ -246,6 +254,234 @@ EVENT_SPOOL_TYPES: set[str] = {
     name for name, info in SPOOL_REGISTRY.items()
     if info["family"] == "event"
 }
+
+
+THERAPY_1MINUTE_FIELDS: dict[int, dict] = {
+    # The payload carries per-field int16 series. Fields 1..7 are compressed
+    # with the same second-difference/Rice scheme used by RC03, but without an
+    # explicit header. Fields 8/9 are raw packed int16 when oximetry exists.
+    1:  {"name": "Leak", "column": "leak_l_min", "unit": "L/min",
+         "scale": 60.0 / 50.0, "rice_m": 4},
+    2:  {"name": "InspiratoryPressure", "column": "insp_pressure_cmH2O",
+         "unit": "cmH2O", "scale": 1.0 / 5.0, "rice_m": 4},
+    3:  {"name": "ExpiratoryPressure", "column": "exp_pressure_cmH2O",
+         "unit": "cmH2O", "scale": 1.0 / 5.0, "rice_m": 2},
+    4:  {"name": "MinuteVentilation", "column": "minute_vent_l_min",
+         "unit": "L/min", "scale": 1.0 / 8.0, "rice_m": 8},
+    5:  {"name": "InspiratoryDuration", "column": "insp_duration_s",
+         "unit": "s", "scale": 1.0 / 50.0, "rice_m": 4},
+    6:  {"name": "RespiratoryRate", "column": "resp_rate_bpm",
+         "unit": "bpm", "scale": 1.0, "rice_m": 4},
+    7:  {"name": "IeRatio", "column": "ie_ratio_pct",
+         "unit": "%", "scale": 4.0, "rice_m": 4},
+    8:  {"name": "SpO2", "column": "spo2_pct",
+         "unit": "%", "scale": 1.0, "rice_m": None},
+    9:  {"name": "HeartRate", "column": "heart_rate_bpm",
+         "unit": "bpm", "scale": 1.0, "rice_m": None},
+    21: {"name": "MIS", "column": "mis",
+         "unit": "raw/50", "scale": 1.0 / 50.0, "rice_m": 4},
+}
+
+
+def _therapy_1minute_decode_values(blob: bytes, rice_m: int | None) -> list[int]:
+    """Decode one TherapyOneMinutePeriodic int16 series."""
+    if rice_m is None or len(blob) <= 4:
+        return [
+            int.from_bytes(blob[off:off + 2], "little", signed=True)
+            for off in range(0, len(blob) - 1, 2)
+        ]
+
+    values = [
+        int.from_bytes(blob[0:2], "little", signed=True),
+        int.from_bytes(blob[2:4], "little", signed=True),
+    ]
+    bits = _rc03_bits(blob[4:])
+    while True:
+        try:
+            encoded = _rc03_read_rice(bits, rice_m)
+        except StopIteration:
+            break
+        delta2 = _zigzag_decode(encoded)
+        values.append(2 * values[-1] - values[-2] + delta2)
+    return values
+
+
+def _therapy_1minute_signal(data: bytes, field: int) -> dict:
+    spec = THERAPY_1MINUTE_FIELDS[field]
+    status = None
+    start_ms = None
+    blob = None
+    extras = []
+    for sf, sw, sv in proto_decode(data):
+        if sf == 1 and sw == 0:
+            status = sv
+        elif sf == 2 and sw == 0:
+            start_ms = sv
+        elif sf == 3 and sw == 2:
+            blob = sv
+        else:
+            extras.append((sf, sw, sv))
+
+    if blob is None:
+        raise ValueError("missing sample blob")
+    raw = _therapy_1minute_decode_values(blob, spec["rice_m"])
+    scale = float(spec["scale"])
+    values = [v * scale for v in raw]
+    return {
+        "field": field,
+        "spec": spec,
+        "status": status,
+        "start_ms": start_ms,
+        "blob": blob,
+        "raw": raw,
+        "values": values,
+        "extras": extras,
+    }
+
+
+def _therapy_1minute_interval_ms(token: int | None) -> int:
+    if token is None:
+        return 60000
+    if token < 1000:
+        return token * 60000
+    return token
+
+
+def _therapy_1minute_records(data: bytes) -> list[bytes]:
+    top = proto_decode(data)
+    if top and all(field == 5 and wire == 2 for field, wire, _value in top):
+        return [value for _field, _wire, value in top]
+    return [data]
+
+
+def _fmt_number(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.8g}"
+    return str(value)
+
+
+def therapy_one_minute_pretty(spool_type: str, data: bytes, out=None,
+                              *, samples: bool = False,
+                              details: bool = False) -> bool:
+    """Print TherapyOneMinutePeriodic records as ranges or CSV samples."""
+    if out is None:
+        out = sys.stdout
+    if spool_type != "TherapyOneMinutePeriodic":
+        return False
+
+    try:
+        records = _therapy_1minute_records(data)
+    except (ValueError, IndexError) as exc:
+        print(f"# cannot decode TherapyOneMinutePeriodic protobuf: {exc}",
+              file=out)
+        return True
+
+    columns = [
+        THERAPY_1MINUTE_FIELDS[field]["column"]
+        for field in sorted(THERAPY_1MINUTE_FIELDS)
+    ]
+    if samples:
+        raw_columns = []
+        if details:
+            raw_columns = [
+                "raw_" + THERAPY_1MINUTE_FIELDS[field]["column"]
+                for field in sorted(THERAPY_1MINUTE_FIELDS)
+            ]
+        print(",".join(
+            ["record", "index", "time_ms", "time_utc"] + columns + raw_columns
+        ), file=out)
+    else:
+        print("# TherapyOneMinutePeriodic spool", file=out)
+        print("# field 3 sample blocks are headerless int16 delta2/Rice series",
+              file=out)
+
+    for record_index, record in enumerate(records):
+        try:
+            fields = proto_decode(record)
+        except (ValueError, IndexError) as exc:
+            print(f"record {record_index}: invalid protobuf: {exc}", file=out)
+            continue
+
+        interval_token = None
+        signals = {}
+        extras = []
+        for field, wire, value in fields:
+            if field == 15 and wire == 0:
+                interval_token = value
+            elif field in THERAPY_1MINUTE_FIELDS and wire == 2:
+                try:
+                    signals[field] = _therapy_1minute_signal(value, field)
+                except (ValueError, IndexError) as exc:
+                    extras.append((field, f"decode_error={exc}"))
+            else:
+                extras.append((field, _PROTO_WIRE.get(wire, wire)))
+
+        interval_ms = _therapy_1minute_interval_ms(interval_token)
+        starts = [
+            sig["start_ms"] for sig in signals.values()
+            if sig["start_ms"] is not None
+        ]
+        start_ms = min(starts) if starts else None
+        sample_count = max((len(sig["values"]) for sig in signals.values()),
+                           default=0)
+
+        if samples:
+            for sample_index in range(sample_count):
+                ts = ""
+                ts_utc = ""
+                if start_ms is not None:
+                    ts = str(start_ms + sample_index * interval_ms)
+                    ts_utc = _fmt_utc_ms(int(ts))
+                values = []
+                raw_values = []
+                for field in sorted(THERAPY_1MINUTE_FIELDS):
+                    sig = signals.get(field)
+                    if sig is None or sample_index >= len(sig["values"]):
+                        values.append("")
+                        raw_values.append("")
+                    else:
+                        values.append(_fmt_number(sig["values"][sample_index]))
+                        raw_values.append(str(sig["raw"][sample_index]))
+                row = [str(record_index), str(sample_index), ts, ts_utc] + values
+                if details:
+                    row += raw_values
+                print(",".join(row), file=out)
+            continue
+
+        signal_names = ",".join(
+            THERAPY_1MINUTE_FIELDS[field]["name"]
+            for field in sorted(signals)
+        )
+        print(f"record {record_index}: start={start_ms} "
+              f"[{_fmt_utc_ms(start_ms) if start_ms is not None else ''}] "
+              f"interval_ms={interval_ms} samples={sample_count} "
+              f"signals={signal_names}", file=out)
+        for field in sorted(signals):
+            sig = signals[field]
+            spec = sig["spec"]
+            raw = sig["raw"]
+            values = sig["values"]
+            if not raw:
+                print(f"  {spec['name']}: samples=0", file=out)
+                continue
+            detail = ""
+            if details:
+                detail = (f" status={sig['status']} "
+                          f"blob_bytes={len(sig['blob'])}")
+            print(
+                f"  {spec['name']}: samples={len(values)} unit={spec['unit']} "
+                f"raw_min={min(raw)} raw_max={max(raw)} "
+                f"value_min={min(values):.8g} value_max={max(values):.8g}"
+                f"{detail}",
+                file=out,
+            )
+        if extras:
+            print("  extras=" + ",".join(f"f{field}:{note}"
+                                         for field, note in extras),
+                  file=out)
+    return True
 
 
 def _fmt_utc_ms(value: int) -> str:
@@ -898,6 +1134,6 @@ __all__ = [
     "proto_decode", "proto_pretty",
     "summary_pretty",
     "spool_payload_shape", "spool_payload_first_field", "detect_spool_type",
-    "rc03_spool_pretty", "event_spool_pretty",
+    "rc03_spool_pretty", "therapy_one_minute_pretty", "event_spool_pretty",
     "print_spool_legend", "print_spool_summary", "spool_walk_events",
 ]
