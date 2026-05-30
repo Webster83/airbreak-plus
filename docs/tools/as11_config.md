@@ -110,6 +110,8 @@ Download spool data, optionally decode it on the host.
 ```
 as11_config.py -d ble:as11 spool Summary
 as11_config.py -d ble:as11 spool TherapyEvents-RespiratoryEvents --decode
+as11_config.py -d ble:as11 spool SettingProfilesCollection --decode
+as11_config.py -d ble:as11 spool ConfigurationProfilesCollection --decode
 as11_config.py -d ble:as11 spool RespiratoryFlow6p25Hz --decode --samples
 as11_config.py -d ble:as11 spool TherapyOneMinutePeriodic --decode --samples
 as11_config.py -d ble:as11 spool Summary --from-dt 2026-01-01T00:00:00.000Z -o summary.bin
@@ -141,6 +143,14 @@ For archived signal spools such as `RespiratoryFlow6p25Hz`, `--decode`
 prints record metadata and decoded RC03 ranges. Add `--samples` to print the
 decoded samples as CSV with `record,index,time_ms,value_raw,value` columns.
 
+For `SettingProfilesCollection`, `--decode` prints historical therapy and
+feature profile snapshots. Pressures and time values are scaled into human
+units. Enum-like settings are left as `Raw` values until their labels are
+verified.
+
+For `ConfigurationProfilesCollection`, `--decode` prints the configuration
+attributes and `DataDeliveryControlV2` spool on/off mask.
+
 For `TherapyOneMinutePeriodic`, `--decode` prints record ranges for the
 one-minute therapy measurements. Add `--samples` to print dashboard-friendly
 CSV rows with pressure, leak, ventilation, respiratory rate, I:E ratio, and
@@ -171,6 +181,7 @@ unless `--type` is given.
 as11_config.py decode summary.bin
 as11_config.py decode --type Summary summary.bin
 as11_config.py decode --details summary.bin
+as11_config.py decode --type SettingProfilesCollection settings.bin
 as11_config.py decode --samples respflow.bin
 as11_config.py decode --type TherapyOneMinutePeriodic --samples therapy-1min.bin
 as11_config.py decode --raw-proto unknown.bin

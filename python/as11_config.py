@@ -68,6 +68,7 @@ from as11_spool import (  # noqa: E402
     proto_pretty, summary_pretty,
     print_spool_legend, print_spool_summary,
     spool_payload_first_field, detect_spool_type,
+    setting_profiles_pretty, configuration_profiles_pretty,
     rc03_spool_pretty, therapy_one_minute_pretty, event_spool_pretty,
 )
 
@@ -677,6 +678,10 @@ def decode_spool_payload(spool_type: str, data: bytes, *,
     if raw_proto:
         proto_pretty(data)
     elif rc03_spool_pretty(spool_type, data, samples=samples):
+        pass
+    elif setting_profiles_pretty(spool_type, data, details=details):
+        pass
+    elif configuration_profiles_pretty(spool_type, data, details=details):
         pass
     elif therapy_one_minute_pretty(spool_type, data,
                                    samples=samples, details=details):

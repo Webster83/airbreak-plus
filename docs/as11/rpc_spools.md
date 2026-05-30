@@ -12,6 +12,7 @@ caveat are described in
   - [Families](#families)
   - [Full enumeration](#full-enumeration)
 - [Inner record shapes](#inner-record-shapes)
+  - [Profile collection records](#profile-collection-records)
   - [Event records](#event-records)
   - [TherapyOneMinutePeriodic records](#therapyoneminuteperiodic-records)
   - [RC03 archived-signal records](#rc03-archived-signal-records)
@@ -79,6 +80,30 @@ All 33 spool types accepted by `StartSpool` on the 15.8.4.0 firmware. The wire f
 <!-- spool-registry: end -->
 
 ## Inner record shapes
+
+### Profile collection records
+
+`SettingProfilesCollection` uses outer protobuf field `3`. Each record
+contains:
+
+| Field | Meaning |
+|-------|---------|
+| `1` | attributes: applied timestamp, source, transaction id |
+| `2` | stored-data-delivery selector list |
+| `3` | therapy profile snapshots |
+| `4` | feature profile snapshots |
+
+The host decoder names the known therapy profile subrecords
+(`CpapProfile`, `AutoSetProfile`, `VAutoProfile`, `ASVProfile`, etc.) and
+feature profile subrecords (`EprFeature`, `AutoRampFeature`, `ClimateFeature`,
+`DisplayFeature`, etc.). Numeric pressure and time fields are scaled to human
+units. Enum-like fields are printed with `Raw` suffix until all option labels
+are verified.
+
+`ConfigurationProfilesCollection` uses outer protobuf field `23`. Each record
+contains attributes plus `DataDeliveryControlV2`, whose fields map to spool
+families such as `Summary`, `TherapyOneMinutePeriodic`, `RespiratoryFlow6p25Hz`,
+and `CellularDataUsage`.
 
 ### Event records
 

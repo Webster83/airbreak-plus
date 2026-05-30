@@ -256,6 +256,210 @@ EVENT_SPOOL_TYPES: set[str] = {
 }
 
 
+DATA_DELIVERY_FIELDS: dict[int, str] = {
+    1: "ConfigurationProfilesCollection",
+    2: "SettingProfilesCollection",
+    3: "TherapyOneMinutePeriodic",
+    4: "MachineMetrics",
+    5: "UsageEvents",
+    6: "TherapyEvents",
+    7: "SystemExceptionEvents",
+    8: "SystemActivityEvents",
+    9: "DiagnosticExceptionEvents",
+    10: "Summary",
+    12: "CellularActivityEvents",
+    13: "GUIActivityEvents",
+    14: "SurveyEvents",
+    15: "SoundcheckVector",
+    16: "MemoryMetrics",
+    17: "DiagnosticTenMinutePeriodic",
+    18: "RespiratoryFlow6p25Hz",
+    19: "MaskPressure6p25Hz",
+    20: "Leak0p5Hz",
+    21: "InspiratoryPressure0p5Hz",
+    22: "CellularDataUsage",
+    23: "AcousticSignatureV2",
+    24: "alarmEvents",
+    25: "alarmDiagnosticEvents",
+    26: "atmosphericPressure10min",
+}
+
+THERAPY_PROFILE_FIELDS: dict[int, tuple[str, tuple[tuple[int, str, str], ...]]] = {
+    1: ("AutoSetProfile", (
+        (1, "TherapyModeRaw", "raw"),
+        (2, "StartPressure", "pressure"),
+        (3, "MinPressure", "pressure"),
+        (4, "MaxPressure", "pressure"),
+    )),
+    2: ("AutoSetForHerProfile", (
+        (1, "TherapyModeRaw", "raw"),
+        (2, "StartPressure", "pressure"),
+        (3, "MinPressure", "pressure"),
+        (4, "MaxPressure", "pressure"),
+    )),
+    3: ("CpapProfile", (
+        (1, "TherapyModeRaw", "raw"),
+        (2, "SetPressure", "pressure"),
+        (3, "StartPressure", "pressure"),
+        (4, "TriggerSensitivityRaw", "raw"),
+    )),
+    4: ("SpontProfile", (
+        (1, "TherapyModeRaw", "raw"),
+        (2, "StartPressure", "pressure"),
+        (3, "TargetInspiratoryPressure", "pressure"),
+        (4, "TargetExpiratoryPressure", "pressure"),
+        (5, "EasyBreatheEnableRaw", "raw"),
+        (6, "RespiratoryRateEnableRaw", "raw"),
+        (8, "SetMaxInspiratoryTime", "seconds"),
+        (9, "SetMinInspiratoryTime", "seconds"),
+        (10, "RiseTimeEnableRaw", "raw"),
+        (11, "RiseTime", "milliseconds"),
+        (12, "TriggerSensitivityRaw", "raw"),
+        (13, "CycleSensitivityRaw", "raw"),
+        (14, "FallTimeEnableRaw", "raw"),
+        (15, "FallTime", "milliseconds"),
+    )),
+    5: ("STProfile", (
+        (1, "TherapyModeRaw", "raw"),
+        (2, "StartPressure", "pressure"),
+        (3, "TargetInspiratoryPressure", "pressure"),
+        (4, "TargetExpiratoryPressure", "pressure"),
+        (6, "SetRespiratoryRate", "bpm_scaled"),
+        (7, "SetMaxInspiratoryTime", "seconds"),
+        (8, "SetMinInspiratoryTime", "seconds"),
+        (9, "RiseTimeEnableRaw", "raw"),
+        (10, "RiseTime", "milliseconds"),
+        (11, "TriggerSensitivityRaw", "raw"),
+        (12, "CycleSensitivityRaw", "raw"),
+        (13, "IntelligentBackupRateEnableRaw", "raw"),
+        (14, "TargetRespiratoryRate", "bpm_scaled"),
+        (15, "FallTimeEnableRaw", "raw"),
+        (16, "FallTime", "milliseconds"),
+    )),
+    6: ("TimedProfile", (
+        (1, "TherapyModeRaw", "raw"),
+        (2, "StartPressure", "pressure"),
+        (3, "TargetInspiratoryPressure", "pressure"),
+        (4, "TargetExpiratoryPressure", "pressure"),
+        (6, "SetRespiratoryRate", "bpm_scaled"),
+        (7, "SetInspiratoryTime", "seconds"),
+        (8, "RiseTimeEnableRaw", "raw"),
+        (9, "RiseTime", "milliseconds"),
+    )),
+    7: ("ASVProfile", (
+        (1, "TherapyModeRaw", "raw"),
+        (2, "StartPressure", "pressure"),
+        (3, "TargetExpiratoryPressure", "pressure"),
+        (4, "MaxPressureSupport", "pressure"),
+        (5, "MinPressureSupport", "pressure"),
+    )),
+    8: ("ASVAutoProfile", (
+        (1, "TherapyModeRaw", "raw"),
+        (2, "StartPressure", "pressure"),
+        (3, "MaxExpiratoryPressure", "pressure"),
+        (4, "MinExpiratoryPressure", "pressure"),
+        (5, "MaxPressureSupport", "pressure"),
+        (6, "MinPressureSupport", "pressure"),
+    )),
+    9: ("VAutoProfile", (
+        (1, "TherapyModeRaw", "raw"),
+        (2, "StartPressure", "pressure"),
+        (3, "MaxInspiratoryPressure", "pressure"),
+        (4, "MinExpiratoryPressure", "pressure"),
+        (5, "SetPressureSupport", "pressure"),
+        (6, "SetMaxInspiratoryTime", "seconds"),
+        (7, "SetMinInspiratoryTime", "seconds"),
+        (8, "TriggerSensitivityRaw", "raw"),
+        (9, "CycleSensitivityRaw", "raw"),
+    )),
+}
+
+FEATURE_PROFILE_FIELDS: dict[int, tuple[str, tuple[tuple[int, str, str], ...]]] = {
+    1: ("ComfortFeature", (
+        (1, "AutoSetComfortRaw", "raw"),
+    )),
+    2: ("EprFeature", (
+        (1, "EprEnablePatientAccessRaw", "raw"),
+        (2, "EprEnableRaw", "raw"),
+        (3, "EprTypeRaw", "raw"),
+        (4, "EprPressure", "pressure"),
+    )),
+    3: ("AutoRampFeature", (
+        (1, "RampEnableRaw", "raw"),
+        (2, "RampTime", "minutes_scaled"),
+        (3, "RampEnablePatientAccessRaw", "raw"),
+    )),
+    4: ("SmartStartStopFeature", (
+        (1, "SmartStartRaw", "raw"),
+        (2, "SmartStopRaw", "raw"),
+    )),
+    5: ("CircuitFeature", (
+        (1, "MaskTypeRaw", "raw"),
+        (2, "TubeTypeRaw", "raw"),
+        (3, "AntiBacterialFilterRaw", "raw"),
+    )),
+    6: ("ClimateFeature", (
+        (1, "ClimateControlRaw", "raw"),
+        (2, "HumidifierSettingEnableRaw", "raw"),
+        (3, "HumidifierLevel", "raw"),
+        (4, "HeatedTubeSettingEnableRaw", "raw"),
+        (5, "HeatedTubeTemperature", "celsius"),
+        (6, "ExternalHumidifierRaw", "raw"),
+    )),
+    7: ("LanguageFeature", (
+        (1, "LanguageRaw", "raw"),
+        (2, "LanguageConfiguration", "raw"),
+        (3, "LanguageSelectionRaw", "raw"),
+    )),
+    8: ("UserSolutionFeature", (
+        (1, "SurveyPersonaliseRaw", "raw"),
+    )),
+    9: ("TemperatureFeature", (
+        (1, "TemperatureUnitRaw", "raw"),
+    )),
+    10: ("CareCheckFeature", (
+        (1, "CareCheckToggleRaw", "raw"),
+        (2, "CareCheckInAvailableRaw", "raw"),
+    )),
+    11: ("TimeZoneFeature", (
+        (1, "TimeZoneOffsetMin", "raw"),
+    )),
+    12: ("DeviceHealthFeature", (
+        (1, "SoundcheckFeatureToggleRaw", "raw"),
+        (2, "SoundcheckRunFrequencyRaw", "raw"),
+    )),
+    13: ("PatientViewFeature", (
+        (1, "DisplayAHIRaw", "raw"),
+        (2, "PatientViewRaw", "raw"),
+    )),
+    15: ("DisplayFeature", (
+        (1, "TotalUsedHoursDisplayToggleRaw", "raw"),
+        (2, "SplashScreenDisplaySelectionRaw", "raw"),
+        (3, "CycleDisplayFormatRaw", "raw"),
+        (4, "CareCheckInAvailableRaw", "raw"),
+        (5, "MyAirScreensRaw", "raw"),
+        (6, "ClinicalConfirmationRaw", "raw"),
+        (7, "DynamicMessageToggleRaw", "raw"),
+    )),
+    16: ("ConfirmStopFeature", (
+        (1, "ConfirmStopEnableRaw", "raw"),
+    )),
+    17: ("TherapyLEDFeature", (
+        (1, "TherapyLEDAlwaysOnRaw", "raw"),
+    )),
+    20: ("MaskSenseFeature", (
+        (1, "MaskSenseToggleRaw", "raw"),
+    )),
+}
+
+REMINDER_FIELDS: dict[int, str] = {
+    1: "ReminderMask",
+    2: "ReminderTubing",
+    3: "ReminderFilter",
+    4: "ReminderHumidifier",
+}
+
+
 THERAPY_1MINUTE_FIELDS: dict[int, dict] = {
     # The payload carries per-field int16 series. Fields 1..7 are compressed
     # with the same second-difference/Rice scheme used by RC03, but without an
@@ -360,6 +564,281 @@ def _fmt_number(value) -> str:
     if isinstance(value, float):
         return f"{value:.8g}"
     return str(value)
+
+
+def _format_profile_value(value: int, kind: str) -> str:
+    if kind == "pressure":
+        return f"{value / 100.0:.8g} cmH2O"
+    if kind == "seconds":
+        return f"{value / 1000.0:.8g} s"
+    if kind == "milliseconds":
+        return f"{value} ms"
+    if kind == "minutes_scaled":
+        return f"{value / 100.0:.8g} min"
+    if kind == "celsius":
+        return f"{value / 100.0:.8g} C"
+    if kind == "bpm_scaled":
+        return f"{value / 100.0:.8g} bpm"
+    return str(value)
+
+
+def _decode_varint_message(data: bytes) -> dict[int, list[int]]:
+    out: dict[int, list[int]] = {}
+    for field, wire, value in proto_decode(data):
+        if wire == 0:
+            out.setdefault(field, []).append(value)
+    return out
+
+
+def _format_named_message(data: bytes,
+                          defs: tuple[tuple[int, str, str], ...],
+                          *, details: bool = False) -> str:
+    values = _decode_varint_message(data)
+    parts = []
+    used = set()
+    for field, name, kind in defs:
+        if field not in values:
+            continue
+        used.add(field)
+        if len(values[field]) == 1:
+            value = _format_profile_value(values[field][0], kind)
+        else:
+            value = "[" + ",".join(
+                _format_profile_value(item, kind) for item in values[field]
+            ) + "]"
+        parts.append(f"{name}={value}")
+    if details:
+        for field in sorted(set(values) - used):
+            raw = ",".join(str(item) for item in values[field])
+            parts.append(f"f{field}={raw}")
+    return " ".join(parts)
+
+
+def _profile_attr(data: bytes) -> tuple[int | None, str, int | None, list[str]]:
+    applied_ms = None
+    source = ""
+    transaction = None
+    extras = []
+    for field, wire, value in proto_decode(data):
+        if field == 1 and wire == 0:
+            applied_ms = value
+        elif field in (2, 3) and wire == 2:
+            if value:
+                try:
+                    source = value.decode("utf-8")
+                except UnicodeDecodeError:
+                    source = value.hex()
+        elif field in (3, 4) and wire == 0:
+            transaction = value
+        else:
+            extras.append(f"f{field}/{_PROTO_WIRE.get(wire, wire)}")
+    return applied_ms, source, transaction, extras
+
+
+def _setting_profile_records(data: bytes) -> list[bytes]:
+    top = proto_decode(data)
+    if top and all(field == 3 and wire == 2 for field, wire, _value in top):
+        return [value for _field, _wire, value in top]
+    return [data]
+
+
+def _config_profile_records(data: bytes) -> list[bytes]:
+    top = proto_decode(data)
+    if top and all(field == 23 and wire == 2 for field, wire, _value in top):
+        return [value for _field, _wire, value in top]
+    return [data]
+
+
+def _delivery_status(value: int) -> str:
+    if value == 1:
+        return "Off"
+    if value == 2:
+        return "On"
+    return str(value)
+
+
+def _print_setting_delivery(data: bytes, out, *, details: bool) -> None:
+    status = None
+    enabled = []
+    extras = []
+    for field, wire, value in proto_decode(data):
+        if field == 1 and wire == 0:
+            status = value
+        elif field == 2 and wire == 0:
+            enabled.append(value)
+        else:
+            extras.append(f"f{field}/{_PROTO_WIRE.get(wire, wire)}")
+    names = [
+        DATA_DELIVERY_FIELDS.get(item, f"id{item}") for item in enabled
+    ]
+    status_text = f" status={status}" if status is not None else ""
+    print(f"  StoredDataDeliveryControl:{status_text} "
+          f"enabled={','.join(names)}", file=out)
+    if details and extras:
+        print(f"    extras={','.join(extras)}", file=out)
+
+
+def _print_therapy_profiles(data: bytes, out, *, details: bool) -> None:
+    print("  TherapyProfiles:", file=out)
+    for field, wire, value in proto_decode(data):
+        if wire != 2:
+            if details:
+                print(f"    f{field}/{_PROTO_WIRE.get(wire, wire)}", file=out)
+            continue
+        name, defs = THERAPY_PROFILE_FIELDS.get(
+            field, (f"TherapyProfile{field}", ())
+        )
+        body = _format_named_message(value, defs, details=details or not defs)
+        print(f"    {name}: {body}", file=out)
+
+
+def _print_reminders(data: bytes, out, *, details: bool) -> None:
+    for field, wire, value in proto_decode(data):
+        name = REMINDER_FIELDS.get(field, f"Reminder{field}")
+        if wire != 2:
+            if details:
+                print(f"      {name}: f{field}/{_PROTO_WIRE.get(wire, wire)}",
+                      file=out)
+            continue
+        values = _decode_varint_message(value)
+        parts = []
+        if 1 in values:
+            parts.append(f"EnableRaw={values[1][0]}")
+        if 2 in values:
+            parts.append(f"StartDateTime={_fmt_utc_ms(values[2][0])}")
+        if 3 in values:
+            parts.append(f"PeriodRaw={values[3][0]}")
+        if details:
+            for extra in sorted(set(values) - {1, 2, 3}):
+                raw = ",".join(str(v) for v in values[extra])
+                parts.append(f"f{extra}={raw}")
+        print(f"      {name}: {' '.join(parts)}", file=out)
+
+
+def _print_feature_profiles(data: bytes, out, *, details: bool) -> None:
+    print("  FeatureProfiles:", file=out)
+    for field, wire, value in proto_decode(data):
+        if field == 14 and wire == 2:
+            print("    ReminderFeature:", file=out)
+            _print_reminders(value, out, details=details)
+            continue
+        if wire != 2:
+            if details:
+                print(f"    f{field}/{_PROTO_WIRE.get(wire, wire)}", file=out)
+            continue
+        name, defs = FEATURE_PROFILE_FIELDS.get(
+            field, (f"FeatureProfile{field}", ())
+        )
+        body = _format_named_message(value, defs, details=details or not defs)
+        print(f"    {name}: {body}", file=out)
+
+
+def setting_profiles_pretty(spool_type: str, data: bytes, out=None,
+                            *, details: bool = False) -> bool:
+    """Print SettingProfilesCollection records."""
+    if out is None:
+        out = sys.stdout
+    if spool_type != "SettingProfilesCollection":
+        return False
+    try:
+        records = _setting_profile_records(data)
+    except (ValueError, IndexError) as exc:
+        print(f"# cannot decode SettingProfilesCollection protobuf: {exc}",
+              file=out)
+        return True
+
+    print("# SettingProfilesCollection spool", file=out)
+    for record_index, record in enumerate(records):
+        try:
+            fields = proto_decode(record)
+        except (ValueError, IndexError) as exc:
+            print(f"record {record_index}: invalid protobuf: {exc}", file=out)
+            continue
+        print(f"record {record_index}:", file=out)
+        for field, wire, value in fields:
+            if field == 1 and wire == 2:
+                applied, source, transaction, extras = _profile_attr(value)
+                source_part = f" source={source!r}" if source else ""
+                tx_part = (f" transaction={transaction}"
+                           if transaction is not None else "")
+                print(f"  Attributes: AppliedDateTime={_fmt_utc_ms(applied)}"
+                      f"{source_part}{tx_part}", file=out)
+                if details and extras:
+                    print(f"    extras={','.join(extras)}", file=out)
+            elif field == 2 and wire == 2:
+                _print_setting_delivery(value, out, details=details)
+            elif field == 3 and wire == 2:
+                _print_therapy_profiles(value, out, details=details)
+            elif field == 4 and wire == 2:
+                _print_feature_profiles(value, out, details=details)
+            elif details:
+                print(f"  f{field}/{_PROTO_WIRE.get(wire, wire)}", file=out)
+    return True
+
+
+def _print_data_delivery_control(data: bytes, out, *, details: bool) -> None:
+    values = _decode_varint_message(data)
+    parts = []
+    for field in sorted(values):
+        name = DATA_DELIVERY_FIELDS.get(field, f"id{field}")
+        if len(values[field]) == 1:
+            parts.append(f"{name}={_delivery_status(values[field][0])}")
+        else:
+            raw = ",".join(_delivery_status(item) for item in values[field])
+            parts.append(f"{name}=[{raw}]")
+    line = "    "
+    for item in parts:
+        if len(line) + len(item) > 100:
+            print(line.rstrip(), file=out)
+            line = "    "
+        line += item + "  "
+    if line.strip():
+        print(line.rstrip(), file=out)
+    if details:
+        missing = sorted(set(DATA_DELIVERY_FIELDS) - set(values))
+        if missing:
+            names = ",".join(DATA_DELIVERY_FIELDS[item] for item in missing)
+            print(f"    absent={names}", file=out)
+
+
+def configuration_profiles_pretty(spool_type: str, data: bytes, out=None,
+                                  *, details: bool = False) -> bool:
+    """Print ConfigurationProfilesCollection records."""
+    if out is None:
+        out = sys.stdout
+    if spool_type != "ConfigurationProfilesCollection":
+        return False
+    try:
+        records = _config_profile_records(data)
+    except (ValueError, IndexError) as exc:
+        print(f"# cannot decode ConfigurationProfilesCollection protobuf: {exc}",
+              file=out)
+        return True
+
+    print("# ConfigurationProfilesCollection spool", file=out)
+    for record_index, record in enumerate(records):
+        try:
+            fields = proto_decode(record)
+        except (ValueError, IndexError) as exc:
+            print(f"record {record_index}: invalid protobuf: {exc}", file=out)
+            continue
+        print(f"record {record_index}:", file=out)
+        for field, wire, value in fields:
+            if field == 1 and wire == 2:
+                applied, source, transaction, extras = _profile_attr(value)
+                source_part = f" source={source!r}" if source else ""
+                tx_part = (f" transaction={transaction}"
+                           if transaction is not None else "")
+                print(f"  Attributes: AppliedDateTime={_fmt_utc_ms(applied)}"
+                      f"{source_part}{tx_part}", file=out)
+                if details and extras:
+                    print(f"    extras={','.join(extras)}", file=out)
+            elif field == 2 and wire == 2:
+                print("  DataDeliveryControlV2:", file=out)
+                _print_data_delivery_control(value, out, details=details)
+            elif details:
+                print(f"  f{field}/{_PROTO_WIRE.get(wire, wire)}", file=out)
+    return True
 
 
 def therapy_one_minute_pretty(spool_type: str, data: bytes, out=None,
@@ -488,7 +967,7 @@ def _fmt_utc_ms(value: int) -> str:
     from datetime import datetime, timezone
     try:
         return datetime.fromtimestamp(value / 1000, timezone.utc).isoformat()
-    except (OverflowError, OSError, ValueError):
+    except (OverflowError, OSError, TypeError, ValueError):
         return str(value)
 
 
@@ -1134,6 +1613,7 @@ __all__ = [
     "proto_decode", "proto_pretty",
     "summary_pretty",
     "spool_payload_shape", "spool_payload_first_field", "detect_spool_type",
+    "setting_profiles_pretty", "configuration_profiles_pretty",
     "rc03_spool_pretty", "therapy_one_minute_pretty", "event_spool_pretty",
     "print_spool_legend", "print_spool_summary", "spool_walk_events",
 ]
