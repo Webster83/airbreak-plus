@@ -69,6 +69,8 @@ from as11_spool import (  # noqa: E402
     print_spool_legend, print_spool_summary,
     spool_payload_first_field, detect_spool_type,
     setting_profiles_pretty, configuration_profiles_pretty,
+    metric_spool_pretty, periodic_compressed_pretty,
+    soundcheck_vector_pretty, diagnostic_blob_pretty, audio_spool_pretty,
     rc03_spool_pretty, therapy_one_minute_pretty, event_spool_pretty,
 )
 
@@ -686,6 +688,18 @@ def decode_spool_payload(spool_type: str, data: bytes, *,
     elif therapy_one_minute_pretty(spool_type, data,
                                    samples=samples, details=details):
         pass
+    elif periodic_compressed_pretty(spool_type, data,
+                                    samples=samples, details=details):
+        pass
+    elif metric_spool_pretty(spool_type, data, details=details):
+        pass
+    elif soundcheck_vector_pretty(spool_type, data,
+                                  samples=samples, details=details):
+        pass
+    elif diagnostic_blob_pretty(spool_type, data, details=details):
+        pass
+    elif audio_spool_pretty(spool_type, data, details=details):
+        pass
     elif spool_type == "Summary":
         summary_pretty(data, details=details)
     elif event_spool_pretty(spool_type, data):
@@ -710,10 +724,17 @@ def cmd_decode(args: argparse.Namespace) -> int:
             data = f.read()
     except OSError as exc:
         raise SystemExit(f"decode: cannot read {args.file}: {exc}")
-    if not data:
-        raise SystemExit(f"decode: {args.file} is empty")
-
     spool_type = args.type
+    if not data:
+        if spool_type is None:
+            raise SystemExit(f"decode: {args.file} is empty")
+        decode_spool_payload(
+            spool_type, data,
+            samples=args.samples, details=args.details,
+            raw_proto=args.raw_proto,
+        )
+        return 0
+
     if spool_type is None:
         best, candidates = detect_spool_type(data)
         if best is None:

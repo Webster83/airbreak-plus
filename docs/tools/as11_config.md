@@ -114,6 +114,9 @@ as11_config.py -d ble:as11 spool SettingProfilesCollection --decode
 as11_config.py -d ble:as11 spool ConfigurationProfilesCollection --decode
 as11_config.py -d ble:as11 spool RespiratoryFlow6p25Hz --decode --samples
 as11_config.py -d ble:as11 spool TherapyOneMinutePeriodic --decode --samples
+as11_config.py -d ble:as11 spool DiagnosticTenMinutePeriodic --decode --samples
+as11_config.py -d ble:as11 spool MachineMetrics --decode
+as11_config.py -d ble:as11 spool SoundcheckVector --decode
 as11_config.py -d ble:as11 spool Summary --from-dt 2026-01-01T00:00:00.000Z -o summary.bin
 as11_config.py -d ble:as11 spool --list-types
 as11_config.py -d ble:as11 spool --probe --from-dt 2026-04-29T00:00:00.000Z
@@ -156,6 +159,22 @@ one-minute therapy measurements. Add `--samples` to print dashboard-friendly
 CSV rows with pressure, leak, ventilation, respiratory rate, I:E ratio, and
 oximetry columns when oximetry is present.
 
+For metric snapshots (`MachineMetrics`, `MemoryMetrics`,
+`CellularDataUsage`), `--decode` prints named current snapshot fields where
+known. `MemoryMetrics` is decoded structurally; the memory pool and three
+metric values are shown without overclaiming their exact units.
+
+For `DiagnosticTenMinutePeriodic`, `--decode` prints ten-minute cellular
+diagnostic signal ranges. Add `--samples` to print CSV samples for signal
+strength and signal-quality streams.
+
+For `SoundcheckVector`, `--decode` prints soundcheck vector bins and peak
+pairs. Add `--samples` for CSV rows.
+
+`AcousticSignatureV2` and `RecordedSound` use conservative byte/blob
+decoders because populated samples have not yet been verified. `RecordedSound`
+is gated by `SoundDownloadAllowed`.
+
 For event spools, `--decode` prints a TSV table with event type, start/end
 timestamps, duration, and any extra fields. Event type names are shown only
 where the mapping is known; otherwise the numeric type is left as-is.
@@ -184,6 +203,7 @@ as11_config.py decode --details summary.bin
 as11_config.py decode --type SettingProfilesCollection settings.bin
 as11_config.py decode --samples respflow.bin
 as11_config.py decode --type TherapyOneMinutePeriodic --samples therapy-1min.bin
+as11_config.py decode --type DiagnosticTenMinutePeriodic --samples diag10.bin
 as11_config.py decode --raw-proto unknown.bin
 ```
 

@@ -15,7 +15,11 @@ caveat are described in
   - [Profile collection records](#profile-collection-records)
   - [Event records](#event-records)
   - [TherapyOneMinutePeriodic records](#therapyoneminuteperiodic-records)
+  - [Metric snapshot records](#metric-snapshot-records)
+  - [DiagnosticTenMinutePeriodic records](#diagnostictenminuteperiodic-records)
   - [RC03 archived-signal records](#rc03-archived-signal-records)
+  - [SoundcheckVector records](#soundcheckvector-records)
+  - [Blob and audio records](#blob-and-audio-records)
 
 ## Spool registry
 
@@ -39,43 +43,43 @@ caveat are described in
 
 ### Full enumeration
 
-All 33 spool types accepted by `StartSpool` on the 15.8.4.0 firmware. The wire field column is the outer protobuf field number observed on a populated spool, or `--` when the spool has not yet been seen with data on a test device.
+Known spool types accepted by `StartSpool`
 
-| Spool type | Family | Wire field | Gate | Group |
-|------------|--------|------------|------|-------|
-| `Summary` | `summary` | f2 | -- | session/profile data |
-| `SettingProfilesCollection` | `profile` | f3 | -- | session/profile data |
-| `ConfigurationProfilesCollection` | `config` | f23 | -- | session/profile data |
-| `UsageEvents-TherapyStatusEvents` | `event` | f6 | -- | therapy data |
-| `TherapyEvents-RespiratoryEvents` | `event` | -- | -- | therapy data |
-| `TherapyOneMinutePeriodic` | `periodic` | f5 | -- | therapy data |
-| `SystemActivityEvents-FrequentActivityEvents` | `event` | f10 | -- | system and diagnostic events |
-| `SystemActivityEvents-SporadicActivityEvents` | `event` | f10 | -- | system and diagnostic events |
-| `SystemExceptionEvents-SystemErrors` | `event` | -- | -- | system and diagnostic events |
-| `SystemExceptionEvents-RecoverableErrors` | `event` | f7 | -- | system and diagnostic events |
-| `SystemExceptionEvents-HumidifierErrors` | `event` | -- | -- | system and diagnostic events |
-| `SystemExceptionEvents-HeatedTubeErrors` | `event` | -- | -- | system and diagnostic events |
-| `DiagnosticExceptionEvents-AppErrors` | `event` | f9 | -- | system and diagnostic events |
-| `DiagnosticExceptionEvents-FatalErrors` | `event` | -- | -- | system and diagnostic events |
-| `DiagnosticExceptionEvents-ResettableErrors` | `event` | -- | -- | system and diagnostic events |
-| `DiagnosticExceptionEvents-AlarmAppErrors` | `event` | -- | -- | system and diagnostic events |
-| `GUIActivityEvents` | `event` | f13 | -- | system and diagnostic events |
-| `SurveyEvents` | `event` | -- | -- | system and diagnostic events |
-| `alarmEvents` | `event` | -- | -- | system and diagnostic events |
-| `alarmDiagnosticEvents` | `event` | -- | -- | system and diagnostic events |
-| `DiagnosticTenMinutePeriodic` | `periodic_compressed` | f17 | -- | periodic metrics |
-| `MachineMetrics` | `metric` | f8 | -- | periodic metrics |
-| `MemoryMetrics` | `metric` | f16 | -- | periodic metrics |
-| `CellularActivityEvents` | `event` | f12 | -- | periodic metrics |
-| `CellularDataUsage` | `metric` | f22 | -- | periodic metrics |
-| `atmosphericPressure10min` | `periodic_compressed` | -- | -- | archived signals |
-| `RespiratoryFlow6p25Hz` | `rc03` | f18 | -- | archived signals |
-| `MaskPressure6p25Hz` | `rc03` | f19 | -- | archived signals |
-| `InspiratoryPressure0p5Hz` | `rc03` | f21 | -- | archived signals |
-| `Leak0p5Hz` | `rc03` | f20 | -- | archived signals |
-| `SoundcheckVector` | `diag_vector` | f15 | -- | diagnostic blobs |
-| `AcousticSignatureV2` | `diag_blob` | -- | -- | diagnostic blobs |
-| `RecordedSound` | `audio` | -- | `SoundDownloadAllowed` | diagnostic blobs |
+| Spool type | Family | Gate | Group |
+|------------|--------|------|-------|
+| `Summary` | `summary` | -- | session/profile data |
+| `SettingProfilesCollection` | `profile` | -- | session/profile data |
+| `ConfigurationProfilesCollection` | `config` | -- | session/profile data |
+| `UsageEvents-TherapyStatusEvents` | `event` | -- | therapy data |
+| `TherapyEvents-RespiratoryEvents` | `event` | -- | therapy data |
+| `TherapyOneMinutePeriodic` | `periodic` | -- | therapy data |
+| `SystemActivityEvents-FrequentActivityEvents` | `event` | -- | system and diagnostic events |
+| `SystemActivityEvents-SporadicActivityEvents` | `event` | -- | system and diagnostic events |
+| `SystemExceptionEvents-SystemErrors` | `event` | -- | system and diagnostic events |
+| `SystemExceptionEvents-RecoverableErrors` | `event` | -- | system and diagnostic events |
+| `SystemExceptionEvents-HumidifierErrors` | `event` | -- | system and diagnostic events |
+| `SystemExceptionEvents-HeatedTubeErrors` | `event` | -- | system and diagnostic events |
+| `DiagnosticExceptionEvents-AppErrors` | `event` | -- | system and diagnostic events |
+| `DiagnosticExceptionEvents-FatalErrors` | `event` | -- | system and diagnostic events |
+| `DiagnosticExceptionEvents-ResettableErrors` | `event` | -- | system and diagnostic events |
+| `DiagnosticExceptionEvents-AlarmAppErrors` | `event` | -- | system and diagnostic events |
+| `GUIActivityEvents` | `event` | -- | system and diagnostic events |
+| `SurveyEvents` | `event` | -- | system and diagnostic events |
+| `alarmEvents` | `event` | -- | system and diagnostic events |
+| `alarmDiagnosticEvents` | `event` | -- | system and diagnostic events |
+| `DiagnosticTenMinutePeriodic` | `periodic_compressed` | -- | periodic metrics |
+| `MachineMetrics` | `metric` | -- | periodic metrics |
+| `MemoryMetrics` | `metric` | -- | periodic metrics |
+| `CellularActivityEvents` | `event` | -- | periodic metrics |
+| `CellularDataUsage` | `metric` | -- | periodic metrics |
+| `atmosphericPressure10min` | `periodic_compressed` | -- | archived signals |
+| `RespiratoryFlow6p25Hz` | `rc03` | -- | archived signals |
+| `MaskPressure6p25Hz` | `rc03` | -- | archived signals |
+| `InspiratoryPressure0p5Hz` | `rc03` | -- | archived signals |
+| `Leak0p5Hz` | `rc03` | -- | archived signals |
+| `SoundcheckVector` | `diag_vector` | -- | diagnostic blobs |
+| `AcousticSignatureV2` | `diag_blob` | -- | diagnostic blobs |
+| `RecordedSound` | `audio` | `SoundDownloadAllowed` | diagnostic blobs |
 
 <!-- spool-registry: end -->
 
@@ -83,8 +87,7 @@ All 33 spool types accepted by `StartSpool` on the 15.8.4.0 firmware. The wire f
 
 ### Profile collection records
 
-`SettingProfilesCollection` uses outer protobuf field `3`. Each record
-contains:
+`SettingProfilesCollection` contains:
 
 | Field | Meaning |
 |-------|---------|
@@ -100,10 +103,10 @@ feature profile subrecords (`EprFeature`, `AutoRampFeature`, `ClimateFeature`,
 units. Enum-like fields are printed with `Raw` suffix until all option labels
 are verified.
 
-`ConfigurationProfilesCollection` uses outer protobuf field `23`. Each record
-contains attributes plus `DataDeliveryControlV2`, whose fields map to spool
-families such as `Summary`, `TherapyOneMinutePeriodic`, `RespiratoryFlow6p25Hz`,
-and `CellularDataUsage`.
+`ConfigurationProfilesCollection` contains attributes plus
+`DataDeliveryControlV2`, whose fields map to spool families such as
+`Summary`, `TherapyOneMinutePeriodic`, `RespiratoryFlow6p25Hz`, and
+`CellularDataUsage`.
 
 ### Event records
 
@@ -116,15 +119,14 @@ Most event spool records use the same inner record shape:
 | `3` | end timestamp, UTC milliseconds |
 | `4` | duration in milliseconds, when present |
 
-The outer field number and wrapper depth vary by spool family, so the host
-tool unwraps repeated field-1 event records conservatively and keeps unknown
-event codes numeric unless a label table has been verified.
+The wrapper depth varies by spool family, so the host tool unwraps event
+records conservatively and keeps unknown event codes numeric unless a label
+table has been verified.
 
 ### TherapyOneMinutePeriodic records
 
-`TherapyOneMinutePeriodic` uses outer protobuf field `5`. Each outer record
-contains one or more per-signal messages, plus field `15`, which has been
-observed as the sample interval in minutes.
+`TherapyOneMinutePeriodic` records contain one or more per-signal messages,
+plus field `15`, which has been observed as the sample interval in minutes.
 
 Each per-signal message has this shape:
 
@@ -156,6 +158,66 @@ Decoded fields:
 The field mapping and scales are verified against `Summary` percentile
 records and observed oximetry samples.
 
+### Metric snapshot records
+
+`MachineMetrics` contains one current snapshot:
+
+| Field | Meaning |
+|-------|---------|
+| `1` | origin enum, observed `1` |
+| `2` | attributes; subfield `1` is report timestamp |
+| `3` | `LastTherapyUseDateTime` |
+| `4` | `LastEraseDataDateTime` |
+| `5` | `TherapyRunMeter`, milliseconds |
+| `6` | `MotorRunMeter`, milliseconds |
+| `7` | `MotorRunSinceLastServiceMeter`, milliseconds |
+| `8` | `MachineRunMeter`, milliseconds |
+| `9` | `LastMachineServiceDateTime` |
+
+`CellularDataUsage` contains one current snapshot:
+
+| Field | Meaning |
+|-------|---------|
+| `1` | origin enum, observed `1` |
+| `2` | attributes; subfield `1` is report timestamp |
+| `3` | `ApplicationTotalUpload`, bytes |
+| `4` | `ApplicationTotalDownload`, bytes |
+
+`MemoryMetrics` field `1` is attributes with report timestamp. Field `2`
+repeats one memory metric record. The subrecord fields are fully decoded
+structurally, but only the first field is named semantically:
+
+| Subfield | Meaning |
+|----------|---------|
+| `1` | memory pool/type enum |
+| `2` | metric value A |
+| `3` | metric value B |
+| `4` | metric value C |
+
+### DiagnosticTenMinutePeriodic records
+
+`DiagnosticTenMinutePeriodic` records have field `1` origin/kind and one or
+more signal subrecords. Each signal subrecord contains:
+
+| Field | Meaning |
+|-------|---------|
+| `1` | sample interval, minutes |
+| `2` | start timestamp, UTC milliseconds |
+| `3` | headerless signed int16 second-difference/Rice sample block |
+
+Observed signal fields:
+
+| Field | Name |
+|-------|------|
+| `2` | `CellularSignalStrength` |
+| `3` | `CellularSignalQuality2G` |
+| `4` | `CellularSignalQuality3G` |
+| `5` | `CellularSignalQualityLTE` |
+
+The archived data captured so far contains signal fields `2` and `5`.
+`atmosphericPressure10min` is accepted by the device but has not produced a
+populated payload on the test device yet.
+
 ### RC03 archived-signal records
 
 The RC03 signal records are protobuf wrappers around a compressed sample
@@ -181,3 +243,27 @@ sample[n] = 2 * sample[n - 1] - sample[n - 2] + delta2[n]
 On currently decoded archived signal blocks, parameter 4 is the Rice modulus
 and parameter 1 gives the scale exponent. The host tool uses
 `value = raw * (2 * 10 ** param1)`.
+
+### SoundcheckVector records
+
+`SoundcheckVector` records contain:
+
+| Field | Meaning |
+|-------|---------|
+| `1` | report timestamp, UTC milliseconds |
+| `2` | sample rate, observed `18750` Hz |
+| `3` | repeated vector/bin value |
+| `4` | repeated peak-pair wrapper |
+
+Each field-4 peak wrapper repeats field `1` messages. The inner peak
+message has subfield `1` and subfield `2`; observed values look like
+frequency/bin and amplitude/score pairs, but the exact units are not yet
+proven.
+
+### Blob and audio records
+
+`AcousticSignatureV2` and `RecordedSound` have conservative decoders. Empty
+payloads are reported as empty. Populated payloads are summarized by byte
+length and leading hex bytes, with `--details` enabling a generic protobuf
+walk where the payload is protobuf-like. `RecordedSound` also reports
+`RIFF/WAVE` if that header is present.

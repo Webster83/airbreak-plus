@@ -255,6 +255,16 @@ EVENT_SPOOL_TYPES: set[str] = {
     if info["family"] == "event"
 }
 
+METRIC_SPOOL_TYPES: set[str] = {
+    name for name, info in SPOOL_REGISTRY.items()
+    if info["family"] == "metric"
+}
+
+PERIODIC_COMPRESSED_SPOOL_TYPES: set[str] = {
+    name for name, info in SPOOL_REGISTRY.items()
+    if info["family"] == "periodic_compressed"
+}
+
 
 DATA_DELIVERY_FIELDS: dict[int, str] = {
     1: "ConfigurationProfilesCollection",
@@ -486,6 +496,50 @@ THERAPY_1MINUTE_FIELDS: dict[int, dict] = {
          "unit": "raw/50", "scale": 1.0 / 50.0, "rice_m": 4},
 }
 
+METRIC_SPOOL_DEFS: dict[str, dict] = {
+    "MachineMetrics": {
+        "wire_field": 8,
+        "fields": {
+            1: ("OriginRaw", "raw"),
+            2: ("Attributes", "attributes"),
+            3: ("LastTherapyUseDateTime", "timestamp"),
+            4: ("LastEraseDataDateTime", "timestamp"),
+            5: ("TherapyRunMeter", "duration_ms"),
+            6: ("MotorRunMeter", "duration_ms"),
+            7: ("MotorRunSinceLastServiceMeter", "duration_ms"),
+            8: ("MachineRunMeter", "duration_ms"),
+            9: ("LastMachineServiceDateTime", "timestamp"),
+        },
+    },
+    "CellularDataUsage": {
+        "wire_field": 22,
+        "fields": {
+            1: ("OriginRaw", "raw"),
+            2: ("Attributes", "attributes"),
+            3: ("ApplicationTotalUpload", "bytes"),
+            4: ("ApplicationTotalDownload", "bytes"),
+        },
+    },
+}
+
+MEMORY_METRIC_FIELDS: dict[int, str] = {
+    1: "MemoryPoolRaw",
+    2: "MetricA",
+    3: "MetricB",
+    4: "MetricC",
+}
+
+DIAG_10MIN_FIELDS: dict[int, dict] = {
+    2: {"name": "CellularSignalStrength", "column": "signal_strength",
+        "rice_m": 4, "scale": 1.0},
+    3: {"name": "CellularSignalQuality2G", "column": "signal_quality_2g",
+        "rice_m": 2, "scale": 1.0},
+    4: {"name": "CellularSignalQuality3G", "column": "signal_quality_3g",
+        "rice_m": 2, "scale": 1.0},
+    5: {"name": "CellularSignalQualityLTE", "column": "signal_quality_lte",
+        "rice_m": 2, "scale": 1.0},
+}
+
 
 def _therapy_1minute_decode_values(blob: bytes, rice_m: int | None) -> list[int]:
     """Decode one TherapyOneMinutePeriodic int16 series."""
@@ -566,6 +620,12 @@ def _fmt_number(value) -> str:
     return str(value)
 
 
+def _fmt_duration_ms(value: int) -> str:
+    if value % 1000 == 0:
+        return f"{value // 1000}s"
+    return f"{value}ms"
+
+
 def _format_profile_value(value: int, kind: str) -> str:
     if kind == "pressure":
         return f"{value / 100.0:.8g} cmH2O"
@@ -579,6 +639,16 @@ def _format_profile_value(value: int, kind: str) -> str:
         return f"{value / 100.0:.8g} C"
     if kind == "bpm_scaled":
         return f"{value / 100.0:.8g} bpm"
+    return str(value)
+
+
+def _format_metric_value(value: int, kind: str) -> str:
+    if kind == "timestamp":
+        return _fmt_utc_ms(value)
+    if kind == "duration_ms":
+        return _fmt_duration_ms(value)
+    if kind == "bytes":
+        return f"{value} B"
     return str(value)
 
 
@@ -645,6 +715,20 @@ def _setting_profile_records(data: bytes) -> list[bytes]:
 def _config_profile_records(data: bytes) -> list[bytes]:
     top = proto_decode(data)
     if top and all(field == 23 and wire == 2 for field, wire, _value in top):
+        return [value for _field, _wire, value in top]
+    return [data]
+
+
+def _wrapped_records(data: bytes, expected_field: int | None) -> list[bytes]:
+    top = proto_decode(data)
+    if not top:
+        return []
+    if expected_field is not None:
+        if all(field == expected_field and wire == 2
+               for field, wire, _value in top):
+            return [value for _field, _wire, value in top]
+        return [data]
+    if all(wire == 2 for _field, wire, _value in top):
         return [value for _field, _wire, value in top]
     return [data]
 
@@ -841,6 +925,88 @@ def configuration_profiles_pretty(spool_type: str, data: bytes, out=None,
     return True
 
 
+def _format_attr_message(data: bytes) -> str:
+    fields = []
+    for field, wire, value in proto_decode(data):
+        if field == 1 and wire == 0:
+            fields.append(f"ReportDateTime={_fmt_utc_ms(value)}")
+        elif wire == 0:
+            fields.append(f"f{field}={value}")
+        elif wire == 2:
+            fields.append(f"f{field}=bytes:{len(value)}")
+        else:
+            fields.append(f"f{field}/{_PROTO_WIRE.get(wire, wire)}={value}")
+    return " ".join(fields)
+
+
+def _metric_record_pretty(spool_type: str, record: bytes, out,
+                          *, details: bool) -> None:
+    spec = METRIC_SPOOL_DEFS[spool_type]
+    field_defs = spec["fields"]
+    for field, wire, value in proto_decode(record):
+        label, kind = field_defs.get(field, (f"f{field}", "raw"))
+        if kind == "attributes" and wire == 2:
+            print(f"  {label}: {_format_attr_message(value)}", file=out)
+        elif wire == 0:
+            print(f"  {label}: {_format_metric_value(value, kind)}", file=out)
+        elif details and wire == 2:
+            print(f"  {label}: bytes={len(value)}", file=out)
+        elif details:
+            print(f"  {label}: {_PROTO_WIRE.get(wire, wire)}={value}",
+                  file=out)
+
+
+def _memory_metrics_pretty(record: bytes, out, *, details: bool) -> None:
+    for field, wire, value in proto_decode(record):
+        if field == 1 and wire == 2:
+            print(f"  Attributes: {_format_attr_message(value)}", file=out)
+            continue
+        if field == 2 and wire == 2:
+            values = _decode_varint_message(value)
+            parts = []
+            for subfield in sorted(values):
+                name = MEMORY_METRIC_FIELDS.get(subfield, f"f{subfield}")
+                raw = ",".join(str(item) for item in values[subfield])
+                parts.append(f"{name}={raw}")
+            print("  MemoryMetric: " + " ".join(parts), file=out)
+            continue
+        if details:
+            print(f"  f{field}/{_PROTO_WIRE.get(wire, wire)}", file=out)
+
+
+def metric_spool_pretty(spool_type: str, data: bytes, out=None,
+                        *, details: bool = False) -> bool:
+    """Print metric snapshot spools."""
+    if out is None:
+        out = sys.stdout
+    if spool_type not in METRIC_SPOOL_TYPES:
+        return False
+    if not data:
+        print(f"# {spool_type} spool is empty", file=out)
+        return True
+
+    if spool_type == "MemoryMetrics":
+        expected_field = 16
+    else:
+        expected_field = METRIC_SPOOL_DEFS.get(spool_type, {}).get("wire_field")
+    try:
+        records = _wrapped_records(data, expected_field)
+    except (ValueError, IndexError) as exc:
+        print(f"# cannot decode {spool_type} protobuf: {exc}", file=out)
+        return True
+
+    print(f"# {spool_type} metric spool", file=out)
+    for record_index, record in enumerate(records):
+        print(f"record {record_index}:", file=out)
+        if spool_type == "MemoryMetrics":
+            _memory_metrics_pretty(record, out, details=details)
+        elif spool_type in METRIC_SPOOL_DEFS:
+            _metric_record_pretty(spool_type, record, out, details=details)
+        else:
+            proto_pretty(record, indent=1, out=out)
+    return True
+
+
 def therapy_one_minute_pretty(spool_type: str, data: bytes, out=None,
                               *, samples: bool = False,
                               details: bool = False) -> bool:
@@ -960,6 +1126,138 @@ def therapy_one_minute_pretty(spool_type: str, data: bytes, out=None,
             print("  extras=" + ",".join(f"f{field}:{note}"
                                          for field, note in extras),
                   file=out)
+    return True
+
+
+def _periodic_compressed_interval_ms(token: int | None) -> int:
+    if token is None:
+        return 600000
+    if token < 1000:
+        return token * 60000
+    return token
+
+
+def _periodic_compressed_signal(field: int, data: bytes) -> dict:
+    spec = DIAG_10MIN_FIELDS.get(field, {
+        "name": f"Signal{field}",
+        "column": f"signal_{field}",
+        "rice_m": 4,
+        "scale": 1.0,
+    })
+    interval = None
+    start_ms = None
+    blob = None
+    extras = []
+    for sf, sw, sv in proto_decode(data):
+        if sf == 1 and sw == 0:
+            interval = sv
+        elif sf == 2 and sw == 0:
+            start_ms = sv
+        elif sf == 3 and sw == 2:
+            blob = sv
+        else:
+            extras.append((sf, sw, sv))
+    if blob is None:
+        raise ValueError("missing sample blob")
+    raw = _therapy_1minute_decode_values(blob, spec["rice_m"])
+    scale = float(spec["scale"])
+    return {
+        "field": field,
+        "spec": spec,
+        "interval_ms": _periodic_compressed_interval_ms(interval),
+        "start_ms": start_ms,
+        "blob": blob,
+        "raw": raw,
+        "values": [v * scale for v in raw],
+        "extras": extras,
+    }
+
+
+def periodic_compressed_pretty(spool_type: str, data: bytes, out=None,
+                               *, samples: bool = False,
+                               details: bool = False) -> bool:
+    """Print DiagnosticTenMinutePeriodic/related compressed series."""
+    if out is None:
+        out = sys.stdout
+    if spool_type not in PERIODIC_COMPRESSED_SPOOL_TYPES:
+        return False
+    if not data:
+        print(f"# {spool_type} spool is empty", file=out)
+        return True
+
+    expected = SPOOL_REGISTRY.get(spool_type, {}).get("wire_field")
+    try:
+        records = _wrapped_records(data, expected)
+    except (ValueError, IndexError) as exc:
+        print(f"# cannot decode {spool_type} protobuf: {exc}", file=out)
+        return True
+
+    if samples:
+        print("record,signal,index,time_ms,time_utc,value_raw,value", file=out)
+    else:
+        print(f"# {spool_type} compressed periodic spool", file=out)
+        print("# field 1 = origin/kind, signal fields carry interval, "
+              "start timestamp, and a headerless int16 delta2/Rice block",
+              file=out)
+
+    for record_index, record in enumerate(records):
+        try:
+            fields = proto_decode(record)
+        except (ValueError, IndexError) as exc:
+            if not samples:
+                print(f"record {record_index}: invalid protobuf: {exc}",
+                      file=out)
+            continue
+        origin = None
+        signals = []
+        extras = []
+        for field, wire, value in fields:
+            if field == 1 and wire == 0:
+                origin = value
+            elif wire == 2:
+                try:
+                    signals.append(_periodic_compressed_signal(field, value))
+                except (ValueError, IndexError) as exc:
+                    extras.append(f"f{field}:decode_error={exc}")
+            else:
+                extras.append(f"f{field}/{_PROTO_WIRE.get(wire, wire)}")
+
+        if samples:
+            for sig in signals:
+                name = sig["spec"]["name"]
+                for sample_index, (raw, physical) in enumerate(
+                        zip(sig["raw"], sig["values"])):
+                    ts = ""
+                    ts_utc = ""
+                    if sig["start_ms"] is not None:
+                        ts = str(sig["start_ms"]
+                                 + sample_index * sig["interval_ms"])
+                        ts_utc = _fmt_utc_ms(int(ts))
+                    print(f"{record_index},{name},{sample_index},{ts},"
+                          f"{ts_utc},{raw},{_fmt_number(physical)}",
+                          file=out)
+            continue
+
+        print(f"record {record_index}: origin={origin} "
+              f"signals={len(signals)}", file=out)
+        for sig in signals:
+            values = sig["values"]
+            raw = sig["raw"]
+            name = sig["spec"]["name"]
+            start = sig["start_ms"]
+            start_text = _fmt_utc_ms(start) if start is not None else "n/a"
+            print(f"  {name}: start={start_text} "
+                  f"interval_ms={sig['interval_ms']} samples={len(values)} "
+                  f"raw_min={min(raw)} raw_max={max(raw)} "
+                  f"value_min={_fmt_number(min(values))} "
+                  f"value_max={_fmt_number(max(values))}",
+                  file=out)
+            print(f"    first_values={_rc03_preview(values[:8])}", file=out)
+            print(f"    last_values={_rc03_preview(values[-8:])}", file=out)
+            if details and sig["extras"]:
+                print(f"    extras={sig['extras']}", file=out)
+        if details and extras:
+            print(f"  extras={extras}", file=out)
     return True
 
 
@@ -1162,6 +1460,145 @@ def rc03_spool_pretty(spool_type: str, data: bytes, out=None,
               file=out)
         print(f"  first_values={_rc03_preview(physical[:8])}", file=out)
         print(f"  last_values={_rc03_preview(physical[-8:])}", file=out)
+    return True
+
+
+def _hex_preview(data: bytes, limit: int = 64) -> str:
+    out = data[:limit].hex()
+    if len(data) > limit:
+        out += "..."
+    return out
+
+
+def soundcheck_vector_pretty(spool_type: str, data: bytes, out=None,
+                             *, samples: bool = False,
+                             details: bool = False) -> bool:
+    """Print SoundcheckVector records."""
+    if out is None:
+        out = sys.stdout
+    if spool_type != "SoundcheckVector":
+        return False
+    if not data:
+        print("# SoundcheckVector spool is empty", file=out)
+        return True
+
+    try:
+        records = _wrapped_records(data, 15)
+    except (ValueError, IndexError) as exc:
+        print(f"# cannot decode SoundcheckVector protobuf: {exc}", file=out)
+        return True
+
+    if samples:
+        print("record,kind,index,value_a,value_b", file=out)
+    else:
+        print("# SoundcheckVector spool", file=out)
+        print("# field 3 values are the vector bins; field 4 contains "
+              "repeated peak pairs", file=out)
+
+    for record_index, record in enumerate(records):
+        try:
+            fields = proto_decode(record)
+        except (ValueError, IndexError) as exc:
+            if not samples:
+                print(f"record {record_index}: invalid protobuf: {exc}",
+                      file=out)
+            continue
+        report_ms = None
+        sample_rate = None
+        vector = []
+        peaks = []
+        extras = []
+        for field, wire, value in fields:
+            if field == 1 and wire == 0:
+                report_ms = value
+            elif field == 2 and wire == 0:
+                sample_rate = value
+            elif field == 3 and wire == 0:
+                vector.append(value)
+            elif field == 4 and wire == 2:
+                try:
+                    for pf, pw, pv in proto_decode(value):
+                        if pf == 1 and pw == 2:
+                            pair = _decode_varint_message(pv)
+                            peaks.append((
+                                pair.get(1, [None])[0],
+                                pair.get(2, [None])[0],
+                            ))
+                        else:
+                            extras.append(f"peak_f{pf}/{_PROTO_WIRE.get(pw, pw)}")
+                except (ValueError, IndexError) as exc:
+                    extras.append(f"peaks_decode_error={exc}")
+            else:
+                extras.append(f"f{field}/{_PROTO_WIRE.get(wire, wire)}")
+
+        if samples:
+            for idx, value in enumerate(vector):
+                print(f"{record_index},vector,{idx},{value},", file=out)
+            for idx, (a, b) in enumerate(peaks):
+                print(f"{record_index},peak,{idx},{a},{b}", file=out)
+            continue
+
+        print(f"record {record_index}: report={_fmt_utc_ms(report_ms)} "
+              f"sample_rate_hz={sample_rate} vector_bins={len(vector)} "
+              f"peaks={len(peaks)}", file=out)
+        print(f"  vector={_rc03_preview(vector)}", file=out)
+        if peaks:
+            peak_text = ", ".join(f"({a},{b})" for a, b in peaks)
+            print(f"  peaks={peak_text}", file=out)
+        if details and extras:
+            print(f"  extras={extras}", file=out)
+    return True
+
+
+def diagnostic_blob_pretty(spool_type: str, data: bytes, out=None,
+                           *, details: bool = False) -> bool:
+    """Print currently unresolved diagnostic blob spools conservatively."""
+    if out is None:
+        out = sys.stdout
+    if spool_type != "AcousticSignatureV2":
+        return False
+    print("# AcousticSignatureV2 diagnostic blob spool", file=out)
+    if not data:
+        print("empty", file=out)
+        return True
+    print(f"bytes={len(data)} hex={_hex_preview(data)}", file=out)
+    try:
+        fields = proto_decode(data)
+    except (ValueError, IndexError):
+        return True
+    if details:
+        proto_pretty(data, indent=1, out=out)
+    else:
+        parts = []
+        for field, wire, value in fields:
+            if wire == 2:
+                parts.append(f"f{field}=bytes:{len(value)}")
+            else:
+                parts.append(f"f{field}/{_PROTO_WIRE.get(wire, wire)}")
+        if parts:
+            print("fields=" + " ".join(parts), file=out)
+    return True
+
+
+def audio_spool_pretty(spool_type: str, data: bytes, out=None,
+                       *, details: bool = False) -> bool:
+    """Print RecordedSound metadata without assuming a container format."""
+    if out is None:
+        out = sys.stdout
+    if spool_type != "RecordedSound":
+        return False
+    print("# RecordedSound audio spool", file=out)
+    if not data:
+        print("empty", file=out)
+        return True
+    print(f"bytes={len(data)} hex={_hex_preview(data)}", file=out)
+    if data.startswith(b"RIFF") and len(data) >= 44:
+        print("container=RIFF/WAVE", file=out)
+    elif details:
+        try:
+            proto_pretty(data, indent=1, out=out)
+        except (ValueError, IndexError):
+            pass
     return True
 
 
@@ -1614,6 +2051,9 @@ __all__ = [
     "summary_pretty",
     "spool_payload_shape", "spool_payload_first_field", "detect_spool_type",
     "setting_profiles_pretty", "configuration_profiles_pretty",
-    "rc03_spool_pretty", "therapy_one_minute_pretty", "event_spool_pretty",
+    "metric_spool_pretty", "periodic_compressed_pretty",
+    "soundcheck_vector_pretty", "diagnostic_blob_pretty",
+    "audio_spool_pretty", "rc03_spool_pretty", "therapy_one_minute_pretty",
+    "event_spool_pretty",
     "print_spool_legend", "print_spool_summary", "spool_walk_events",
 ]
