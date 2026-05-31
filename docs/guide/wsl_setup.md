@@ -70,8 +70,9 @@ WSL2 doesn't see USB devices natively - you forward them in with [usbipd-win](ht
 2. Plug in the ST-Link. In an Administrative PowerShell:
 
    ```powershell
-   usbipd list                    # find the BUSID of the ST-Link line
-   usbipd bind --busid <busid>    # one-time, marks the device shareable
+   usbipd list                          # find the BUSID of the ST-Link line
+   usbipd bind --busid <busid>          # one-time, marks the device shareable
+   usbipd attach --wsl --busid <busid>  # attach it to WSL
    ```
 
 3. Verify from inside WSL:
