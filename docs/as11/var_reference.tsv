@@ -229,7 +229,7 @@ g2	BLE				0x00CF	0x00DD	0x00E2	0..65535 step 1
 g2	MV5				0x00D0	0x00DE	0x00E3	0..30 step 0.125; modes=Spont,ST,Timed,VAuto,ASV,ASVAuto,iVAPS,PAC
 g2	MVH	MinuteVentilation-50hz			0x00D1	0x00DF	0x00E4	0..30 step 0.125
 g2	MV6	MinuteVentilation			0x00D2	0x00E0	0x00E5	0..30 step 0.125
-g2	MV2	MinuteVentilation-TwoSecond	MinVent.2s		0x00D3	0x00E1	0x00E6	0..30 step 0.125
+g2	MV2		MinVent.2s		0x00D3	0x00E1	0x00E6	0..30 step 0.125
 g2	CBP				0x00D4	0x00E2	0x00E7	0..1 step 1
 g2	BCP	PeriodicBrokerContactPeriod			0x00D5	0x00E3	0x00E8	60..31536000 step 1
 g2	CSC	Summary-ObstructiveApneaIndex	OAI		0x00D6	0x00E4	0x00E9	active_vids=3,7; 0..240 step 0.1
@@ -272,7 +272,7 @@ g2	CSP	CpapSetPressure			0x00F8	0x0106	0x010D	0..40 step 0.2
 g2	ZPR				0x00F9	0x0107	0x010E	20..10000 step 20
 g2	CP2				0x00FA	0x0108	0x010F	0..2147483647 step 1
 g2	CRW				0x00FB	0x0109	0x0110	0..2147483647 step 1
-g2	CSD	Summary-CsrDuration	CSR		0x00FC	0x010A	0x0111	0..1440 step 1
+g2	CSD		CSR		0x00FC	0x010A	0x0111	0..1440 step 1
 g2	CSE				0x00FD	0x010B	0x0112	0..2147483647 step 1
 g2	CSS				0x00FE	0x010C	0x0113	0..2147483647 step 1
 g2	DSS	DataCollectAndSend			0x00FF	0x010D	0x0114	0..2147483647 step 1
@@ -392,7 +392,7 @@ g2	PSH	PressureGain			0x0167	0x0178	0x0183	0.00976562..1.000977 step 0.00024414
 g2	RRR				0x0168	0x0179	0x0184	0..90 step 5; modes=Spont,ST,Timed,VAuto,ASV,ASVAuto,iVAPS,PAC
 g2	RR5	RespiratoryRate-50hz			0x0169	0x017A	0x0185	0..90 step 5
 g2	RR6	RespiratoryRate			0x016A	0x017B	0x0186	0..90 step 5
-g2	RR2	RespiratoryRate-TwoSecond	RespRate.2s		0x016B	0x017C	0x0187	0..90 step 5
+g2	RR2		RespRate.2s		0x016B	0x017C	0x0187	0..90 step 5
 g2	HSC	Summary-HypopneaIndex	HI		0x016C	0x017D	0x0188	0..240 step 0.1
 g2	HDR				0x016D	0x017E	0x0189	-8..50 step 1
 g2	AGT				0x0170	0x017F	0x018A	0..2147483647 step 1
@@ -443,7 +443,7 @@ g2	ZTV				0x019C	0x01AB	0x01B6	0..230000 step 1; modes=iVAPS
 g2	PI9	Summary-InspiratoryPressure-95	TgtIPAP.95		0x019D	0x01AC	0x01B7	0..50 step 0.2
 g2	IER				0x019E	0x01AD	0x01B8	0..400 step 1; modes=Spont,ST,Timed,VAuto,iVAPS,PAC
 g2	IET	IeRatio			0x019F	0x01AE	0x01B9	active_vids=7,10; 0..400 step 1
-g2	IE2	IeRatio-TwoSecond	IERatio.2s		0x01A0	0x01AF	0x01BA	active_vids=7,10; 0..400 step 1
+g2	IE2		IERatio.2s		0x01A0	0x01AF	0x01BA	active_vids=7,10; 0..400 step 1
 g2	PIA	Summary-InspiratoryPressure-100	TgtIPAP.Max		0x01A1	0x01B0	0x01BB	0..50 step 0.2
 g2	PIM	Summary-InspiratoryPressure-50	TgtIPAP.50		0x01A2	0x01B1	0x01BC	0..50 step 0.2
 g2	IE9	Summary-IeRatio-95	IERatio.95		0x01A3	0x01B2	0x01BD	active_vids=7,10; 0..400 step 1
@@ -685,7 +685,7 @@ g2	SAO	SpO2	SpO2.1s	SpO2	0x0285	0x029C	0x02A7	0..100 step 1; SA2 oximeter signal
 g2	SO9	Summary-SpO2-95	SpO2.95	SpO2	0x0286	0x029D	0x02A8	0..100 step 1; STR oximeter summary percentile
 g2	SOX	Summary-SpO2-100	SpO2.Max	SpO2	0x0287	0x029E	0x02A9	0..100 step 1; STR oximeter summary maximum
 g2	SOM	Summary-SpO2-50	SpO2.50	SpO2	0x0288	0x029F	0x02AA	0..100 step 1; STR oximeter summary median
-g2	SAU	Summary-SpO2ThresholdDuration	SpO2Thresh	SpO2 Threshold	0x0289	0x02A0	0x02AB	0..1440 step 1; STR SpO2 threshold duration
+g2	SAU		SpO2Thresh	SpO2 Threshold	0x0289	0x02A0	0x02AB	0..1440 step 1; STR SpO2 threshold duration
 g2	TBB				0x028A	0x02A1	0x02AC	0..65535 step 1
 g2	SBC				0x028B	0x02A2	0x02AD	0..65535 step 1
 g2	VCR	Summary-SpontCyclePercentage	SpontCyc%		0x028C	0x02A3	0x02AE	active_vids=7,10; 0..100 step 1
@@ -707,7 +707,7 @@ g2	XAD	ST-TargetRespiratoryRate		Target RR	0x029A	0x02B2	0x02BD	INACT; 0..50 ste
 g2	XA7	ST-SetMaxInspiratoryTime	S.ST.TiMax	Ti Max	0x029B	0x02B3	0x02BE	active_vids=10; 0.3..4 step 0.1; modes=ST
 g2	XA8	ST-SetMinInspiratoryTime	S.ST.TiMin	Ti Min	0x029C	0x02B4	0x02BF	active_vids=10; 0.1..4 step 0.1; modes=ST
 g2	PUN				0x029D	0x02B5	0x02C0	0..255 step 1
-g2	PPD	TherapyDuration	Duration		0x029E	0x02B6	0x02C1	0..1440 step 1
+g2	PPD		Duration		0x029E	0x02B6	0x02C1	0..1440 step 1
 g2	SNC				0x029F	0x02B7	0x02C2	0..2147483647 step 1
 g2	SSV				0x02A0	0x02B8	0x02C3	-2147483647..2147483647 step 1
 g2	ZRE				0x02A1	0x02B9	0x02C4	0..2147483647 step 1
@@ -728,7 +728,7 @@ g2	Z10	Spont-RiseTime	S.S.RiseTime	Rise Time	0x02AE	0x02C7	0x02D2	active_vids=7,
 g2	ZZ3	Spont-StartPressure	S.S.StartPress	Start Pressure	0x02AF	0x02C8	0x02D3	active_vids=7,10; 2..25 step 0.2
 g2	ZZ7	Spont-SetMaxInspiratoryTime	S.S.TiMax	Ti Max	0x02B0	0x02C9	0x02D4	active_vids=7,10; 0.3..4 step 0.1; modes=Spont
 g2	ZZ8	Spont-SetMinInspiratoryTime	S.S.TiMin	Ti Min	0x02B1	0x02CA	0x02D5	active_vids=7,10; 0.1..4 step 0.1; modes=Spont
-g2	TGT	TargetMinuteVentilation-TwoSecond	TgtVent.2s		0x02B2	0x02CB	0x02D6	active_vids=12; 0..30 step 0.125; modes=ASV,ASVAuto
+g2	TGT		TgtVent.2s		0x02B2	0x02CB	0x02D6	active_vids=12; 0..30 step 0.125; modes=ASV,ASVAuto
 g2	TVP	TargetMinuteVentilation			0x02B3	0x02CC	0x02D7	active_vids=12; 0..30 step 0.125
 g2	VA9	Summary-TargetMinuteVentilation-95	TgtVent.95		0x02B4	0x02CD	0x02D8	active_vids=12; 0..30 step 0.125
 g2	VAA	Summary-TargetMinuteVentilation-100	TgtVent.Max		0x02B5	0x02CE	0x02D9	active_vids=12; 0..30 step 0.125
@@ -778,7 +778,7 @@ g2	TID	TidalVolume			0x02E0	0x02F9	0x0304	0..4 step 1
 g2	TI5	TidalVolume-50hz			0x02E1	0x02FA	0x0305	0..4 step 1
 g2	TDD				0x02E2	0x02FB	0x0306	0..4 step 1
 g2	ZTD				0x02E3	0x02FC	0x0307	0..4000 step 1; modes=Spont,ST,Timed,VAuto,ASV,ASVAuto,iVAPS,PAC
-g2	TD2	TidalVolume-TwoSecond	TidVol.2s		0x02E4	0x02FD	0x0308	0..4 step 1
+g2	TD2		TidVol.2s		0x02E4	0x02FD	0x0308	0..4 step 1
 g2	TBC				0x02E5	0x02FE	0x0309	0..65535 step 1
 g2	SBD				0x02E6	0x02FF	0x030A	0..65535 step 1
 g2	ZS7				0x02E7	0x0300	0x030B	0..2147483647 step 1

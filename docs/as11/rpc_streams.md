@@ -14,14 +14,15 @@ fields, and interval limits are described in
 
 ## EDF aliases
 
-`StartStream` uses firmware data IDs rather than EDF signal names. The helper
-tool exposes the following EDF group aliases for live streaming:
+`StartStream` accepts both long data IDs and underscored short tags. The helper
+tool exposes EDF group aliases using the same short-tag variables selected by
+the on-card EDF schemas in CONF g[16].
 
-| Alias | EDF file | Natural sample interval | RPC stream IDs |
-|-------|----------|-------------------------|----------------|
-| `BRP` | `BRP.edf` | 40 ms | `PatientFlow-100hz`, `MaskPressure-100hz` |
-| `PLD` | `PLD.edf` | 2000 ms | direct stream names listed below |
-| `SA2` | `SA2.edf` | 1000 ms | `HeartRate`, `SpO2` |
+| Alias | EDF file | Natural sample interval | RPC data IDs |
+|-------|----------|-------------------------|--------------|
+| `BRP` | `BRP.edf` | 40 ms | `_RFL` / `PatientFlow`, `_MKP` / `MaskPressure` |
+| `PLD` | `PLD.edf` | 2000 ms | short/name pairs listed below |
+| `SA2` | `SA2.edf` | 1000 ms | `_HRT` / `HeartRate`, `_SAO` / `SpO2` |
 
 Example:
 
@@ -31,29 +32,29 @@ python3 python/as11_config.py -d can:can0 stream --edf BRP,PLD --sample-ms 40
 
 ## BRP/SA2 mapping
 
-| EDF signal | RPC stream ID |
-|------------|---------------|
-| `Flow.40ms` | `PatientFlow-100hz` |
-| `Press.40ms` | `MaskPressure-100hz` |
-| `Pulse.1s` | `HeartRate` |
-| `SpO2.1s` | `SpO2` |
+| EDF signal | short | name |
+|------------|-------|------|
+| `Flow.40ms` | `_RFL` | `PatientFlow` |
+| `Press.40ms` | `_MKP` | `MaskPressure` |
+| `Pulse.1s` | `_HRT` | `HeartRate` |
+| `SpO2.1s` | `_SAO` | `SpO2` |
 
 ## PLD mapping
 
-| EDF signal | RPC stream ID |
-|------------|---------------|
-| `MaskPress.2s` | `MaskPressure-TwoSecond` |
-| `Press.2s` | `InspiratoryPressure-TwoSecond` |
-| `EprPress.2s` | `ExpiratoryPressure-TwoSecond` |
-| `Leak.2s` | `Leak-50hz` |
-| `RespRate.2s` | `RespiratoryRate-50hz` |
-| `TidVol.2s` | `TidalVolume-50hz` |
-| `MinVent.2s` | `MinuteVentilation-50hz` |
-| `TgtVent.2s` | `TargetMinuteVentilation` |
-| `IERatio.2s` | `IeRatio` |
-| `Snore.2s` | `SnoreIndex-50hz` |
-| `FlowLim.2s` | `FlowLimitation-50hz` |
-| `Ti.2s` | `InspiratoryDuration` |
+| EDF signal | short | name |
+|------------|-------|------|
+| `MaskPress.2s` | `_MKF` | `MaskPressure-TwoSecond` |
+| `Press.2s` | `_MKI` | `InspiratoryPressure-TwoSecond` |
+| `EprPress.2s` | `_MKE` | `ExpiratoryPressure-TwoSecond` |
+| `Leak.2s` | `_LKF` | `Leak` |
+| `RespRate.2s` | `_RR2` | n/a |
+| `TidVol.2s` | `_TD2` | n/a |
+| `MinVent.2s` | `_MV2` | n/a |
+| `TgtVent.2s` | `_TGT` | n/a |
+| `IERatio.2s` | `_IE2` | n/a |
+| `Snore.2s` | `_SNI` | `SnoreIndex` |
+| `FlowLim.2s` | `_FFL` | `FlowLimitation` |
+| `Ti.2s` | `_INT` | `InspiratoryDuration` |
 
 ## Notes
 

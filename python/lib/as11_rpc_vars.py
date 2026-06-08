@@ -531,10 +531,14 @@ def spool_types_in_family(family: str) -> list[str]:
     """All spool types whose `family` field equals `family`."""
     return [name for name, info in SPOOL_REGISTRY.items()
             if info["family"] == family]
-# Direct StartStream names embedded in the 15.8.4 APPL image.
+
+
+# Direct StartStream names embedded in the APPL image and validated on-device.
 STREAM_DIRECT_GROUPS = [
     ("live waveform/control data IDs", [
+        "PatientFlow",
         "PatientFlow-100hz",
+        "MaskPressure",
         "MaskPressure-100hz",
         "BlowerFlow-100hz",
         "BlowerPressure-100hz",
@@ -546,15 +550,21 @@ STREAM_DIRECT_GROUPS = [
         "ApneaTreatmentPressure-50hz",
         "AutoSetTreatmentPressure-50hz",
         "FlowLimitationTreatmentPressure-50hz",
+        "FlowLimitation",
         "FlowLimitation-50hz",
+        "Leak",
         "Leak-50hz",
         "RawLeak-50hz",
+        "MinuteVentilation",
         "MinuteVentilation-50hz",
         "TargetMinuteVentilation",
         "IeRatio",
         "InspiratoryDuration",
+        "RespiratoryRate",
         "RespiratoryRate-50hz",
+        "TidalVolume",
         "TidalVolume-50hz",
+        "SnoreIndex",
         "SnoreIndex-50hz",
         "SnoreTreatmentPressure-50hz",
         "RemainingRampTime-50hz",
@@ -649,29 +659,29 @@ STREAM_GROUPS = STREAM_DIRECT_GROUPS + [
     ("summary/statistic data IDs", STREAM_SUMMARY_DATA_IDS),
 ]
 
-# Convenience groups that mirror the generated live EDF files.
+# Convenience groups for live streams matching generated EDF row variables.
 STREAM_EDF_ALIASES: dict[str, tuple[str, ...]] = {
     "BRP": (
-        "PatientFlow-100hz",
-        "MaskPressure-100hz",
+        "_RFL",
+        "_MKP",
     ),
     "PLD": (
-        "MaskPressure-TwoSecond",
-        "InspiratoryPressure-TwoSecond",
-        "ExpiratoryPressure-TwoSecond",
-        "Leak-50hz",
-        "RespiratoryRate-50hz",
-        "TidalVolume-50hz",
-        "MinuteVentilation-50hz",
-        "TargetMinuteVentilation",
-        "IeRatio",
-        "SnoreIndex-50hz",
-        "FlowLimitation-50hz",
-        "InspiratoryDuration",
+        "_MKF",
+        "_MKI",
+        "_MKE",
+        "_LKF",
+        "_RR2",
+        "_TD2",
+        "_MV2",
+        "_TGT",
+        "_IE2",
+        "_SNI",
+        "_FFL",
+        "_INT",
     ),
     "SA2": (
-        "HeartRate",
-        "SpO2",
+        "_HRT",
+        "_SAO",
     ),
 }
 

@@ -13,23 +13,23 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 ## BRP.edf -- Breath waveform (25 Hz, 60s records)
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short | samples/rec | rate |
-| --- | -------- | ------ | -------------- | -------------- | ------- | ------------- | ------ |
+|---|--------|------|--------------|--------------|-------|-------------|------|
 | 0 | Flow.40ms | PatientFlow | 0x0256 | 0x026B | RFL | 1500 | 25 Hz |
 | 1 | Press.40ms | MaskPressure | 0x01D4 | 0x01E7 | MKP | 1500 | 25 Hz |
 
 ## PLD.edf -- Per-breath stats (0.5 Hz, 60s records)
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short | samples/rec | rate |
-| --- | -------- | ------ | -------------- | -------------- | ------- | ------------- | ------ |
+|---|--------|------|--------------|--------------|-------|-------------|------|
 | 0 | MaskPress.2s | MaskPressure-TwoSecond | 0x012F | 0x013D | MKF | 30 | 0.5 Hz |
 | 1 | Press.2s | InspiratoryPressure-TwoSecond | 0x00BB | 0x00C9 | MKI | 30 | 0.5 Hz |
 | 2 | EprPress.2s | ExpiratoryPressure-TwoSecond | 0x011D | 0x012B | MKE | 30 | 0.5 Hz |
 | 3 | Leak.2s | Leak | 0x012C | 0x013A | LKF | 30 | 0.5 Hz |
-| 4 | RespRate.2s | RespiratoryRate-TwoSecond | 0x016B | 0x017C | RR2 | 30 | 0.5 Hz |
-| 5 | TidVol.2s | TidalVolume-TwoSecond | 0x02E4 | 0x02FD | TD2 | 30 | 0.5 Hz |
-| 6 | MinVent.2s | MinuteVentilation-TwoSecond | 0x00D3 | 0x00E1 | MV2 | 30 | 0.5 Hz |
-| 7 | TgtVent.2s | TargetMinuteVentilation-TwoSecond | 0x02B2 | 0x02CB | TGT | 30 | 0.5 Hz |
-| 8 | IERatio.2s | IeRatio-TwoSecond | 0x01A0 | 0x01AF | IE2 | 30 | 0.5 Hz |
+| 4 | RespRate.2s | n/a | 0x016B | 0x017C | RR2 | 30 | 0.5 Hz |
+| 5 | TidVol.2s | n/a | 0x02E4 | 0x02FD | TD2 | 30 | 0.5 Hz |
+| 6 | MinVent.2s | n/a | 0x00D3 | 0x00E1 | MV2 | 30 | 0.5 Hz |
+| 7 | TgtVent.2s | n/a | 0x02B2 | 0x02CB | TGT | 30 | 0.5 Hz |
+| 8 | IERatio.2s | n/a | 0x01A0 | 0x01AF | IE2 | 30 | 0.5 Hz |
 | 9 | Snore.2s | SnoreIndex | 0x027D | 0x0294 | SNI | 30 | 0.5 Hz |
 | 10 | FlowLim.2s | FlowLimitation | 0x0141 | 0x014F | FFL | 30 | 0.5 Hz |
 | 11 | Ti.2s | InspiratoryDuration | 0x0180 | 0x018F | INT | 30 | 0.5 Hz |
@@ -37,7 +37,7 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 ## SA2.edf -- SpO2/pulse (1 Hz, 60s records)
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short | samples/rec | rate |
-| --- | -------- | ------ | -------------- | -------------- | ------- | ------------- | ------ |
+|---|--------|------|--------------|--------------|-------|-------------|------|
 | 0 | Pulse.1s | HeartRate | 0x0157 | 0x0168 | HRT | 60 | 1 Hz |
 | 1 | SpO2.1s | SpO2 | 0x0285 | 0x029C | SAO | 60 | 1 Hz |
 
@@ -46,7 +46,7 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 ### Session header [0-3]
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short |
-| --- | -------- | ------ | -------------- | -------------- | ------- |
+|---|--------|------|--------------|--------------|-------|
 | 0 | Date | n/a | n/a | n/a | n/a |
 | 1 | MaskOn | n/a | n/a | n/a | n/a |
 | 2 | MaskOff | n/a | n/a | n/a | n/a |
@@ -55,14 +55,14 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 ### Session core [4-5]
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short |
-| --- | -------- | ------ | -------------- | -------------- | ------- |
-| 4 | Duration | TherapyDuration | 0x029E | 0x02B6 | PPD |
+|---|--------|------|--------------|--------------|-------|
+| 4 | Duration | n/a | 0x029E | 0x02B6 | PPD |
 | 5 | Mode | ActiveTherapyProfile | 0x03F1 | 0x040E | MOP |
 
 ### CPAP/AutoSet/HerAuto settings [6-13]
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short |
-| --- | -------- | ------ | -------------- | -------------- | ------- |
+|---|--------|------|--------------|--------------|-------|
 | 6 | S.C.StartPress | Cpap-StartPressure | 0x0290 | 0x02A8 | STP |
 | 7 | S.C.Press | Cpap-SetPressure | 0x00F7 | 0x0105 | IPC |
 | 8 | S.A.StartPress | AutoSet-StartPressure | 0x028F | 0x02A7 | STU |
@@ -75,7 +75,7 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 ### VAuto settings [14-21]
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short |
-| --- | -------- | ------ | -------------- | -------------- | ------- |
+|---|--------|------|--------------|--------------|-------|
 | 14 | S.VA.StartPress | VAuto-StartPressure | 0x0300 | 0x0319 | XE0 |
 | 15 | S.VA.MaxIPAP | VAuto-MaxInspiratoryPressure | 0x02FD | 0x0316 | XE1 |
 | 16 | S.VA.MinEPAP | VAuto-MinExpiratoryPressure | 0x02FE | 0x0317 | XE2 |
@@ -88,7 +88,7 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 ### Spont settings [22-32]
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short |
-| --- | -------- | ------ | -------------- | -------------- | ------- |
+|---|--------|------|--------------|--------------|-------|
 | 22 | S.S.StartPress | Spont-StartPressure | 0x02AF | 0x02C8 | ZZ3 |
 | 23 | S.S.IPAP | Spont-TargetInspiratoryPressure | 0x02AC | 0x02C5 | ZZ1 |
 | 24 | S.S.EPAP | Spont-TargetExpiratoryPressure | 0x02A7 | 0x02C0 | ZZ2 |
@@ -104,7 +104,7 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 ### ST/Timed settings [33-49]
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short |
-| --- | -------- | ------ | -------------- | -------------- | ------- |
+|---|--------|------|--------------|--------------|-------|
 | 33 | S.ST.StartPress | ST-StartPressure | 0x0299 | 0x02B1 | XA3 |
 | 34 | S.ST.IPAP | ST-TargetInspiratoryPressure | 0x0296 | 0x02AE | XA1 |
 | 35 | S.ST.EPAP | ST-TargetExpiratoryPressure | 0x0292 | 0x02AA | XA2 |
@@ -126,7 +126,7 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 ### ASV/ASVAuto settings [50-58]
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short |
-| --- | -------- | ------ | -------------- | -------------- | ------- |
+|---|--------|------|--------------|--------------|-------|
 | 50 | S.AV.StartPress | ASV-StartPressure | 0x0098 | 0x00A4 | XC0 |
 | 51 | S.AV.EPAP | ASV-TargetExpiratoryPressure | 0x0097 | 0x00A3 | XC1 |
 | 52 | S.AV.MaxPS | ASV-MaxPressureSupport | 0x0095 | 0x00A1 | XC2 |
@@ -140,7 +140,7 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 ### Common comfort/settings [59-77]
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short |
-| --- | -------- | ------ | -------------- | -------------- | ------- |
+|---|--------|------|--------------|--------------|-------|
 | 59 | S.AS.Comfort | AutoSetComfort | 0x0336 | 0x034F | AFC |
 | 60 | S.RampEnable | RampEnable | 0x040C | 0x0429 | RMA |
 | 61 | S.RampTime | RampTime | 0x023D | 0x0250 | RMT |
@@ -164,7 +164,7 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 ### Environment and oximetry stats [78-91]
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short |
-| --- | -------- | ------ | -------------- | -------------- | ------- |
+|---|--------|------|--------------|--------------|-------|
 | 78 | BlowPress.95 | Summary-BlowerPressure-95 | 0x00C4 | 0x00D2 | BP9 |
 | 79 | BlowPress.5 | Summary-BlowerPressure-5 | 0x00C3 | 0x00D1 | BP5 |
 | 80 | Flow.95 | Summary-RespiratoryFlow-95 | 0x00B1 | 0x00BF | R95 |
@@ -178,12 +178,12 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 | 88 | SpO2.50 | Summary-SpO2-50 | 0x0288 | 0x029F | SOM |
 | 89 | SpO2.95 | Summary-SpO2-95 | 0x0286 | 0x029D | SO9 |
 | 90 | SpO2.Max | Summary-SpO2-100 | 0x0287 | 0x029E | SOX |
-| 91 | SpO2Thresh | Summary-SpO2ThresholdDuration | 0x0289 | 0x02A0 | SAU |
+| 91 | SpO2Thresh | n/a | 0x0289 | 0x02A0 | SAU |
 
 ### Bilevel/ventilation summary stats [92-124]
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short |
-| --- | -------- | ------ | -------------- | -------------- | ------- |
+|---|--------|------|--------------|--------------|-------|
 | 92 | SpontTrig% | Summary-SpontTriggerPercentage | 0x028D | 0x02A4 | VSR |
 | 93 | SpontCyc% | Summary-SpontCyclePercentage | 0x028C | 0x02A3 | VCR |
 | 94 | MaskPress.50 | Summary-MeanMaskPressure-50 | 0x01D8 | 0x01EB | MSP |
@@ -221,7 +221,7 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 ### Indices and CSR [125-132]
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short |
-| --- | -------- | ------ | -------------- | -------------- | ------- |
+|---|--------|------|--------------|--------------|-------|
 | 125 | AHI | Summary-ApneaHypopneaIndex | 0x0075 | 0x007D | AHI |
 | 126 | HI | Summary-HypopneaIndex | 0x016C | 0x017D | HSC |
 | 127 | AI | Summary-ApneaIndex | 0x0077 | 0x007F | ASC |
@@ -229,12 +229,12 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 | 129 | CAI | Summary-CentralApneaIndex | 0x0202 | 0x0215 | OSC |
 | 130 | UAI | Summary-UnknownApneaIndex | 0x02F6 | 0x030F | USC |
 | 131 | RIN | Summary-ReraIndex | 0x025D | 0x0272 | RCC |
-| 132 | CSR | Summary-CsrDuration | 0x00FC | 0x010A | CSD |
+| 132 | CSR | n/a | 0x00FC | 0x010A | CSD |
 
 ### Tail [133]
 
 | # | Signal | name | var_id 8.3.0 | var_id 8.4.0 | short |
-| --- | -------- | ------ | -------------- | -------------- | ------- |
+|---|--------|------|--------------|--------------|-------|
 | 133 | Crc16 | n/a | n/a | n/a | n/a |
 
 ### STR variant provenance
@@ -244,7 +244,7 @@ variant before the EDF superset patch. `x` means the row was present in
 that OEM firmware; `.` means it is added by the superset merge.
 
 | # | Signal | name | short | AS | VA | ST | ASV |
-| --- | -------- | ------ | ------- | ---- | ---- | ---- | ----- |
+|---|--------|------|-------|----|----|----|-----|
 | 8 | S.A.StartPress | AutoSet-StartPressure | STU | x | . | . | . |
 | 9 | S.A.MaxPress | AutoSet-MaxPressure | MPA | x | . | . | . |
 | 10 | S.A.MinPress | AutoSet-MinPressure | MPI | x | . | . | . |
@@ -316,7 +316,7 @@ that OEM firmware; `.` means it is added by the superset merge.
 | 129 | CAI | Summary-CentralApneaIndex | OSC | x | x | . | . |
 | 130 | UAI | Summary-UnknownApneaIndex | USC | x | x | . | . |
 | 131 | RIN | Summary-ReraIndex | RCC | x | . | . | . |
-| 132 | CSR | Summary-CsrDuration | CSD | x | . | . | . |
+| 132 | CSR | n/a | CSD | x | . | . | . |
 
 Legend:
 
