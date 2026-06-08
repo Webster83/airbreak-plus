@@ -7,6 +7,8 @@ exists in that version. See `docs/as11/var_reference.tsv` for the source map.
 
 Live RPC stream names are documented separately in
 [AS11 RPC Stream Reference](rpc_streams.md).
+Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
+[AS11 EDF Annotation Files](edf_annotations.md).
 
 ## BRP.edf -- Breath waveform (25 Hz, 60s records)
 
