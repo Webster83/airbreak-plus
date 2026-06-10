@@ -5,7 +5,7 @@ Get/Set settings, run JSON-RPC, stream/subscribe/spool data. Picks
 transport from -d/--device:
 
     -d ble:<mac|alias>          BLE (via bleak + SRP pairing)
-    -d can:<target>             CAN adapter target (Waveshare, CANable SLCAN, SocketCAN)
+    -d can:<target>             CAN target (slcan, socketcan, or waveshare)
     -d tcp:<host>[:<port>]      AirCANnect TCP bridge (default port 39011)
 
 Compat aliases:
@@ -1254,6 +1254,10 @@ def build_common_parser() -> argparse.ArgumentParser:
                         help="verbose packet logging")
     common.add_argument("-v", "--verbose", action="store_true", default=SUPPR,
                         help="info-level logging")
+    if _can_transport is not None:
+        _can_transport.add_args(common)
+    if _aircannect_transport is not None:
+        _aircannect_transport.add_args(common)
     return common
 
 
@@ -1270,10 +1274,6 @@ def _apply_common_defaults(args: argparse.Namespace) -> None:
 
 
 def add_rpc_args(p: argparse.ArgumentParser) -> None:
-    if _can_transport is not None:
-        _can_transport.add_args(p)
-    if _aircannect_transport is not None:
-        _aircannect_transport.add_args(p)
     p.add_argument("--timeout", type=float, default=5.0,
                    help="RPC response timeout (seconds)")
 

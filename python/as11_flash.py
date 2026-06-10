@@ -6,7 +6,7 @@ devices. Works over BLE, CAN, and AirCANnect TCP; transport selected with
 -d/--device:
 
     -d ble:<mac|alias>          BLE
-    -d can:<target>             CAN adapter target (Waveshare, CANable SLCAN, SocketCAN)
+    -d can:<target>             CAN target (slcan, socketcan, or waveshare)
     -d tcp:<host>[:<port>]      AirCANnect TCP bridge (default port 39011)
     --addr <x>                  same as -d ble:<x>
     -p/--port <x>               same as -d can:<target>
@@ -1799,6 +1799,7 @@ def main(argv=None) -> int:
         epilog=__doc__)
     ap.add_argument("--debug", action="store_true",
                     help="verbose transport-level packet logging")
+    _add_device_args(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     # targets

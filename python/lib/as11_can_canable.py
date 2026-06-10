@@ -513,7 +513,7 @@ class CanCanableTransport:
 
     @property
     def name(self) -> str:
-        return f"can:canable:{self._cfg.port}"
+        return f"can:slcan:{self._cfg.port}"
 
     @property
     def supports_encrypted(self) -> bool:
