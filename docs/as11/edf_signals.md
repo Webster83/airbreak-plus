@@ -41,7 +41,7 @@ Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
 | 0 | Pulse.1s | HeartRate | 0x0157 | 0x0168 | HRT | 60 | 1 Hz |
 | 1 | SpO2.1s | SpO2 | 0x0285 | 0x029C | SAO | 60 | 1 Hz |
 
-## STR.edf -- Session statistics (1 record per session, 134 fields)
+## STR.edf -- Session statistics (1 record per 86400s, 134 fields)
 
 ### Session header [0-3]
 
