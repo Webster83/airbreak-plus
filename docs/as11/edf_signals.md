@@ -1,13 +1,10 @@
 # AirSense 11 EDF Signal Reference
 
-Var ID columns are version-local. The 8.4.0 column is the AS11
-15.8.4.0 superset used by the EDF patcher; the 8.3.0 column is mapped
-from the checked 14.8.3.0 vid03 dump. `n/a` means no matching short tag
-exists in that version. See `docs/as11/var_reference.tsv` for the source map.
-
-Live RPC stream names are documented separately in
-[AS11 RPC Stream Reference](rpc_streams.md).
-Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in
+Live RPC stream names are documented separately in \
+[AS11 RPC Stream Reference](rpc_streams.md). \
+EDF fixed headers and ResMed patient/recording fields are documented in \
+[AirSense 11 EDF Header Reference](edf_header.md). \
+Annotation-only `EVE.edf` and `CSL.edf` files are documented separately in \
 [AS11 EDF Annotation Files](edf_annotations.md).
 
 ## BRP.edf -- Breath waveform (25 Hz, 60s records)

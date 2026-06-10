@@ -2,10 +2,13 @@
 
 This document describes the EDF+ annotation files AS11 writes alongside
 the sampled signal files: `EVE.edf` (respiratory events) and `CSL.edf`
-(Cheyne-Stokes interval boundaries). Sampled signal files are documented
-in [AirSense 11 EDF Signal Reference](edf_signals.md). The matching live
-event vocabulary is documented in
-[AS11 RPC Event Reference](rpc_events.md).
+(Cheyne-Stokes interval boundaries). \
+Sampled signal files are documented in \
+[AirSense 11 EDF Signal Reference](edf_signals.md). \
+The matching live event vocabulary is documented in \
+[AS11 RPC Event Reference](rpc_events.md). \
+EDF fixed headers and ResMed patient/recording fields are documented in \
+[AirSense 11 EDF Header Reference](edf_header.md).
 
 ## Contents
 
@@ -122,4 +125,3 @@ These correspond to RPC event family
 `TherapyEvents-RespiratoryEvents` subindices `6` and `7` (`CsrStart`,
 `CsrEnd`). Consumers reconstruct intervals by pairing each `CSR Start`
 with the next `CSR End`.
-
