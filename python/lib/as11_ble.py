@@ -552,13 +552,8 @@ class As11Connection:
 
     async def pair(self, passkey: str = None) -> dict:
         """SRP key exchange using the 4-digit passkey shown on the device screen."""
-        if passkey is None:
-            passkey = input("Enter passkey shown on device screen: ").strip()
-            if not passkey:
-                raise RuntimeError("no passkey entered")
-
-        log.info("SRP: generating keypair with passkey '%s'", passkey)
-        srp = SRPClient(passkey)
+        log.info("SRP: generating keypair")
+        srp = SRPClient(passkey or "")
         log.info("SRP: A = %s...", srp.public_key_hex[:32])
 
         resp = await self.send_rpc("StartKeyExchange",
@@ -573,6 +568,12 @@ class As11Connection:
         salt = result.get("salt", "")
         log.info("SRP: B = %s...", server_pk[:32])
         log.info("SRP: salt = %s", salt)
+
+        if not passkey:
+            passkey = input("Enter passkey shown on device screen: ").strip()
+            if not passkey:
+                raise RuntimeError("no passkey entered")
+            srp.passkey = passkey
 
         srp.process(server_pk, salt)
         log.info("SRP: K = %s...", srp.session_key_hex[:32])
