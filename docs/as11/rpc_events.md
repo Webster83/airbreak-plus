@@ -24,7 +24,7 @@ Live selectors accepted by `SubscribeEvent.params.dataIds` on 15.8.4.0.
 | Selector | Labels | Notes |
 |----------|--------|-------|
 | `UsageEvents-TherapyStatusEvents` | 10 | therapy on/off and mode/status lifecycle |
-| `TherapyEvents-RespiratoryEvents` | 8 | respiratory event reporting |
+| `TherapyEvents-RespiratoryEvents` | 8 | respiratory event reporting, including `NoEvent` sentinel |
 | `SystemActivityEvents-FrequentActivityEvents` | 52 | frequent system activity events |
 | `SystemActivityEvents-SporadicActivityEvents` | 76 | sporadic system activity events |
 | `SystemExceptionEvents-SystemErrors` | 22 | system errors |
@@ -60,9 +60,13 @@ selector that delivers them.
 
 `TherapyEvents-RespiratoryEvents`:
 
-- `Hypopnea`, `CentralApnea`, `ObstructiveApnea`, `Apnea`
-- `Rera` / `Arousal`
+- `NoEvent`
+- `HypopneaEnd`, `CentralApneaEnd`, `ObstructiveApneaEnd`, `ApneaEnd`
+- `ReraEnd`
 - `CsrStart`, `CsrEnd`
+
+The apnea, hypopnea, and RERA labels are completion events. Their
+`reportTime` is the end of the event; payloads carry `durationSeconds`.
 
 ### System activity
 

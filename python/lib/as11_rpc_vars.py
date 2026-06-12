@@ -695,8 +695,9 @@ EVENT_FAMILIES: dict[str, tuple[str, ...]] = {
     # SubscribeEvent selector -> known payload labels. Labels are decoded
     # event names, not SubscribeEvent dataIds.
     "TherapyEvents-RespiratoryEvents": (
-        "Hypopnea", "CentralApnea", "ObstructiveApnea", "Apnea",
-        "Rera", "Arousal", "CsrStart", "CsrEnd",
+        "NoEvent", "HypopneaEnd", "CentralApneaEnd",
+        "ObstructiveApneaEnd", "ApneaEnd", "ReraEnd", "CsrStart",
+        "CsrEnd",
     ),
     "UsageEvents-TherapyStatusEvents": (
         "NoUsage", "MaskOff", "MaskOn", "PowerOff", "MaskFitStart",

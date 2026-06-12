@@ -101,14 +101,11 @@ event-label table for `EVE` and maps to the
 
 | RPC event label | EDF annotation label |
 |-----------------|----------------------|
-| `Hypopnea` | `Hypopnea` |
-| `CentralApnea` | `Central Apnea` |
-| `ObstructiveApnea` | `Obstructive Apnea` |
-| `Apnea` | `Apnea` |
-| `Arousal` / `Rera` | `Arousal` |
-
-`Hypopnea` records have been observed with duration `0`; all other
-events carry a non-zero duration.
+| `HypopneaEnd` | `Hypopnea` |
+| `CentralApneaEnd` | `Central Apnea` |
+| `ObstructiveApneaEnd` | `Obstructive Apnea` |
+| `ApneaEnd` | `Apnea` |
+| `ReraEnd` | `Arousal` |
 
 ## CSL.edf labels
 
@@ -121,7 +118,3 @@ interval-duration record:
 | `CSR Start` | start of a CSR/Cheyne-Stokes interval |
 | `CSR End` | end of a CSR/Cheyne-Stokes interval |
 
-These correspond to RPC event family
-`TherapyEvents-RespiratoryEvents` subindices `6` and `7` (`CsrStart`,
-`CsrEnd`). Consumers reconstruct intervals by pairing each `CSR Start`
-with the next `CSR End`.
