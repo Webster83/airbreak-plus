@@ -69,7 +69,7 @@ All patches below are **enabled by default** unless noted.
 
 | Patch | What it does | Bash function | Python switch |
 |-------|-------------|---------------|---------------|
-| Motor nag removal | Removes the "Motor life exceeded" popup that blocks operation after ~20,000 runtime hours | `motor_nagscreen` | `--patch-motor-nagscreen` |
+| Motor nag removal | Removes the "Motor life exceeded" message that appears after ~20,000 runtime hours | `motor_nagscreen` | `--patch-motor-nagscreen` |
 | Past date | Allows setting date to past values via menu and UART | `patch_past_date` | `--patch-past-date` |
 | Unlock languages | Enables all built-in languages | `unlock_languages` | `--patch-unlock-languages` |
 | Extra debug | Enables additional info in the sleep report screen | `extra_debug` | `--patch-extra-debug` |
