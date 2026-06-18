@@ -54,7 +54,7 @@ Reopen the Ubuntu shell - the next launch brings up a fresh kernel and init.
 In Ubuntu:
 
 ```bash
-sudo apt install openocd python3-pip gcc-arm-none-eabi
+sudo apt install openocd python3-pip gcc-arm-none-eabi telnet-ssl
 ```
 
 Same packages as the [patching prerequisites](patching.md#prerequisites).
