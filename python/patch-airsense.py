@@ -57,10 +57,28 @@ class ASFirmware(object):
         
         self.validate()
 
+    def read_u8(self, off):
+        return self.fw[off]
+
+    def read_u16(self, off):
+        return struct.unpack_from('<H', bytes(self.fw[off:off+2]))[0]
+
+    def read_u32(self, off):
+        return struct.unpack_from('<I', bytes(self.fw[off:off+4]))[0]
+
+    def write_u8(self, off, val):
+        self.fw[off] = val & 0xFF
+
+    def write_u16(self, off, val):
+        self.fw[off:off+2] = list(struct.pack('<H', val))
+
+    def write_u32(self, off, val):
+        self.fw[off:off+4] = list(struct.pack('<I', val))
+
     def globals_offset(self, idx):
         """Return file offset for data that globals[idx] points to"""
         off = self.globals_addr + idx * 4
-        ptr = struct.unpack_from('<I', bytes(self.fw[off:off+4]))[0]
+        ptr = self.read_u32(off)
         return ptr - self.FLASH_BASE
 
     def find_var_id(self, var_id):
@@ -93,22 +111,33 @@ class ASFirmware(object):
             off = g23 + letter_idx * 8
             if off < 0 or off + 8 > len(fw):
                 continue
-            sub_ptr, count = struct.unpack_from('<II', fw, off)
+            sub_ptr, count = self.read_u32(off), self.read_u32(off + 4)
             sub_off = self._flash_ptr_offset(sub_ptr)
             if sub_off is None or count > 200 or sub_off + count * 4 > len(fw):
                 continue
             for j in range(count):
-                c2, c3, var_id = struct.unpack_from('<BBH', fw, sub_off + j * 4)
+                rec_off = sub_off + j * 4
+                c2 = self.read_u8(rec_off)
+                c3 = self.read_u8(rec_off + 1)
+                var_id = self.read_u16(rec_off + 2)
                 name = chr(ord('A') + letter_idx) + chr(c2) + chr(c3)
                 self.var_by_name[name] = var_id
 
-    def find_var_name(self, name):
-        """Return file offset of descriptor record for a UART variable name."""
-        self._load_uart_names()
-        var_id = self.var_by_name.get(name.upper())
+    def find_var_id_by_name(self, name):
+        """Return numeric var_id for a UART variable name."""
+        var_id = self.var_ids_by_name().get(name.upper())
         if var_id is None:
             raise ValueError("unknown UART variable name: %s" % name)
-        return self.find_var_id(var_id)
+        return var_id
+
+    def var_ids_by_name(self):
+        """Return UART variable name -> numeric var_id mapping."""
+        self._load_uart_names()
+        return self.var_by_name
+
+    def find_var_name(self, name):
+        """Return file offset of descriptor record for a UART variable name."""
+        return self.find_var_id(self.find_var_id_by_name(name))
 
     def find_var(self, var):
         if isinstance(var, str):
@@ -172,8 +201,8 @@ class ASFirmware(object):
         for off, size in blocks:
             crc_off = off + size - 2
             new_crc = self.crcfunc(bytes(self.fw[off:crc_off]))
-            self.fw[crc_off]     = new_crc >> 8
-            self.fw[crc_off + 1] = new_crc & 0xff
+            self.write_u8(crc_off, new_crc >> 8)
+            self.write_u8(crc_off + 1, new_crc)
         
     def find_bytes(self, dataseq):
         """Find location of byte sequence in FW"""
@@ -553,8 +582,9 @@ class ASFirmwarePatches(object):
         count = 0
         for var in vars:
             addr = self.asf.find_var(var)
-            if not (self.asf.fw[addr] & 1):
-                self.asf.fw[addr] |= 1
+            flags = self.asf.read_u8(addr)
+            if not (flags & 1):
+                self.asf.write_u8(addr, flags | 1)
                 count += 1
         print("  %d/%d menu ACT flags set" % (count, len(vars)))
 
@@ -846,19 +876,17 @@ class ASFirmwarePatches(object):
     def patch_edf_merge(self):
         """Merge universal EDF signal superset into CCX"""
         try:
-            from edf_ccx_merge import merge_ccx_image
+            from edf_ccx_merge import patch_edf_merge
         except ImportError:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             sys.path.insert(0, script_dir)
-            from edf_ccx_merge import merge_ccx_image
+            from edf_ccx_merge import patch_edf_merge
 
         buf = io.StringIO()
         old_stdout = sys.stdout
         sys.stdout = buf
         try:
-            data = bytearray(self.asf.fw)
-            patches = merge_ccx_image(data, force=True)
-            self.asf.fw = list(data)
+            patches = patch_edf_merge(self.asf, force=True)
         finally:
             sys.stdout = old_stdout
         summary = buf.getvalue().strip()
