@@ -18,13 +18,17 @@
 - [g[14] -- NPD signal group](#g14----npd-signal-group)
 - [g[16] -- variable groups](#g16----variable-groups)
 - [g[19] -- EEPROM stream table](#g19----eeprom-stream-table)
+- [g[20] -- PDL definition](#g20----pdl-definition)
+- [g[21] -- PDL rule pointer](#g21----pdl-rule-pointer)
 - [g[22] -- UART name table (flat)](#g22----uart-name-table-flat)
 - [g[23] -- UART name table (bucketed)](#g23----uart-name-table-bucketed)
+- [g[24] -- mode membership table](#g24----mode-membership-table)
+- [g[26] -- live stream records](#g26----live-stream-records)
+- [g[27] -- APN/CSN/BRH records](#g27----apncsnbrh-records)
 - [g[28] -- OXH (oximetry header)](#g28----oxh-oximetry-header)
 - [Flags bitmask](#flags-bitmask)
 - [RAM shadow](#ram-shadow)
 - [Dependency chain](#dependency-chain)
-- [Patching reference](#patching-reference)
 
 ---
 
@@ -35,6 +39,9 @@
 ### Variable dispatch
 
 Variable IDs are implicitly encoded by table position: `var_id = id_base + record_index`.
+These IDs are the numeric references stored inside the firmware image. For
+cross-variant work, the 3-letter UART names in g[23] are the stable lookup key:
+some IDs move across older SX567 catalog/build variants.
 
 | globals | stride | id_base | id_range | content |
 |---------|--------|---------|----------|---------|
@@ -78,8 +85,8 @@ var_id < 0x1E           -> g[3]
 | [16] | Variable groups |
 | [17]-[18] | Descriptor records (8B and 12B) |
 | [19] | EEPROM stream table |
-| [20] | PDL header |
-| [21] | PDL stat computation records (16B each) |
+| [20] | PDL definition: var list + inline stat rule records |
+| [21] | PDL rule count/pointer |
 | [22] | UART name table, flat format |
 | [23] | UART name table, bucketed |
 | [24] | Mode table (settings x modes) |
@@ -87,7 +94,7 @@ var_id < 0x1E           -> g[3]
 | [27] | APN/CSN/BRH records + shared OXH tail |
 | [28] | OXH header + inline var_id/rate arrays |
 
-Note: [15] through [24] form a contiguous opaque block relocated as a unit by edf_merge.
+Note: [15] through [24] form a contiguous opaque block in the observed CCX layout.
 
 ---
 
@@ -228,6 +235,8 @@ Contains string-type variables (BID, SID, CID, PNA, SRN, etc.).
 ## g[11] -- signal headers (BRP, PLD, SAD)
 
 3 consecutive 32-byte headers defining EEPROM stream signal channels.
+Each channel stores a var_id array, samples-per-record array, and optional signal
+name string pointer array.
 
 | Offset | Size | Field |
 |--------|------|-------|
@@ -265,6 +274,8 @@ Field records (10 bytes each), immediately after headers:
 ## g[13] -- PSTR (STR channel descriptor)
 
 52 bytes, immediately followed by g[14] (NPD, 32 bytes).
+`field_record_count`, the two chain arrays, the string table, and the field
+record pointer must agree with g[12].
 
 | Offset | Size | Field |
 |--------|------|-------|
@@ -331,6 +342,43 @@ Field records (10 bytes each), immediately after headers:
 
 ---
 
+## g[20] -- PDL definition
+
+Header pointing to a list of var_ids, followed by inline rule records. The same
+rule records are also referenced by g[21].
+
+| Offset | Size | Field |
+|--------|------|-------|
+| +0x00 | 4 | name (`"PDL\0"`) |
+| +0x04 | 4 | var_id array pointer |
+| +0x08 | 4 | var_id count |
+| +0x0C | -- | rule records (16 bytes each) |
+
+Rule record:
+
+| Offset | Size | Field |
+|--------|------|-------|
+| +0x00 | 2 | destination/stat var_id |
+| +0x02 | 2 | source/input var_id |
+| +0x04 | 4 | flags/type (`type = (flags >> 8) & 0xff`) |
+| +0x08 | 4 | param_a (`0xffffffff` = unused) |
+| +0x0C | 4 | param_b (`0xffffffff` = unused) |
+
+---
+
+## g[21] -- PDL rule pointer
+
+Separate access path to the PDL rule records.
+
+| Offset | Size | Field |
+|--------|------|-------|
+| +0x00 | 4 | rule count |
+| +0x04 | 4 | rule record pointer |
+
+Stock variants carry different rule counts.
+
+---
+
 ## g[22] -- UART name table (flat)
 
 Same data as g[23] but as a flat array. 16-byte header (16 u16 metadata var_ids), then 744 entries of `{u8 char2, u8 char3, u16 var_id}`.
@@ -349,6 +397,75 @@ Same data as g[23] but as a flat array. 16-byte header (16 u16 metadata var_ids)
 Each subtable entry (4 bytes): `{u8 char2, u8 char3, u16 var_id}`.
 
 First character is implicit from bucket index. Resolved by CDX at 0x08067200.
+
+---
+
+## g[24] -- mode membership table
+
+Setting-to-mode membership table. g[25] holds the entry count.
+
+Each entry is `2 + MOP.num_options` bytes:
+
+| Offset | Size | Field |
+|--------|------|-------|
+| +0x00 | 2 | setting var_id |
+| +0x02 | N | one byte per MOP option (`0x01` = member of that mode) |
+
+The mode columns are taken from the `MOP` enum order, not from hardcoded mode
+names.
+
+This table describes which setting variables belong to each therapy mode. It is
+a per-mode setting membership map: for example, it can answer "which settings
+are part of VAuto?".
+
+The g[8] `permission_bitmask` is stored inside one enum/option descriptor and
+gates that variable's option/mode availability. It is local to that variable.
+g[24] is the broader table mapping many setting variables across all `MOP`
+modes.
+
+---
+
+## g[26] -- live stream records
+
+8 records x 20 bytes. Defines live stream schemas such as `TCE`, `PBT`, `PMD`,
+`FTX`, `RAW`, `DRT`, `CPU`, and `SSK`.
+
+| Offset | Size | Field |
+|--------|------|-------|
+| +0x00 | 1 | field count |
+| +0x01 | 3 | stream name |
+| +0x04 | 4 | config |
+| +0x08 | 4 | var_id array pointer |
+| +0x0C | 4 | rate/scale array pointer |
+| +0x10 | 4 | config |
+
+Some stream arrays differ by therapy family. For example, checked variants differ
+in `TCE` (`TCV` present on VAuto) and `PBT` (`TGT` present on ASV). The count
+field describes only the number of entries to read; the pointer fields define
+where the var_id/rate arrays actually live.
+
+---
+
+## g[27] -- APN/CSN/BRH records
+
+3 records x 16 bytes (`APN`, `CSN`, `BRH`) followed by a 24-byte shared OXH tail.
+The records point into a packed var_id pool near g[26].
+
+| Offset | Size | Field |
+|--------|------|-------|
+| +0x00 | 1 | field count |
+| +0x01 | 3 | record name |
+| +0x04 | 4 | config |
+| +0x08 | 4 | var_id array pointer |
+| +0x0C | 4 | rate/scale array pointer |
+
+Observed maximum windows:
+
+| Record | Vars |
+|--------|---------------|
+| APN | AET, DUR |
+| CSN | CET, CSR |
+| BRH | TID, ATP, INT, EXT |
 
 ---
 
@@ -412,20 +529,3 @@ g[8] entry +0x04: dependency_head_g4_idx
     -> g[4][next_dependent_g4_idx] +0x04: next_dependent_g4_idx
       -> ... (up to 4 deep, 0x7FFF terminates)
 ```
-
----
-
-## Patching reference
-
-Key offsets used by the patching tools:
-
-| Table | Offset | Field | Used by |
-|-------|--------|-------|---------|
-| g[4] | +0x00 bit 0 | ACT flag | gui_config, edf_merge |
-| g[4] | +0x0C | max_value | unlock_ui_limits |
-| g[4] | +0x10 | min_value | unlock_ui_limits, asv_unlock_ps_range |
-| g[6] | +0x00 | flags | unlock_languages |
-| g[6] | +0x08 | default_value | unlock_languages, extra_debug |
-| g[8] | +0x00 bit 0 | ACT flag | edf_merge |
-| g[8] | +0x08 | default_value | patch_defaults |
-| g[8] | +0x0C | permission_bitmask | extra_modes |

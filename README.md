@@ -31,12 +31,13 @@ See the [quickstart guide](docs/guide/quickstart.md) for a full walkthrough.
 
 | Document | Content |
 |----------|---------|
-| [UART protocol](docs/uart_protocol.md) | Frame format and commands |
 | [Config variables](docs/config_variables.md) | Firmware variable system and globals[] structures |
+| [Variable reference](docs/var_reference.tsv) | Firmware variables with var_id, UART name, EDF signal |
 | [resmed_config](docs/resmed_config.md) | UART configuration tool |
-| [resmed_flash](docs/resmed_flash.md) | UART flash tool |
-| [eeprom_tool](docs/eeprom_tool.md) | SPI EEPROM access |
-| [Variable reference](docs/var_reference.tsv) | All 744 variables with var_id, UART name, EDF signal |
+| [resmed_flash](docs/resmed_flash.md) | UART firmare flash tool |
+| [eeprom_tool](docs/eeprom_tool.md) | SPI EEPROM access (deprecated, see [native support](https://github.com/m-kozlowski/airbreak-plus/blob/master/docs/tools/resmed_config.md#calibration-eeprom) |
+| [UART protocol](docs/serial_protocol.md) | Frame format and commands |
+| [oximeter protocol](docs/oximeter_protocol.md) | Oximetry data submission specification |
 
 ## Related
 

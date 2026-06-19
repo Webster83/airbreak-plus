@@ -15,25 +15,7 @@ U <type:1> <len:3> <payload:N> <crc:4>
 | payload | N chars | ASCII payload, content depends on frame type |
 | crc | 4 hex chars | CRC-16/CCITT, uppercase hex |
 
-### CRC Calculation
-
-CRC-16/CCITT with polynomial 0x1021, init 0xFFFF. Computed over **all characters preceding the CRC field** (i.e., sync + type + len + payload). Input is raw ASCII bytes.
-
-```python
-def crc16_ccitt(data: bytes, init: int = 0xFFFF) -> int:
-    crc = init
-    for b in data:
-        crc ^= b << 8
-        for _ in range(8):
-            if crc & 0x8000:
-                crc = (crc << 1) ^ 0x1021
-            else:
-                crc <<= 1
-            crc &= 0xFFFF
-    return crc
-```
-
-Example: frame body `UQ016P S #LCA 0001` → CRC = `855C` → full frame = `UQ016P S #LCA 0001855C`
+Example: frame body `UQ016P S #LCA 0001` -> CRC = `855C` -> full frame = `UQ016P S #LCA 0001855C`
 
 ## Communication Sequence
 
@@ -41,7 +23,7 @@ The adapter runs three phases in order:
 
 ### Phase 1: Identification (Q-frames)
 
-Send `P S #LCT` with the adapter identifier string, padded with underscores to exactly 31 characters. Repeat every ~500ms until the device responds with an R-frame echo, up to ~20 attempts.
+Send `P S #LCT` with the adapter identifier string, padded with underscores to exactly 31 characters.
 
 ```
 UQ032P S #LCT ____Oximetry_______SX489-0200___BEA5
@@ -57,8 +39,8 @@ UQ032P S #LCT ____Oximetry_______SX489-0200___BEA5
 Show a brief popup notification on the device LCD, then hide it:
 
 ```
-UQ016P S #LCA 0001855C      ← show popup
-UQ016P S #LCA 0000957D      ← hide popup
+UQ016P S #LCA 0001855C      # show popup
+UQ016P S #LCA 0000957D      # hide popup
 ```
 
 - Send show, wait ~2 seconds, send hide
@@ -79,7 +61,7 @@ UL019OXH<seq><data><crc>
 
 #### Sequence Counter
 
-`<seq>` is a 2-character hex counter (00–FF). Increments by 1 each frame, wraps from FF → 00. Must be continuous.
+`<seq>` is a 2-character hex counter (00–FF). Increments by 1 each frame, wraps from FF -> 00. Must be continuous.
 
 #### Data Field
 
@@ -228,9 +210,3 @@ On finger removal, OXS immediately changes to no-finger pattern (0x99/0x9B), HRR
 
 If frames stop arriving, the device reverts to showing no oximeter data after a short timeout.
 
-## Implementation Notes
-
-1. **Frame rate is important.** The device expects ~3 frames/sec.
-2. **Toggle bits must alternate every frame.** Frozen toggle = device treats adapter as stalled.
-3. **Sequence counter must be continuous.** Gaps may trigger error handling.
-4. **HRR values above 300 are silently discarded** by the device - the display shows dashes as if no data is present.

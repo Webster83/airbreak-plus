@@ -1490,7 +1490,7 @@ class ModeTable:
 
 
 class PDLTable:
-    """Parse globals[20] -- PDL (Patient Data Log) definition.
+    """Parse globals[20] -- PDL definition.
 
     Structure at globals[20]:
       +0x00: char[4]  name ("PDL\\0")
