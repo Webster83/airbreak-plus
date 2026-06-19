@@ -40,4 +40,5 @@ See the [quickstart guide](docs/guide/quickstart.md) for a full walkthrough.
 
 ## Related
 
-- [airbridge](https://github.com/m-kozlowski/airbridge) -- ESP32 WiFi bridge for AirSense 10 service port
+- [airbridge](https://github.com/m-kozlowski/airbridge) - ESP32 WiFi bridge for AirSense 10 service port
+- [aircannect](https://github.com/m-kozlowski/aircannect) - Wireless adapter for AirSense/AirCurve 11 devices 
