@@ -72,6 +72,25 @@ resmed_config.py list
 resmed_config.py list --groups MGL DGL
 ```
 
+### known
+
+Offline lookup of names the tool knows about.
+
+```
+resmed_config.py known
+resmed_config.py known vars EPR
+resmed_config.py known groups MGL
+resmed_config.py known enums MOP
+```
+
+### raw
+
+Send one raw UART command to a live device.
+
+```
+resmed_config.py -p /dev/ttyACM0 raw 'G S #BID'
+```
+
 ### caps
 
 Query variable values and limits from the device.
@@ -106,8 +125,8 @@ the selected `ETR` command, polls until `ETR=0000`, then restores the original
 | `sd-restore-raw` | `0004` | `mmc:0:EEPROM\EEPROM.dat` to raw EEPROM |
 | `sd-export-tree` | `0005` | copy `eep:0:` tree to `mmc:0:EEPROM` |
 | `sd-import-tree` | `0006` | copy fixed `mmc:0:EEPROM` paths back to `eep:0:` |
-| `erase-logical-pages` | `0001` | zero EEPROM logical pages |
-| `format-eep-fat` | `0002` | formats/reinitializes the `eep:0` FAT filesystem |
+| `erase-logical-pages` | `0001` | zero EEPROM logical pages; requires `--yes --really`; destroys unit-specific EEPROM data |
+| `format-eep-fat` | `0002` | formats/reinitializes the `eep:0` FAT filesystem; requires `--yes --really`; destroys unit-specific EEPROM data |
 
 ## Variable groups
 
