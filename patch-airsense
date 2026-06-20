@@ -850,7 +850,7 @@ patch_backlight_adapt() {
 
 patch_edf_merge() {
     echo "Patching EDF signal superset"
-    python3 ./python/edf_ccx_merge.py "$OUT" -o "$OUT" --force || die "EDF merge failed"
+    python3 ./python/edf_ccx_merge.py "$OUT" -o "$OUT" --force --ignore-input-crc || die "EDF merge failed"
 }
 
 
@@ -945,7 +945,6 @@ patch_vid_spoof
 asv_unlock_ps_range
 
 custom_palette
-
 
 patch_edf_merge
 

@@ -1620,12 +1620,16 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Show detailed patch list")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without writing")
     parser.add_argument("--force", action="store_true", help="Skip variant detection warnings")
+    parser.add_argument(
+        "--ignore-input-crc", action="store_true",
+        help="Allow input whose firmware region CRCs are already dirty"
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
     firmware_cls = load_as10_firmware_class()
     with input_path.open("rb") as f:
-        asf = firmware_cls(f)
+        asf = firmware_cls(f, validate_crc=not args.ignore_input_crc)
 
     patches = patch_edf_merge(asf, force=args.force, verbose=args.verbose)
 

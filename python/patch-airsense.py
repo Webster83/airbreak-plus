@@ -49,13 +49,13 @@ class ASFirmware(object):
         8:  dict(stride=0x14, id_base=0x20D),
     }
 
-    def __init__(self, file):
+    def __init__(self, file, validate_crc=True):
         self.fw = file.read()
         self.fw = list(self.fw)
         self.crcfunc = crc_func = crcmod.predefined.mkCrcFun('crc-ccitt-false')
         self.var_by_name = None
         
-        self.validate()
+        self.validate(validate_crc=validate_crc)
 
     def read_u8(self, off):
         return self.fw[off]
@@ -144,7 +144,7 @@ class ASFirmware(object):
             return self.find_var_name(var)
         return self.find_var_id(var)
         
-    def validate(self):
+    def validate(self, validate_crc=True):
         """Validate the input file looks OK and populate information"""
         
         self.hash = hashlib.sha256(bytes(self.fw)).hexdigest()
@@ -168,17 +168,17 @@ class ASFirmware(object):
         self.cdx_size = self.platform['cdx_size']
         self.globals_addr = self.ccx_off + self.GLOBALS_REL
 
-        # Check CRCs
-        blocks = [
-            ('BLX', self.blx_off, self.blx_size),
-            ('CCX', self.ccx_off, self.ccx_size),
-            ('CDX', self.cdx_off, self.cdx_size),
-        ]
-        for name, off, size in blocks:
-            crc = self.crcfunc(bytes(self.fw[off:off + size]))
-            if crc != 0:
-                print("%s CRC: 0x%04x (expected 0)" % (name, crc))
-                raise IOError("CRC mismatch in %s block" % name)
+        if validate_crc:
+            blocks = [
+                ('BLX', self.blx_off, self.blx_size),
+                ('CCX', self.ccx_off, self.ccx_size),
+                ('CDX', self.cdx_off, self.cdx_size),
+            ]
+            for name, off, size in blocks:
+                crc = self.crcfunc(bytes(self.fw[off:off + size]))
+                if crc != 0:
+                    print("%s CRC: 0x%04x (expected 0)" % (name, crc))
+                    raise IOError("CRC mismatch in %s block" % name)
 
         # Read version strings
         self.str_model_number = bytes(self.fw[self.ccx_off + 0x20:self.ccx_off + 0x27]).decode()
