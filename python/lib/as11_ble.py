@@ -122,7 +122,7 @@ class SRPClient:
         h_g = H(_srp_pad(_SRP_G))
         h_xor = bytes(a ^ b for a, b in zip(h_N, h_g))
         self.M1 = H(h_xor, salt, _srp_pad(self.A), _srp_pad(B), self.K)
-        self.M2 = H(self.M1, h_xor)
+        self.M2 = H(_srp_pad(self.A), self.M1, self.K)
 
     @property
     def client_proof_hex(self):
@@ -589,6 +589,10 @@ class As11Connection:
         result2 = resp2.get("result", {})
         log.info("SRP: paired! result: %s", json.dumps(result2)[:200])
 
+        server_confirmation = result2.get("serverConfirmation", "")
+        if server_confirmation:
+            srp.verify_server(server_confirmation)
+
         nonce = result2.get("nonce", "")
         aes_key_hex = srp.derive_session_key(nonce)
         self.set_session_key(aes_key_hex)
@@ -600,7 +604,7 @@ class As11Connection:
             "sessionKey": aes_key_hex[:32],
             "serverPk": server_pk,
             "nonce": result2.get("nonce", ""),
-            "serverConfirmation": result2.get("serverConfirmation", ""),
+            "serverConfirmation": server_confirmation,
         }
 
 

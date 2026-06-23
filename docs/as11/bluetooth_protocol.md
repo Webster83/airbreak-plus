@@ -120,7 +120,7 @@ All big integers are serialized as 256-byte big-endian values before hashing.
 | `S` | `(B - k * g^x)^(a + u * x) mod N` |
 | `K` | `H(pad(S))` |
 | `M1` | `H((H(N) xor H(g)) || salt_raw || pad(A) || pad(B) || K)` |
-| `M2` | `H(M1 || (H(N) xor H(g)))` |
+| `M2` | `H(pad(A) || M1 || K)` |
 
 There is no SRP identity string and no `identity:password` hash. `H(...)`
 means SHA-256 over concatenated byte strings.
