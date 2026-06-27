@@ -1818,7 +1818,16 @@ class DB:
         if end is None:
             raise ValueError(f"cannot infer globals[{tnum}] count")
         size = end - base
-        if size <= 0 or size % stride:
+        if size <= 0:
+            raise ValueError(f"globals[{tnum}] size 0x{size:X} is invalid")
+        rem = size % stride
+        if rem:
+            count = size // stride
+            pad = self.fl.blob(base + count * stride, rem)
+            # Older SX584 aligns the following table after g[3], leaving a
+            # short zero pad that is not part of the descriptor array.
+            if tnum == 3 and 0 < rem < 4 and count > 0 and pad and all(b == 0x00 for b in pad):
+                return count
             raise ValueError(
                 f"globals[{tnum}] size 0x{size:X} is not aligned to stride 0x{stride:X}")
         return size // stride
@@ -2269,7 +2278,7 @@ def build_command_parser(prog="as10"):
 
 def build_main_parser():
     parser = argparse.ArgumentParser(
-        description="ResMed AirSense 10 -- Descriptor Navigator")
+        description="ResMed Air10 - Descriptor Navigator")
     parser.add_argument("firmware", help="raw flash binary")
     parser.add_argument("-i", "--interactive", action="store_true",
                         help="start interactive descriptor shell")
