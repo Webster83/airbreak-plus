@@ -568,6 +568,19 @@ class Entry6:
             f"    label_str  = 0x{self.label_str:04X}{lbl}")
 
 
+M36_XML_ENUM_LABELS = {
+    ('HTB', 3): ('M36 XML metadata', ('None', '15mm', '19mm')),
+    ('HUM', 3): ('M36 XML metadata', ('End Cap', 'Internal', 'External')),
+}
+
+
+def _metadata_enum_labels(db, entry):
+    if not db:
+        return None
+    name = db.uart_name(entry.var_id)
+    return M36_XML_ENUM_LABELS.get((name, entry.num_options))
+
+
 class Entry8:
     TABLE = 8
     def __init__(self, fl, addr, idx, id_base):
@@ -615,8 +628,9 @@ class Entry8:
         link_ref = _g4_idx_ref(self.linked_var_idx, db, none="")
         link = f"dep={link_ref}" if link_ref else ""
         opts = ""
-        if db and self.has_strings():
-            labels = self.option_strings(db)
+        if db and (self.has_strings() or _metadata_enum_labels(db, self)):
+            meta = None if self.has_strings() else _metadata_enum_labels(db, self)
+            labels = self.option_strings(db) if meta is None else list(meta[1])
             parts = []
             for i, lb in enumerate(labels):
                 if lb:
@@ -662,10 +676,14 @@ class Entry8:
         # Per-option breakdown
         if self.num_options > 0:
             lines.append("    -- options --")
+            meta = None if self.has_strings() else _metadata_enum_labels(db, self)
+            meta_labels = list(meta[1]) if meta else []
             for i in range(self.num_options):
                 allowed = "Y" if self.perm_mask & (1 << i) else "N"
                 label = ""
-                if db and self.has_strings():
+                if i < len(meta_labels):
+                    label = f'  "{meta_labels[i]}"'
+                elif db and self.has_strings():
                     s = db.string(self.base_str_id + i)
                     sid = self.base_str_id + i
                     if s:
@@ -675,6 +693,8 @@ class Entry8:
                     else:
                         label = f'  ?str#0x{sid:04X}'
                 lines.append(f"      [{i:>2}] perm={allowed}{label}")
+            if meta:
+                lines.append(f"    NOTE: option labels from {meta[0]}")
             lan_idx = db._table_index_for_name('LAN', 8, fallback=5) if db else 5
             lnc_idx = db._table_index_for_name('LNC', 6, fallback=7) if db else 7
             htx_idx = db._table_index_for_name('HTX', 8, fallback=0x19) if db else 0x19
@@ -1239,8 +1259,16 @@ def _signal_value_info(db, var_id):
     entry = db.get(var_id)
     if isinstance(entry, Entry8):
         labels = entry.option_strings(db)
+        source = None
+        if not labels:
+            meta = _metadata_enum_labels(db, entry)
+            if meta:
+                source, labels = meta[0], list(meta[1])
         if labels:
-            return "  [enum: " + ", ".join(f"{i}={label}" for i, label in enumerate(labels)) + "]"
+            text = "  [enum: " + ", ".join(f"{i}={label}" for i, label in enumerate(labels))
+            if source:
+                text += f"; source={source}"
+            return text + "]"
         if entry.num_options:
             return "  [enum: " + ", ".join(str(i) for i in range(entry.num_options)) + "]"
         return ""
