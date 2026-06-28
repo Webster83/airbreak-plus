@@ -1233,6 +1233,22 @@ class NameTableFlat:
             return [(l, v, u) for l, v, u in self.entries if l == q]
 
 
+def _signal_value_info(db, var_id):
+    if not db:
+        return ""
+    entry = db.get(var_id)
+    if not isinstance(entry, Entry4):
+        return ""
+    unit = ""
+    if entry.units_str_id and entry.units_str_id not in (0xFFFF, 0xDE):
+        text = db.string(entry.units_str_id)
+        if text:
+            unit = f" {text}"
+    return (f"  [phys={entry._fmt(entry.min_value)}..{entry._fmt(entry.max_value)}{unit}; "
+            f"raw={entry.min_value}..{entry.max_value}; "
+            f"scale={entry.scale_str()}]")
+
+
 class SignalChannel:
     """Signal channel descriptor. Used for BRP, CSL, STR, OXH, etc.
 
@@ -1324,7 +1340,7 @@ class SignalChannel:
 
         print(f"[+] globals[{gidx}]: {self.name} ({self.count} fields)")
 
-    def dump(self):
+    def dump(self, db=None):
         lines = [f"  {self.name} ({self.count} fields) @ 0x{self.addr:08X}:"]
         for i, (vid, uart) in enumerate(self.var_ids):
             u = f":{uart}" if uart else ""
@@ -1335,7 +1351,7 @@ class SignalChannel:
                 # Assume 60s record duration for rate calculation
                 rate = n / 60.0 if n > 1 else 0
                 spr = f"  [{n} samp" + (f", {rate:.1f} Hz" if rate > 0 else "") + "]"
-            lines.append(f"    0x{vid:04X}{u}{fn}{spr}")
+            lines.append(f"    0x{vid:04X}{u}{fn}{spr}{_signal_value_info(db, vid)}")
         return "\n".join(lines)
 
 
@@ -2483,6 +2499,9 @@ def _run_mode(db, mode):
 
 
 def _run_channels(db, gidx, name):
+    def dump_for(ch):
+        return ch.dump(db if ch.gidx in (11, 13) else None)
+
     if not db.channels:
         print("  no signal channels loaded")
         return
@@ -2490,19 +2509,19 @@ def _run_channels(db, gidx, name):
         hits = [ch for ch in db.channels.values() if ch.gidx == gidx]
         if hits:
             for ch in hits:
-                print(ch.dump())
+                print(dump_for(ch))
         else:
             print(f"  no channels from globals[{gidx}]")
     elif name:
         ch = db.channels.get(name.upper())
         if ch:
-            print(ch.dump())
+            print(dump_for(ch))
         else:
             print(f"  channel '{name}' not found")
             print(f"  available: {', '.join(sorted(db.channels.keys()))}")
     else:
         for ch_name in sorted(db.channels):
-            print(db.channels[ch_name].dump())
+            print(dump_for(db.channels[ch_name]))
 
 
 def run_repl(db):
