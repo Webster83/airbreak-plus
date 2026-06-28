@@ -1237,6 +1237,13 @@ def _signal_value_info(db, var_id):
     if not db:
         return ""
     entry = db.get(var_id)
+    if isinstance(entry, Entry8):
+        labels = entry.option_strings(db)
+        if labels:
+            return "  [enum: " + ", ".join(f"{i}={label}" for i, label in enumerate(labels)) + "]"
+        if entry.num_options:
+            return "  [enum: " + ", ".join(str(i) for i in range(entry.num_options)) + "]"
+        return ""
     if not isinstance(entry, Entry4):
         return ""
     unit = ""
