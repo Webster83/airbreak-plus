@@ -581,6 +581,17 @@ def _metadata_enum_labels(db, entry):
     return M36_XML_ENUM_LABELS.get((name, entry.num_options))
 
 
+def _is_no_string_id(db, str_id):
+    if str_id in (-1, 0, 0xFFFF):
+        return True
+    if db:
+        if str_id == getattr(db, 'no_string_id', None):
+            return True
+        if db.string(str_id) is None:
+            return True
+    return False
+
+
 class Entry8:
     TABLE = 8
     def __init__(self, fl, addr, idx, id_base):
@@ -598,12 +609,12 @@ class Entry8:
         self.base_str_id   = fl.s16(addr + 0x10)
         self.param_12      = fl.s16(addr + 0x12)   # s16 param slot (0 = unused)
 
-    def has_strings(self):
-        return self.base_str_id not in (0x00DE, -1, 0) and self.base_str_id >= 0
+    def has_strings(self, db=None):
+        return self.base_str_id >= 0 and not _is_no_string_id(db, self.base_str_id)
 
     def option_strings(self, db):
         """Return list of option name strings."""
-        if not db or not self.has_strings():
+        if not db or not self.has_strings(db):
             return []
         out = []
         for i in range(self.num_options):
@@ -622,15 +633,16 @@ class Entry8:
     def oneline(self, db=None):
         off = self.addr - (db.table_bases.get(8, self.addr) if db else self.addr)
         name = ""
-        if db and self.name_str_id and self.name_str_id not in (0xFFFF, 0xDE):
+        if db and not _is_no_string_id(db, self.name_str_id):
             n = db.string(self.name_str_id)
             if n: name = f' "{n}"'
         link_ref = _g4_idx_ref(self.linked_var_idx, db, none="")
         link = f"dep={link_ref}" if link_ref else ""
         opts = ""
-        if db and (self.has_strings() or _metadata_enum_labels(db, self)):
-            meta = None if self.has_strings() else _metadata_enum_labels(db, self)
-            labels = self.option_strings(db) if meta is None else list(meta[1])
+        labels = self.option_strings(db) if db else []
+        meta = _metadata_enum_labels(db, self) if not labels else None
+        if db and (labels or meta):
+            labels = labels if meta is None else list(meta[1])
             parts = []
             for i, lb in enumerate(labels):
                 if lb:
@@ -650,11 +662,11 @@ class Entry8:
         off = self.addr - (db.table_bases.get(8, self.addr) if db else self.addr)
         link = _g4_idx_ref(self.linked_var_idx, db, none="none", detail=True)
         name = ""
-        if db and self.name_str_id and self.name_str_id not in (0xFFFF, 0xDE):
+        if db and not _is_no_string_id(db, self.name_str_id):
             n = db.string(self.name_str_id)
             if n: name = f' = "{n}"'
         stxt = "none"
-        if self.has_strings():
+        if self.has_strings(db):
             stxt = f"str#{self.base_str_id}"
             if db:
                 s = db.string(self.base_str_id)
@@ -676,14 +688,15 @@ class Entry8:
         # Per-option breakdown
         if self.num_options > 0:
             lines.append("    -- options --")
-            meta = None if self.has_strings() else _metadata_enum_labels(db, self)
+            labels = self.option_strings(db) if db else []
+            meta = _metadata_enum_labels(db, self) if not labels else None
             meta_labels = list(meta[1]) if meta else []
             for i in range(self.num_options):
                 allowed = "Y" if self.perm_mask & (1 << i) else "N"
                 label = ""
                 if i < len(meta_labels):
                     label = f'  "{meta_labels[i]}"'
-                elif db and self.has_strings():
+                elif db and self.has_strings(db):
                     s = db.string(self.base_str_id + i)
                     sid = self.base_str_id + i
                     if s:
@@ -1260,10 +1273,9 @@ def _signal_value_info(db, var_id):
     if isinstance(entry, Entry8):
         labels = entry.option_strings(db)
         source = None
-        if not labels:
-            meta = _metadata_enum_labels(db, entry)
-            if meta:
-                source, labels = meta[0], list(meta[1])
+        meta = _metadata_enum_labels(db, entry) if not labels else None
+        if meta:
+            source, labels = meta[0], list(meta[1])
         if labels:
             text = "  [enum: " + ", ".join(f"{i}={label}" for i, label in enumerate(labels))
             if source:
@@ -1680,6 +1692,7 @@ class DB:
         self.g5_end_idx = None
         self.g5_alias_count = 0
         self.g4_subrange_base_idx = None
+        self.no_string_id = None
 
         g23 = ta.get('names')
         if g23:
@@ -1704,6 +1717,7 @@ class DB:
             raw_s = f"0x{raw:08X}" if raw else "auto"
             print(f"[+] Strings: globals[2]=0x{g2:08X}, "
                   f"raw={raw_s}, max_id={self.strtab.max_id}")
+            self.no_string_id = self._infer_no_string_id()
 
         # Load timer scale table (globals[1], bounded by globals[2])
         g1 = ta.get('timers')
@@ -1830,6 +1844,20 @@ class DB:
             if prev_had_b7 and not has_b7:
                 return entry.idx
             prev_had_b7 = has_b7
+        return None
+
+    def _infer_no_string_id(self):
+        # Firmware enum-string code compares base_str_id against a per-build
+        # sentinel. ROP is a stable no-label enum and carries that sentinel.
+        rop = self._entry_for_name('ROP')
+        if not isinstance(rop, Entry8):
+            return None
+        for sid in (rop.base_str_id, rop.name_str_id):
+            if sid in (-1, 0, 0xFFFF) or sid < 0:
+                continue
+            vals = self.strings_all(sid)
+            if vals and all(v == "" for v in vals):
+                return sid
         return None
 
     def _table_index_for_name(self, name, table_num, fallback=None):
