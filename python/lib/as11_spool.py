@@ -1648,6 +1648,21 @@ _SUMMARY_FIELDS = {
     43: "UnknownTimestamp",
 }
 
+_SUMMARY_SCALAR_SCALES = {
+    # Summary index fields are read from g2 DataItems in 0.1 units and the
+    # protobuf formatter multiplies them by 10, so the wire value is centi-units
+    # but only carries one decimal digit of source precision.
+    7: 0.01,   # AHI
+    8: 0.01,   # ApneaIndex
+    9: 0.01,   # HypopneaIndex
+    10: 0.01,  # ObstructiveApneaIndex
+    11: 0.01,  # CentralApneaIndex
+    12: 0.01,  # UnknownApneaIndex
+    13: 0.01,  # ReraIndex
+    18: 0.01,  # SpontTriggerPercentage
+    19: 0.01,  # SpontCyclePercentage
+}
+
 _SUMMARY_SUBFIELDS = {
     14: {2: (50, 2.0), 3: (70, 2.0), 4: (95, 2.0), 5: (100, 2.0)},  # Leak
     15: {2: (50, 2.0), 3: (95, 2.0), 4: (100, 2.0)},
@@ -1773,7 +1788,12 @@ def _summary_record_stats(data: bytes) -> dict:
                                          f"{len(value)}B"))
             continue
         if wire == 0:
-            stats["scalars"].append((_summary_metric_name(label), value))
+            scale = _SUMMARY_SCALAR_SCALES.get(field)
+            if scale is not None:
+                stats["scalars"].append((_summary_metric_name(label),
+                                         value * scale, value))
+            else:
+                stats["scalars"].append((_summary_metric_name(label), value))
         elif wire == 1:
             stats["scalars"].append((_summary_metric_name(label), value))
         elif wire == 5:
@@ -1785,7 +1805,8 @@ def _summary_record_stats(data: bytes) -> dict:
 
 
 def _summary_scalar(stats: dict, name: str):
-    for key, value in stats["scalars"]:
+    for item in stats["scalars"]:
+        key, value = item[0], item[1]
         if key == name:
             return value
     return None
@@ -1825,13 +1846,17 @@ def _summary_record_compact(index: int, data: bytes, out) -> None:
         "TimeZoneOffsetMin", "DurationMin", "SessionCount", "ClockB",
         "UnknownTimestamp",
     }
-    scalars = [(name, value) for name, value in stats["scalars"]
-               if name not in skip_scalars]
+    scalars = [item for item in stats["scalars"]
+               if item[0] not in skip_scalars]
     if scalars:
         print("  scalars:", file=out)
         line = "    "
-        for name, value in scalars:
-            item = f"{name}={value}"
+        for scalar in scalars:
+            name, value = scalar[0], scalar[1]
+            if len(scalar) > 2:
+                item = f"{name}={value:g} (raw={scalar[2]})"
+            else:
+                item = f"{name}={value}"
             if len(line) + len(item) + 2 > 96:
                 print(line.rstrip(), file=out)
                 line = "    "
