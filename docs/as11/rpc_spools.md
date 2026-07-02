@@ -13,6 +13,7 @@ caveat are described in
   - [Full enumeration](#full-enumeration)
 - [Inner record shapes](#inner-record-shapes)
   - [Profile collection records](#profile-collection-records)
+  - [Summary records](#summary-records)
   - [Event records](#event-records)
   - [TherapyOneMinutePeriodic records](#therapyoneminuteperiodic-records)
   - [Metric snapshot records](#metric-snapshot-records)
@@ -107,6 +108,74 @@ are verified.
 `DataDeliveryControlV2`, whose fields map to spool families such as
 `Summary`, `TherapyOneMinutePeriodic`, `RespiratoryFlow6p25Hz`, and
 `CellularDataUsage`.
+
+### Summary records
+
+`Summary` returns repeated daily summary records. The outer payload is repeated
+field `2`; each field `2` body is one record with this shape:
+
+| Field | Name | Meaning |
+|-------|------|---------|
+| `1` | `InitMarker` | Record-present marker; value `1`. |
+| `2` | `PeriodStart` | Summary bucket start, UTC milliseconds. |
+| `3` | `PeriodEnd` | Summary bucket end, UTC milliseconds. |
+| `4` | `TimeZoneOffsetMin` | Local timezone offset in minutes for the bucket. |
+| `5` | `DurationMin` | Therapy duration in minutes. |
+| `6` | `SessionDurationEntries` | Repeated session-duration subrecords. |
+| `7` | `AHI` | Apnea/hypopnea index. |
+| `8` | `ApneaIndex` | Apnea index. |
+| `9` | `HypopneaIndex` | Hypopnea index. |
+| `10` | `ObstructiveApneaIndex` | Obstructive apnea index. |
+| `11` | `CentralApneaIndex` | Central apnea index. |
+| `12` | `UnknownApneaIndex` | Unknown apnea index. |
+| `13` | `ReraIndex` | RERA index. |
+| `14` | `Leak` | Percentile metric subrecord. |
+| `15` | `InspiratoryPressure` | Percentile metric subrecord. |
+| `16` | `CSR` | CSR scalar. |
+| `17` | `SpO2Thresh` | Time below SpO2 threshold, in minutes. |
+| `18` | `SpontTriggerPercentage` | Spontaneous trigger percentage. |
+| `19` | `SpontCyclePercentage` | Spontaneous cycle percentage. |
+| `20` | `ExpiratoryPressure` | Percentile metric subrecord. |
+| `21` | `MeanMaskPressure` | Percentile metric subrecord. |
+| `22` | `TidalVolume` | Percentile metric subrecord. |
+| `23` | `MinuteVentilation` | Percentile metric subrecord. |
+| `24` | `TargetMinuteVentilation` | Percentile metric subrecord. |
+| `25` | `RespiratoryRate` | Percentile metric subrecord. |
+| `26` | `InspiratoryDuration` | Percentile metric subrecord. |
+| `27` | `IeRatio` | Percentile metric subrecord. |
+| `28` | `SpO2` | Percentile metric subrecord. |
+| `29` | `AmbientHumidity` | Percentile metric subrecord. |
+| `30` | `HumidifierTemperature` | Percentile metric subrecord. |
+| `31` | `HeatedTubeTemperature` | Percentile metric subrecord. |
+| `32` | `HumidifierPower` | Percentile metric subrecord. |
+| `33` | `HeatedTubePower` | Percentile metric subrecord. |
+| `34` | `HumidifierConnected` | Device-connected enum. |
+| `35` | `TubeConnected` | Device-connected enum. |
+| `36` | `BlowerPressure` | Percentile metric subrecord. |
+| `37` | `RespiratoryFlow` | Percentile metric subrecord. |
+| `38` | `BlowerFlow` | Percentile metric subrecord. |
+| `39` | `SessionCount` | Number of session entries emitted into field `6`. |
+| `40` | `RecordTimestamp` | Record/report timestamp. Empty buckets use `PeriodStart`; populated buckets use the record timestamp passed to the Summary header builder. |
+| `41` | `HeartRate` | Percentile metric subrecord. |
+| `42` | `AlveolarMinuteVentilation` | Alveolar minute ventilation percentile metric. |
+| `43` | `SmdSmtTimestamp` | Optional timestamp encoded as an `SMD`/`SMT` date/time pair. |
+
+Field `6` contains repeated field `1` subrecords:
+
+| Subfield | Meaning |
+|----------|---------|
+| `1` | Session timestamp, UTC milliseconds. |
+| `2` | Session duration in minutes. |
+
+Metric subrecords use percentile-like subfields:
+
+| Parent fields | Subfields |
+|---------------|-----------|
+| `14` Leak | `2`=p50, `3`=p70, `4`=p95, `5`=p100 |
+| `15`, `20`, `21`, `22`, `23`, `24`, `25`, `26`, `27`, `28`, `41`, `42` | `2`=p50, `3`=p95, `4`=p100 |
+| `29`, `30`, `31`, `32`, `33`, `38` | `2`=p50 |
+| `36` BlowerPressure | `1`=p5, `3`=p95 |
+| `37` RespiratoryFlow | `1`=p5, `3`=p95 |
 
 ### Event records
 

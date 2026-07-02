@@ -1608,7 +1608,7 @@ _SUMMARY_FIELDS = {
     3:  "PeriodEnd",
     4:  "TimeZoneOffsetMin",
     5:  "DurationMin",
-    6:  "SessionModeEntries",
+    6:  "SessionDurationEntries",
     7:  "AHI (Summary-ApneaHypopneaIndex)",
     8:  "ApneaIndex",
     9:  "HypopneaIndex",
@@ -1618,8 +1618,8 @@ _SUMMARY_FIELDS = {
     13: "ReraIndex",
     14: "Leak",
     15: "InspiratoryPressure",
-    16: "f16_CSD",
-    17: "f17_SAU",
+    16: "CSR",
+    17: "SpO2Thresh",
     18: "SpontTriggerPercentage",
     19: "SpontCyclePercentage",
     20: "ExpiratoryPressure",
@@ -1642,10 +1642,10 @@ _SUMMARY_FIELDS = {
     37: "RespiratoryFlow",
     38: "BlowerFlow",
     39: "SessionCount",
-    40: "ClockB",
+    40: "RecordTimestamp",
     41: "HeartRate",
-    42: "f42_AV*",
-    43: "UnknownTimestamp",
+    42: "AlveolarMinuteVentilation",
+    43: "SmdSmtTimestamp",
 }
 
 _SUMMARY_SCALAR_SCALES = {
@@ -1736,7 +1736,7 @@ def _summary_session_entries(data: bytes) -> list[tuple[int | None, int | None]]
         if field != 1 or wire != 2:
             continue
         ts = None
-        mode = None
+        duration_min = None
         try:
             fields = proto_decode(value)
         except (ValueError, IndexError):
@@ -1745,15 +1745,15 @@ def _summary_session_entries(data: bytes) -> list[tuple[int | None, int | None]]
             if sf == 1 and sw == 0:
                 ts = sv
             elif sf == 2 and sw == 0:
-                mode = sv
-        entries.append((ts, mode))
+                duration_min = sv
+        entries.append((ts, duration_min))
     return entries
 
 
-def _summary_session_code(mode: int | None) -> str:
-    if mode is None:
+def _summary_session_duration(duration_min: int | None) -> str:
+    if duration_min is None:
         return "n/a"
-    return str(mode)
+    return str(duration_min)
 
 
 def _summary_record_stats(data: bytes) -> dict:
@@ -1821,7 +1821,8 @@ def _summary_record_compact(index: int, data: bytes, out) -> None:
     session_count = _summary_scalar(stats, "SessionCount")
     if session_count is None:
         session_count = len(stats["session_entries"])
-    clock = _summary_scalar(stats, "ClockB")
+    record_ts = _summary_scalar(stats, "RecordTimestamp")
+    smd_smt_ts = _summary_scalar(stats, "SmdSmtTimestamp")
     print(f"Summary record {index} ({len(data)}B):", file=out)
     if isinstance(start, int) and isinstance(end, int):
         print(f"  range: {_fmt_utc_ms(start)} -> {_fmt_utc_ms(end)}", file=out)
@@ -1831,20 +1832,23 @@ def _summary_record_compact(index: int, data: bytes, out) -> None:
     bits.append(f"sessions={session_count}")
     if tz_offset is not None:
         bits.append(f"tz_offset_min={tz_offset}")
-    if isinstance(clock, int):
-        bits.append(f"clock={_fmt_utc_ms(clock)}")
+    if isinstance(record_ts, int):
+        bits.append(f"record_ts={_fmt_utc_ms(record_ts)}")
+    if isinstance(smd_smt_ts, int):
+        bits.append(f"smd_smt_ts={_fmt_utc_ms(smd_smt_ts)}")
     print("  " + " ".join(bits), file=out)
 
     if stats["session_entries"]:
         print("  session_entries:", file=out)
-        for ts, mode in stats["session_entries"]:
+        for ts, duration_min in stats["session_entries"]:
             when = _fmt_utc_ms(ts) if isinstance(ts, int) else "n/a"
-            print(f"    {when}  code={_summary_session_code(mode)}", file=out)
+            print(f"    {when}  duration_min={_summary_session_duration(duration_min)}",
+                  file=out)
 
     skip_scalars = {
         "f1_init_marker", "PeriodStart", "PeriodEnd",
-        "TimeZoneOffsetMin", "DurationMin", "SessionCount", "ClockB",
-        "UnknownTimestamp",
+        "TimeZoneOffsetMin", "DurationMin", "SessionCount",
+        "RecordTimestamp", "SmdSmtTimestamp",
     }
     scalars = [item for item in stats["scalars"]
                if item[0] not in skip_scalars]
