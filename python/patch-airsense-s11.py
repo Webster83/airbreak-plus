@@ -507,6 +507,13 @@ class S11Firmware(object):
 
         self.g1_count = self.count_records(self.g1_base, self.G1_STRIDE)
         self.g2_count = self.count_records(self.g2_base, self.G2_STRIDE)
+        # Some CONF layouts place g[5] immediately after g[2]. g[5] rows can
+        # look like g[2] rows when stepped at 32 bytes, so stop g[2] at the
+        # physical g[5] boundary when it appears before the scanned terminator.
+        if self.g2_base < self.g5_base:
+            physical_g2_count = (self.g5_base - self.g2_base) // self.G2_STRIDE
+            if physical_g2_count > 0:
+                self.g2_count = min(self.g2_count, physical_g2_count)
         self.g3_count = self.count_records(self.g3_base, self.G3_STRIDE)
         self.g5_count = self.count_records(self.g5_base, self.G5_STRIDE)
 
