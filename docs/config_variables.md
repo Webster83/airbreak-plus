@@ -439,10 +439,9 @@ modes.
 | +0x0C | 4 | rate/scale array pointer |
 | +0x10 | 4 | config |
 
-Some stream arrays differ by therapy family. For example, checked variants differ
-in `TCE` (`TCV` present on VAuto) and `PBT` (`TGT` present on ASV). The count
-field describes only the number of entries to read; the pointer fields define
-where the var_id/rate arrays actually live.
+Some stream arrays differ by therapy family. The count field describes only the
+number of entries to read; the pointer fields define where the var_id/rate
+arrays actually live.
 
 ---
 
@@ -466,6 +465,30 @@ Observed maximum windows:
 | APN | AET, DUR |
 | CSN | CET, CSR |
 | BRH | TID, ATP, INT, EXT |
+
+Live stream reporting is enabled over UART with `P S &TAG 1` and disabled with
+`P S &TAG 0`; see [serial_protocol.md](serial_protocol.md#live-stream-reporting).
+
+Common live stream fields across checked SX567 Air 10 variants:
+
+| Stream | Fields | Purpose |
+|--------|--------|---------|
+| PMD | MKP, RFL, LYK | Pressure, flow, and leak samples |
+| FTX | BPR, BFL, NSE, TEM | Flow/pressure sensor diagnostics |
+| RAW | PRS, FLW, NOS, TEZ | Raw pressure, flow, and temperature samples |
+| DRT | D00, D01, D02, D03, D04, D05, D06, D07, D08, D09 | Internal diagnostic values |
+| CPU | ALL, L01, L02, L03, L04, L05, L06, L07, L08, L09, L10, L11, L12, L13, L14, L15, L16, L17, L18, L19, L20 | CPU load counters |
+| SSK | S10, S20, S40, S11, S22, S44, S1S, S1M, SMM, SEE, SPL, SLD | Internal status values |
+| APN | AET, DUR | Apnea event timing |
+
+Variant-dependent live stream fields:
+
+| Stream | AirCurve VAuto | AirCurve CS | AirSense AutoSet/AfH | AirSense Elite | Purpose |
+|--------|----------------|-------------|---------------------|---------------|---------|
+| TCE | TCV, MKP, RFL, LYK | MKP, RFL, LYK | MKP, RFL, LYK | MKP, RFL, LYK | Therapy control samples |
+| PBT | MV5, RRR, LKF, TIP, TEP | MV5, TGT, RRR, LKF, TIP, TEP | MV5, RRR, LKF, TIP, TEP | MV5, RRR, LKF, TIP, TEP | Periodic breathing and ventilation summary |
+| CSN | CSR | CSR | CET, CSR | CET, CSR | CSR/central event status |
+| BRH | TID, ATP, INT, EXT | TID, ATP | TID, ATP | TID | Breath summary |
 
 ---
 

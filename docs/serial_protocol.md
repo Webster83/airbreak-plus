@@ -1,8 +1,8 @@
-# UART Protocol
+# Serial Protocol
 
 AirSense 10 external service port (USART3). 57600 8N1, 3.3V logic.
 
-## Frame format
+## Frame Format
 
 ```
 [0x55] [type] [len:3 hex-ASCII] [payload, 0x55-escaped] [crc:4 hex-ASCII]
@@ -11,149 +11,254 @@ AirSense 10 external service port (USART3). 57600 8N1, 3.3V logic.
 | Field | Size | Encoding |
 |-------|------|----------|
 | Sync | 1 | `0x55` literal |
-| Type | 1 | ASCII char: `E`, `F`, `f`, `K`, `L`, `O`, `P`, `Q`, `R`, `T` |
+| Type | 1 | ASCII char: `E`, `f`, `K`, `L`, `O`, `P`, `Q`, `R`, `T` |
 | Length | 3 | Hex-ASCII, total frame size in bytes (sync through CRC) |
 | Payload | 0..502 | Binary. `0x55` in payload escaped as `0x55 0x55` |
 | CRC-16 | 4 | Hex-ASCII, CRC-CCITT-FALSE over all preceding bytes |
 
-CRC: poly 0x1021, init 0xFFFF, no output XOR, MSB-first.
+CRC parameters: poly `0x1021`, init `0xFFFF`, no output XOR, MSB-first.
 
-Two frame types are immediate (no length/payload/CRC):
+Any `0x55` byte inside the payload is escaped as `0x55 0x55`. The length field
+counts the escaped wire bytes. CRC is computed over the escaped wire bytes.
 
-| Type | Wire bytes |
-|------|-----------|
-| O | `0x55 0x4F` |
-| P | `0x55 0x50` |
+Two frame types are immediate and have no length, payload, or CRC:
 
-## Frame types
+| Type | Wire bytes | Purpose |
+|------|------------|---------|
+| `O` | `0x55 0x4F` | Parser reset; sets `ZRO=1` when `ZLB` is active |
+| `P` | `0x55 0x50` | Parser reset |
+
+## Frame Types
 
 | Type | Direction | Format | Purpose |
 |------|-----------|--------|---------|
-| Q | host -> device | full | Query or set command |
-| R | device -> host | full | Success response |
-| E | device -> host | full | Error response |
-| L | host -> device | full | Oximetry data (SpO2 module feed, no response) |
-| K | device -> host | full | Stream data record (output only) |
-| F | host -> device | full | Flash data (S-records) |
-| f | host -> device | full | Flash completion marker |
-| O | host -> device | immediate | Session open (resets parser, sets ZRO if ZLB active) |
-| P | host -> device | immediate | Parser reset |
-| T | -- | -- | Reserved, rejected with E-frame 0x6011 |
+| `Q` | host -> device | full | ASCII command |
+| `R` | device -> host | full | Success response |
+| `E` | device -> host | full | Error response |
+| `K` | device -> host | full | Stored stream data response |
+| `L` | host -> device | full | Oximetry adapter input |
+| `L` | device -> host | full | Live stream report |
+| `f` | host -> bootloader | full | Firmware transfer frame |
+| `O` | host -> device | immediate | Parser reset; conditional `ZRO` marker |
+| `P` | host -> device | immediate | Parser reset |
+| `T` | -- | -- | Reserved; rejected with `0x6011` |
 
-CDX accepts 4 input types: Q, L, O, P. All others are rejected (E-frame 0x6011).
+## Q-Frame Commands
 
-Bootloader accepts: Q, F, f, P.
+Payload is ASCII command text. The CDX command dispatcher recognizes these
+command families:
 
-## Q-frame commands
+| Command | Purpose |
+|---------|---------|
+| `G S` | Read variables and `&` channel state |
+| `P S` | Write variables and enable/disable live channels |
+| `G C` | Read `#` variable capabilities |
+| `G F` | Query stored EEPROM streams |
+| `G V` | Date-filtered stored stream query path |
 
-Payload is ASCII text. Two command families:
-
-### Get variable
+### Variables
 
 ```
 Q: G S #VAR
 R: G S #VAR = VALUE
-```
 
-`VALUE` is hex-encoded, zero-padded to field width. Error returns E-frame.
-
-### Set variable
-
-```
 Q: P S #VAR VALUE
-R: P S #VAR = VALUE
+R: P S #VAR VALUE = VALUE
 ```
 
-### Stream query
+`VALUE` is hex-encoded and zero-padded to the variable width.
+
+### Variable Capabilities
 
 ```
-Q: G F &STREAM           -> R: echo + K: descriptor
-Q: G F &STREAM 0001      -> R: echo + K: record #1
-Q: G F &STREAM 0002      -> R: echo + K: record #2
-...                       -> R: echo + K: empty sentinel (00000FFFF00000)
+Q: G C #VAR
+R: G C #VAR = CAPABILITY_DATA
+
+Q: G C #VAR INDEX
+R: G C #VAR INDEX = CAPABILITY_DATA
 ```
 
-Page index is 1-based. Pagination continues until empty sentinel.
+### Live Stream Reporting
 
-## Error codes
-
-| Code | Meaning |
-|------|---------|
-| 0x6006 | Unknown variable |
-| 0x6009 | Variable not available in this context |
-| 0x6011 | Rejected frame type |
-| 0x6014 | CRC validation failed |
-| 0x6034 | Stream not found or bad query argument |
-
-## K-frame payload
+Live stream reporting is controlled with the `P S` `&TAG` path:
 
 ```
-NAME(3) date_start(9 hex) date_end(9 hex) time(3 hex) field(4 hex) data(variable)
+Q: P S &PMD 1
+R: P S &PMD 1 = 1
+L: PMD...
+
+Q: P S &PMD 0
+R: P S &PMD 0 = 0
 ```
 
-| Field | Size | Description |
-|-------|------|-------------|
-| NAME | 3 | Stream identifier (DLL, ERR, TXE, etc.) |
-| date_start | 9 hex | Day count from 1970-01-01 epoch, zero-padded |
-| date_end | 9 hex | Same encoding |
-| time | 3 hex | Minutes since midnight |
-| field | 4 hex | Record type (observed: 0001) |
-| data | variable | Stream-specific |
+`1` enables reports and `0` disables them. Enabled channels emit device-to-host
+`L` frames. The payload starts with the 3-character channel name, followed by a
+one-byte sequence and channel-specific hex fields.
 
-## Date encoding
+Subscribable Air 10 live roots are defined by g[26] and g[27]:
+`TCE`, `PBT`, `PMD`, `FTX`, `RAW`, `DRT`, `CPU`, `SSK`, `APN`, `CSN`, and
+`BRH`. Field lists and variant differences are documented in
+[config_variables.md](config_variables.md#g26----live-stream-records).
 
-16-bit day count from January 1, 1970 (Unix epoch).
+### Stored Stream Query
 
-| Hex | Date |
-|-----|------|
-| 0x5043 | 2026-04-04 |
-| 0x5048 | 2026-04-09 |
+Stored EEPROM streams use `G F &TAG` and return `K` frames.
 
-## Bootloader commands
+```
+Q: G F &ERR
+R: G F &ERR = ...
+K: ERR...
 
-| Command | Response | Effect |
-|---------|----------|--------|
-| `G S #BID` | R: bootloader version | |
-| `G S #BLS` | R: 0=CDX, 1=BL, 2=BL (invalid app) | |
-| `G S #SID` | R: CDX version string | |
-| `G S #CID` | R: CCX version string | |
-| `P S #BLL 0001` | R: echo | Enter bootloader (reset) |
-| `P S #RES 0001` | R: echo | System reset |
-| `P S #RES 0003` | R: echo | Fast reset (BKP6R fast-boot) |
-| `P S #BDD KEY` | R: echo | Set baud rate for flash transfer |
-| `P F *CCX` | R: echo | Select flash block |
-| `P S #PIP KEY` | R: echo | Enter UART bridge mode |
+Q: G F &ERR 0001
+R: G F &ERR 0001 = ...
+K: ERR...
+```
 
-### BDD baud rates
+Supported Air 10 stored stream tags are defined by g[19]:
+`ABR`, `TXC`, `TXH`, `TXE`, `TXW`, `TRR`, `DLL`, `ERR`, `ELI`, and `ZRL`.
 
-| Key | Baud |
-|-----|------|
-| 0000 | 57600 |
-| 0001 | 115200 |
-| 0002 | 460800 |
+Argument handling:
 
-## Flash data protocol
+| Argument | Query type |
+|----------|------------|
+| omitted | stream summary |
+| `0000` | specific-record path; commonly no `K` payload |
+| `0001`..`0FFF` | 1-based record/page index |
+| `1000`..`FFFF` | date-filtered query |
 
-F-frames carry S-record data for firmware flashing:
+Date-filtered queries use a 16-bit day count from `1970-01-01`, encoded as
+hex. For example, `G F &ERR 5043` queries day `0x5043`
+(`2026-04-04`).
 
-- `P F *BLX` / `*CCX` / `*CDX` / `*CMX` selects target block
-- F-frames contain S-records (type 0=header, 3=data, 7=end)
-- Completion: F-frame with marker byte 'F', triggers write and reset
+For date queries, the firmware compares the requested day against the current
+device day, seeks into the stored log using that day delta, and returns matching
+`K` records. The response ends with the normal empty/end sentinel.
 
-## L-frame (oximetry)
+## K-Frame Payload
 
-One-way push from SpO2 module. No response from device.
+Normal paged records use this common ASCII payload prefix:
+
+```
+NAME(3) start_day(9 hex) end_day(9 hex) minute(3 hex) field(4 hex) data(variable)
+```
+
+| Field | Description |
+|-------|-------------|
+| `NAME` | Stored stream identifier, for example `DLL`, `ERR`, or `TXE` |
+| `start_day` / `end_day` | Day count from `1970-01-01`, rendered as 9 hex chars |
+| `minute` | Minutes since midnight |
+| `field` | Stream field/version value; commonly `0001` in observed records |
+| `data` | Stream-specific payload |
+
+The day value itself fits in the low 16 bits, but the wire field is wider. For
+example `000005043` is day `0x5043`, which is `2026-04-04`.
+
+Empty/end responses use a sentinel payload beginning with:
+
+```
+NAME00000FFFF00000
+```
+
+`FFFF` is the empty date marker.
+
+## Oximetry L-Frame Input
+
+The oximetry adapter sends host-to-device `L` frames. The device does not answer
+these frames directly.
 
 ```
 0x55 'L' len(3) O X H [seq:2] [OXS:2] [HRR:3] [SAS:2] [SAR:2] [NVS:2] crc(4)
 ```
 
-Full format in [oximeter_protocol.md](oximeter_protocol.md).
+Full OXH payload details are in [oximeter_protocol.md](oximeter_protocol.md).
 
-## O-frame (session open)
+## Bootloader Commands
 
-Immediate 2-byte frame (`0x55 0x4F`). Resets UART parser. If ZLB (port active flag) is set, also sets ZRO (new session flag).
+Bootloader commands are sent as `Q` frames with ASCII command payloads.
 
-## 0x55 escaping
+| Command | Effect |
+|---------|--------|
+| `G S #BID` | Read bootloader version |
+| `G S #BLS` | Read bootloader state: `0` = CDX, `1`/`2` = bootloader |
+| `G S #BLE` | Read bootloader error code |
+| `G S #BDD` | Read current bootloader baud key when supported |
+| `G S #SID` | Read CDX version string |
+| `G S #CID` | Read CCX version string |
+| `P S #BLL 0001` | Enter bootloader from CDX on Air 10 |
+| `P S #RES 0001` | System reset |
+| `P S #RES 0003` | Fast reset path on Air 10 |
+| `P S #BDD KEY` | Set Air 10 bootloader baud |
+| `P F *BLOCK ARG` | Select and erase flash block |
+| `P S #PIP KEY` | Enter UART bridge mode |
 
-Any `0x55` byte within the payload region is doubled to `0x55 0x55`. The length field counts escaped bytes (total wire size). CRC is computed over the wire bytes (with escaping).
+Air 10 `BDD` baud keys:
+
+| Key | Baud |
+|-----|------|
+| `0000` | 57600 |
+| `0001` | 115200 |
+| `0002` | 460800 |
+
+Flash block select commands used by current tooling:
+
+| Platform | Blocks | Selector suffix |
+|----------|--------|-----------------|
+| Air 10 SX577/SX585 | `BLX`, `CCX`, `CDX`, `CMX` | `0000` convention; block selector uses only `*BLOCK` |
+| S9 SX525 | `BLX`, `CCX`, `CDX` | transfer baud value; current tooling uses `1C200` |
+
+On S9, the selector suffix is parsed as a baud value. Observed bootloaders
+accept `E100` and `1C200`; current tooling uses `1C200`. The erase response
+also carries the bootloader transfer baud value, and the flash tool follows
+that baud before sending data.
+
+## Flash Data Protocol
+
+After `P F *BLOCK ARG` selects and erases the target block, firmware data is
+sent in lower-case `f` frames with this payload:
+
+```
+BLOCK(3) marker(1) sequence(1) records(...)
+```
+
+| Field | Description |
+|-------|-------------|
+| `BLOCK` | ASCII block name: `BLX`, `CCX`, `CDX`, or `CMX` |
+| `marker` | `0x00` for data, ASCII `F` for completion |
+| `sequence` | One-byte frame sequence, wraps at `0xFF` |
+| `records` | One or more binary flash records |
+
+Data records are binary S3-like records, not ASCII Motorola S-record lines:
+
+```
+0x03 length address_be32 data... tail
+```
+
+`length` covers the 4-byte address, data bytes, and trailing byte. Current
+tooling sends chunks up to 250 data bytes and uses `0x00` as the trailing byte.
+
+After all data frames, the host sends an `f` frame with marker `F`. The
+bootloader finalizes the selected block and resets or remains in bootloader
+depending on the flashing sequence.
+
+## Error Codes
+
+| Code | Meaning |
+|------|---------|
+| `0x6006` | Unknown variable/channel |
+| `0x6008` | Bad command length |
+| `0x6009` | Command not available for this variable/channel context |
+| `0x600E` | Bad command syntax |
+| `0x6011` | Rejected frame type |
+| `0x6014` | CRC validation failed |
+| `0x6031` | Bad hex argument |
+| `0x6033` | Capability index not available |
+| `0x6034` | Stored stream not found or bad stream query argument |
+
+## O-Frame
+
+Immediate `O` (`0x55 0x4F`) checks `ZLB`. If `ZLB` is nonzero, CDX sets
+`ZRO=1`, then resets the UART parser state.
+
+## P-Frame
+
+Immediate `P` (`0x55 0x50`) resets the UART parser state.
