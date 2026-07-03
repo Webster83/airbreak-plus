@@ -30,6 +30,27 @@ name table status, and lazy-discovery status for optional data.
 as11_descriptors.py firmware.bin info
 ```
 
+### versions
+
+Extract firmware version identifiers without disassembly. The output includes
+the CONF data/platform/variant fields, bootloader version, APPX version, and
+data-model identifier where present.
+
+```
+as11_descriptors.py firmware.bin versions
+as11_descriptors.py firmware.bin versions fgbl
+as11_descriptors.py firmware.bin versions bootloader
+as11_descriptors.py firmware.bin versions fgcb
+as11_descriptors.py firmware.bin versions conf
+as11_descriptors.py firmware.bin versions appx
+```
+
+Example:
+
+```
+kind=appx|version=8.5.0.9cd562102|identifier=SW04600.16.8.5.0.9cd562102|offset=0x1FFCF8
+```
+
 ### var
 
 Show one variable descriptor by numeric var id, long name, short tag, or
@@ -190,4 +211,3 @@ as11> var-options MOP
 as11> text-search ramp --lang en
 as11> quit
 ```
-

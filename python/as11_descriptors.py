@@ -15,7 +15,24 @@ except AttributeError:
 FLASH_BASE = 0x08000000
 CONF_BASE = 0x20000
 CONF_SIZE = 0x20000
-LONG_NAME_SEARCH_BASE = 0x40000
+APPX_BASE = 0x40000
+LONG_NAME_SEARCH_BASE = APPX_BASE
+
+BOOT_VERSION_OFF = 0x4000
+BOOT_VERSION_SIZE = 0x20
+CONF_GIT_OFF = CONF_BASE + 0x68
+CONF_GIT_SIZE = 0x10
+CONF_VID_OFF = CONF_BASE + 0x0C
+CONF_DATA_MODEL_OFF = CONF_BASE + 0x72
+CONF_DATA_MODEL_SIZE = 0x10
+CONF_DATA_MODEL_HASH_OFF = CONF_BASE + 0x7D
+CONF_DATA_MODEL_HASH_SIZE = 0x10
+ENUM_SYMBOL_SEARCH_BASE = 0x100000
+OLD_ENUM_SYMBOL_SEARCH_BASE = 0xF0000
+OLD_ENUM_SYMBOL_SEARCH_END = 0x100000
+OLD_ENUM_SYMBOL_MAX_DATA_VERSION = 13
+LONG_NAME_PRIMARY_RUN_MIN = 500
+ENUM_SYMBOL_PRIMARY_RUN_MIN = 500
 
 G1_STRIDE = 10
 G2_STRIDE = 32
@@ -100,6 +117,24 @@ GUI_TEXT_POOL_TRANSITION_OFF = 48
 GUI_TEXT_POOL_STRING_PTR_OFF = 52
 GUI_TEXT_POOL_RECORD_BASE_OFF = 60
 
+VERSION_BLOCK_ALIASES = {
+    "boot": ("bootloader",),
+    "bootloader": ("bootloader",),
+    "fgbl": ("bootloader",),
+    "app": ("appx",),
+    "appl": ("appx",),
+    "appx": ("appx",),
+    "firmware": ("appx",),
+    "conf": ("conf", "data_model"),
+    "config": ("conf", "data_model"),
+    "fgcb": ("conf", "bootloader", "appx", "data_model"),
+    "full": ("conf", "bootloader", "appx", "data_model"),
+    "all": ("conf", "bootloader", "appx", "data_model"),
+    "data": ("data_model",),
+    "data-model": ("data_model",),
+    "datamodel": ("data_model",),
+}
+
 
 class AS11Firmware:
     def __init__(self, path):
@@ -127,6 +162,13 @@ class AS11Firmware:
 
         self.g1_count = self._count_records(self.g[1], G1_STRIDE)
         self.g2_count = self._count_records(self.g[2], G2_STRIDE)
+        # Some CONF layouts place g[5] immediately after g[2]. g[5] rows can
+        # look like g[2] rows when stepped at 32 bytes, so stop g[2] at the
+        # physical g[5] boundary when it appears before the scanned terminator.
+        if self.g[2] < self.g[5]:
+            physical_g2_count = (self.g[5] - self.g[2]) // G2_STRIDE
+            if physical_g2_count > 0:
+                self.g2_count = min(self.g2_count, physical_g2_count)
         self.g3_count = self._count_records(self.g[3], G3_STRIDE)
         self.g5_count = self._count_records(self.g[5], G5_STRIDE)
         self.g10_count = self.g[11] if isinstance(self.g[11], int) and self.g[11] < 0x1000 else 103
@@ -567,6 +609,8 @@ class AS11Firmware:
 
             if count >= 100 and named >= 50 and (named, count) > (best[0], best[1]):
                 best = (named, count, start)
+                if count >= LONG_NAME_PRIMARY_RUN_MIN:
+                    break
 
         named, count, start = best
         self.long_name_table_off = start
@@ -653,11 +697,10 @@ class AS11Firmware:
                 return None
             return symbol_ptr, typ, opt, symbol
 
-        # Scan for the longest run of valid entries. The table is typically
-        # ~0x081070a8..0x08109970 on 15.8.4.0; lengths and exact offset vary
-        # across firmware builds.
+        # Scan for the longest run of valid entries. The table moves between
+        # firmware builds; older 8.0.x images place it just below 1 MiB.
         best = (0, 0)  # (count, start_offset)
-        off = 0x100000  # text+rodata generally lives after 1 MiB
+        off = ENUM_SYMBOL_SEARCH_BASE
         while off + 12 <= data_len:
             if valid_entry(off) is None:
                 off += 4
@@ -669,6 +712,8 @@ class AS11Firmware:
                 off += 12
             if count > best[0]:
                 best = (count, start)
+            if count >= ENUM_SYMBOL_PRIMARY_RUN_MIN:
+                break
         count, start = best
         if count < 50:
             return (None, 0, [], {}, [])
@@ -693,6 +738,95 @@ class AS11Firmware:
             i += 1
         return (start, count, entries, by_type, symbol_ptrs)
 
+    def _option_symbols_from_window(self, idx, n_options, start, end):
+        data = self.data
+        data_len = len(data)
+        end = min(end, data_len)
+        unpack_entry = struct.Struct("<III").unpack_from
+
+        def string_at_ptr(ptr, max_len=96):
+            off = ptr - FLASH_BASE
+            if off < 0 or off >= data_len:
+                return None
+            nul = data.find(b"\x00", off)
+            if nul < 0 or nul - off > max_len or nul == off:
+                return None
+            raw = data[off:nul]
+            if any(b < 0x20 or b > 0x7E for b in raw):
+                return None
+            return raw.decode("ascii")
+
+        def valid_entry(off):
+            if off + 12 > end:
+                return None
+            ptr, typ, opt = unpack_entry(data, off)
+            if string_at_ptr(ptr) is None:
+                return None
+            if not (0 <= typ < 0x200):
+                return None
+            if not (0 <= opt < 0x40):
+                return None
+            return ptr, typ, opt
+
+        off = start
+        while off + 12 <= end:
+            entry = valid_entry(off)
+            if entry is None:
+                off += 4
+                continue
+            run_start = off
+            while True:
+                entry = valid_entry(off)
+                if entry is None:
+                    break
+                _ptr, typ, _opt = entry
+                if typ == idx:
+                    symbols = []
+                    slot = off + 12
+                    for _ in range(n_options):
+                        next_entry = valid_entry(slot)
+                        if next_entry is None:
+                            break
+                        ptr = next_entry[0]
+                        symbols.append(string_at_ptr(ptr))
+                        slot += 12
+                    return symbols
+                off += 12
+            off = max(off + 4, run_start + 4)
+        return []
+
+    def _old_option_symbols_for_g5_index(self, idx, n_options):
+        data = self.data
+        data_len = len(data)
+        unpack_entry = struct.Struct("<III").unpack_from
+        symbols = {}
+
+        def string_at_ptr(ptr, max_len=96):
+            off = ptr - FLASH_BASE
+            if off < 0 or off >= data_len:
+                return None
+            nul = data.find(b"\x00", off)
+            if nul < 0 or nul - off > max_len or nul == off:
+                return None
+            raw = data[off:nul]
+            if any(b < 0x20 or b > 0x7E for b in raw):
+                return None
+            return raw.decode("ascii")
+
+        end = min(OLD_ENUM_SYMBOL_SEARCH_END, data_len)
+        for off in range(OLD_ENUM_SYMBOL_SEARCH_BASE, end - 12 + 1, 4):
+            key, opt, ptr = unpack_entry(data, off)
+            if key != idx or not (0 <= opt < n_options):
+                continue
+            symbol = string_at_ptr(ptr)
+            if symbol is None:
+                continue
+            symbols[opt] = symbol
+            if len(symbols) == n_options:
+                break
+
+        return [symbols.get(opt) for opt in range(n_options)]
+
     def _ensure_option_table(self):
         if self.opt_entries is not None:
             return
@@ -706,12 +840,24 @@ class AS11Firmware:
 
     def option_symbols_for_g5_index(self, idx, n_options):
         """Return decoded option symbols for g5[idx], if the flat table covers it."""
-        self._ensure_option_table()
         if n_options <= 0:
             return []
+        use_old_primary = self.u32(CONF_BASE) <= OLD_ENUM_SYMBOL_MAX_DATA_VERSION
+        if use_old_primary:
+            old_symbols = self._old_option_symbols_for_g5_index(idx, n_options)
+            if any(sym is not None for sym in old_symbols):
+                return old_symbols
+        symbols = self._option_symbols_from_window(
+            idx, n_options, OLD_ENUM_SYMBOL_SEARCH_BASE,
+            OLD_ENUM_SYMBOL_SEARCH_END)
+        if len(symbols) >= n_options:
+            return symbols
+        self._ensure_option_table()
         pos = self.opt_first_by_type.get(idx)
         if pos is None:
-            return []
+            return self._option_symbols_from_window(
+                idx, n_options, OLD_ENUM_SYMBOL_SEARCH_BASE,
+                OLD_ENUM_SYMBOL_SEARCH_END)
 
         # The table is a flat enum-symbol stream. The first row carrying a g5
         # index is the previous enum's tail; the current enum starts at the
@@ -721,6 +867,12 @@ class AS11Firmware:
             if slot >= len(self.opt_symbol_ptrs):
                 break
             symbols.append(self._string_at_ptr(self.opt_symbol_ptrs[slot]))
+        if len(symbols) < n_options:
+            fallback = self._option_symbols_from_window(
+                idx, n_options, OLD_ENUM_SYMBOL_SEARCH_BASE,
+                OLD_ENUM_SYMBOL_SEARCH_END)
+            if len(fallback) > len(symbols):
+                return fallback
         return symbols
 
     def dispatch_var_id(self, vid):
@@ -733,6 +885,12 @@ class AS11Firmware:
         if self.g5_id_base <= vid < self.g5_id_base + self.g5_count:
             return ("g[5]", self.g[5], G5_STRIDE, vid - self.g5_id_base)
         return None
+
+    def name_namespace_matches_descriptor(self, vid):
+        disp = self.dispatch_var_id(vid)
+        if disp is None:
+            return False
+        return True
 
     def descriptor_specs(self):
         return {
@@ -791,9 +949,13 @@ class AS11Firmware:
         return None
 
     def var_short_name(self, vid):
+        if not self.name_namespace_matches_descriptor(vid):
+            return ""
         return self.name_buckets.get(vid, "")
 
     def var_long_name(self, vid):
+        if not self.name_namespace_matches_descriptor(vid):
+            return ""
         return self.long_names.get(vid, "")
 
     def read_descriptor(self, arr, idx):
@@ -1220,8 +1382,114 @@ class AS11Firmware:
         raw = self.data[off:off + size].split(b"\x00")[0]
         return raw.decode("ascii", errors="replace")
 
+    def ascii_version_field(self, off, size):
+        self._check_range(off, size)
+        raw = self.data[off:off + size]
+        raw = raw.split(b"\x00")[0].rstrip(b"\xff")
+        if not raw:
+            return ""
+        if any(b < 0x20 or b > 0x7E for b in raw):
+            return ""
+        return raw.decode("ascii")
+
+    def find_appx_version(self, git=""):
+        start = APPX_BASE
+        end = len(self.data)
+        if start >= end:
+            return None, None
+
+        appx = self.data[start:end]
+        pattern = rb"(?<![0-9A-Za-z])(\d+\.\d+\.\d+\.[0-9a-f]{7,40})(?![0-9A-Za-z])"
+
+        if git:
+            git_bytes = git.encode("ascii")
+            pos = len(appx)
+            while True:
+                pos = appx.rfind(git_bytes, 0, pos)
+                if pos < 0:
+                    break
+                left = pos
+                while left > 0 and appx[left - 1] in b"0123456789.":
+                    left -= 1
+                candidate = appx[left:pos + len(git_bytes)]
+                match = re.fullmatch(pattern, candidate)
+                if match is not None:
+                    return match.group(1).decode("ascii"), start + left
+                pos = left
+
+        last = None
+        for match in re.finditer(pattern, appx):
+            last = (match.group(1).decode("ascii"), start + match.start(1))
+        if last is not None:
+            return last
+
+        text = appx.decode("latin1", errors="ignore")
+        last = None
+        for match in re.finditer(
+                r"SW\d+\.(\d+\.\d+\.\d+\.\d+(?:\.[0-9a-f]{7,40})?)",
+                text):
+            last = (match.group(1), None)
+        if last is not None:
+            return last
+
+        for match in re.finditer(
+                r"(?<!\d)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?!\d)",
+                text):
+            last = (match.group(1), None)
+        return last if last is not None else (None, None)
+
+    def version_records(self):
+        data_version = self.u32(CONF_BASE)
+        platform_id = self.u32(CONF_BASE + 4)
+        variant_id = self.u32(CONF_VID_OFF)
+        git = self.ascii_version_field(CONF_GIT_OFF, CONF_GIT_SIZE)
+        boot_version = self.ascii_version_field(BOOT_VERSION_OFF,
+                                                BOOT_VERSION_SIZE)
+        appx_version, appx_off = self.find_appx_version(git)
+        dm_base = self.ascii_version_field(CONF_DATA_MODEL_OFF,
+                                           CONF_DATA_MODEL_SIZE)
+        dm_hash = self.ascii_version_field(CONF_DATA_MODEL_HASH_OFF,
+                                           CONF_DATA_MODEL_HASH_SIZE)
+        dm_identifier = ".".join(v for v in (dm_base, dm_hash) if v)
+
+        records = [
+            {
+                "kind": "conf",
+                "data_version": data_version,
+                "platform_id": platform_id,
+                "variant_id": variant_id,
+                "git": git,
+            },
+        ]
+        if boot_version:
+            records.append({
+                "kind": "bootloader",
+                "version": boot_version,
+                "identifier": "SW%03d01.00.%s" % (platform_id, boot_version),
+                "offset": BOOT_VERSION_OFF,
+            })
+        if appx_version:
+            rec = {
+                "kind": "appx",
+                "version": appx_version,
+                "identifier": "SW%03d00.%d.%s" %
+                              (platform_id, data_version, appx_version),
+            }
+            if appx_off is not None:
+                rec["offset"] = appx_off
+            records.append(rec)
+        if dm_base or dm_hash:
+            records.append({
+                "kind": "data_model",
+                "version": dm_base,
+                "hash": dm_hash,
+                "identifier": dm_identifier,
+                "offset": CONF_DATA_MODEL_OFF,
+            })
+        return records
+
     def var_name(self, vid):
-        return self.long_names.get(vid) or self.name_buckets.get(vid, "")
+        return self.var_long_name(vid) or self.var_short_name(vid)
 
     def descriptor_status(self, vid):
         disp = self.dispatch_var_id(vid)
@@ -1236,13 +1504,22 @@ class AS11Firmware:
         model = self.ascii_field(CONF_BASE + 0x28, 0x10)
         codename = self.ascii_field(CONF_BASE + 0x38, 0x10)
         git = self.ascii_field(CONF_BASE + 0x68, 0x10)
-        ptype = self.u32(CONF_BASE)
-        stype = self.u32(CONF_BASE + 4)
+        data_version = self.u32(CONF_BASE)
+        platform_id = self.u32(CONF_BASE + 4)
+        variant_id = self.u32(CONF_VID_OFF)
 
         print(f"  File:     {self.path}")
         print(f"  Platform: {platform} / {model} / {codename}")
-        print(f"  Product:  type={ptype} sub={stype}")
+        print("  Firmware: data_version=%d platform_id=%d variant_id=%d" %
+              (data_version, platform_id, variant_id))
         print(f"  Git:      {git}")
+        versions = {rec["kind"]: rec for rec in self.version_records()}
+        if "bootloader" in versions:
+            print(f"  Boot:     {versions['bootloader']['version']}")
+        if "appx" in versions:
+            print(f"  APPX:     {versions['appx']['version']}")
+        if "data_model" in versions:
+            print(f"  Data:     {versions['data_model']['identifier']}")
         print(f"  MT:       0x{self.mt_off:05X} (CONF+0x{self.mt_off - CONF_BASE:04X})")
         print()
         print("  Descriptor arrays:")
@@ -1283,6 +1560,23 @@ class AS11Firmware:
                   (self.gui_text_count, self.gui_text_lang_stride))
         else:
             print("  GUI text:    decoder not available for this image")
+
+    def cmd_versions(self, block=None):
+        wanted = None
+        if block is not None:
+            key = block.lower()
+            wanted = VERSION_BLOCK_ALIASES.get(key)
+            if wanted is None:
+                raise ValueError(
+                    "unknown version block %r; expected one of: %s" %
+                    (block, ", ".join(sorted(VERSION_BLOCK_ALIASES))))
+        for rec in self.version_records():
+            if wanted is not None and rec["kind"] not in wanted:
+                continue
+            fields = dict(rec)
+            if "offset" in fields:
+                fields["offset"] = "0x%05X" % fields["offset"]
+            emit_line(**fields)
 
     def descriptor_line_fields(self, rec):
         fields = {
@@ -1369,16 +1663,16 @@ class AS11Firmware:
             disp = self.dispatch_var_id(vid)
             if not disp:
                 emit_line(var="0x%04X" % vid,
-                          short=fmt_text(self.name_buckets.get(vid)),
-                          long=fmt_text(self.long_names.get(vid)),
+                          short=fmt_text(self.var_short_name(vid)),
+                          long=fmt_text(self.var_long_name(vid)),
                           status="missing")
                 return
             arr, _base, _stride, idx = disp
             self.emit_descriptor_line(self.read_descriptor(arr, idx))
             return
 
-        tag = self.name_buckets.get(vid, "")
-        name = self.long_names.get(vid, "")
+        tag = self.var_short_name(vid)
+        name = self.var_long_name(vid)
         print(f"  var_id:    0x{vid:04X} ({vid})")
         print(f"  short:     {fmt_text(tag)}")
         print(f"  long:      {fmt_text(name)}")
@@ -1424,7 +1718,8 @@ class AS11Firmware:
                 vids[g10["var_id"]] = "g10"
         if prefix:
             for vid, name in self.long_names.items():
-                if name.startswith(prefix) and vid not in vids:
+                if (self.name_namespace_matches_descriptor(vid)
+                        and name.startswith(prefix) and vid not in vids):
                     vids[vid] = "name"
 
         for vid in sorted(vids):
@@ -1433,8 +1728,8 @@ class AS11Firmware:
                 mode=mode_idx,
                 mode_name=mode_name,
                 var="0x%04X" % vid,
-                short=fmt_text(self.name_buckets.get(vid)),
-                long=fmt_text(self.long_names.get(vid)),
+                short=fmt_text(self.var_short_name(vid)),
+                long=fmt_text(self.var_long_name(vid)),
                 source=vids[vid],
                 status=status,
             )
@@ -1450,8 +1745,8 @@ class AS11Firmware:
 
     def cmd_var_options_by_id(self, vid, verbose=False):
         """Print enum option slots for an already resolved var_id."""
-        name = self.long_names.get(vid, "")
-        tag = self.name_buckets.get(vid, "")
+        name = self.var_long_name(vid)
+        tag = self.var_short_name(vid)
         d = self.dispatch_var_id(vid)
         if d is None:
             raise ValueError("var 0x%04X has no descriptor" % vid)
@@ -1481,7 +1776,8 @@ class AS11Firmware:
                 )
             return
 
-        print(f"  var_id:   0x{vid:04X}  tag={tag}  name={name}")
+        print("  var_id:   0x%04X  tag=%s  name=%s" %
+              (vid, fmt_text(tag), fmt_text(name)))
         print(
             "  dispatch: g[5][%d]   n_opts=%d   default=%d   mask=0x%08X"
             % (idx, rec["n_options"], rec["default_option"],
@@ -1551,14 +1847,15 @@ class AS11Firmware:
             s = s[1:]
         s_upper = s.upper()
         for vid, tag in self.name_buckets.items():
-            if tag == s_upper:
+            if self.name_namespace_matches_descriptor(vid) and tag == s_upper:
                 return vid
         for vid, name in self.long_names.items():
-            if name == s:
+            if self.name_namespace_matches_descriptor(vid) and name == s:
                 return vid
         s_lower = s.lower()
         for vid, name in self.long_names.items():
-            if name.lower() == s_lower:
+            if (self.name_namespace_matches_descriptor(vid)
+                    and name.lower() == s_lower):
                 return vid
         if re.fullmatch(r"[0-9]+", s) or re.fullmatch(r"0[xX][0-9a-fA-F]+", s):
             return parse_numeric_arg(s, "var_id")
@@ -1950,6 +2247,12 @@ def resolve_var_arg(fw, ident):
 
 def add_command_parsers(subparsers):
     subparsers.add_parser("info", help="show firmware summary and array sizes")
+    p = subparsers.add_parser("versions", help="extract firmware version identifiers")
+    p.add_argument(
+        "block",
+        nargs="?",
+        help="optional block filter, e.g. fgbl, bootloader, fgcb, conf, appx",
+    )
 
     p = subparsers.add_parser(
         "var",
@@ -2047,6 +2350,8 @@ def run_command(fw, args):
     command = args.command or "info"
     if command == "info":
         fw.cmd_info()
+    elif command == "versions":
+        fw.cmd_versions(args.block)
     elif command == "var":
         fw.cmd_var(resolve_var_arg(fw, args.ident), args.verbose)
     elif command == "globals":
